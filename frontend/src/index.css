@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+/* Tokens tirés de bnc.ca, appliqués à la structure du canvas Bas de Laine. */
+@theme {
+  --font-sans: "Plus Jakarta Sans", Arial, system-ui, sans-serif;
+
+  --color-navy: #00314d;
+  --color-red: #e41c23;
+  --color-red-hover: #be171d;
+  --color-red-dark: #8b1618;
+  --color-blue: #1572c5;
+  --color-blue-dark: #105797;
+  --color-slate: #425865;
+  --color-slate-light: #7993a2;
+  --color-sky: #eef6fb;
+  --color-taupe: #8a7b64;
+  --color-ink: #303030;
+  --color-ink-soft: #565656;
+  --color-line: #d2d2d2;
+  --color-line-soft: #e1e1e1;
+  --color-mist: #f1f1f1;
+
+  --radius-card: 8px;
+  --radius-pill: 58px;
+  --shadow-hover: 0 4px 8px 0 rgba(0, 0, 0, 0.1);
+}
+
+@layer base {
+  html {
+    color: var(--color-ink);
+    background: #fff;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    margin: 0;
+    font-size: 16px;
+    line-height: 24px;
+  }
+  h1,
+  h2,
+  h3 {
+    letter-spacing: 0.3px;
+    margin: 0;
+  }
+  :focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(21, 114, 197, 0.8);
+  }
+  .on-dark :focus-visible {
+    box-shadow: 0 0 0 2px #fff, 0 0 0 5px rgba(21, 114, 197, 0.8);
+  }
+  button {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .fade-in {
+    animation: fade-in 0.35s ease both;
+  }
+  .bob {
+    animation: bob 2.4s ease-in-out infinite;
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+@keyframes bob {
+  50% {
+    transform: translateY(-4px);
+  }
+}
