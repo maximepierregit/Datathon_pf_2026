@@ -1,6 +1,6 @@
 // Moteur d'exemple côté front : il imite ce que feront les agents Strands et l'optimiseur Python,
 // pour que l'interface fonctionne avant le branchement du backend.
-import { CLASS_ASSUMPTIONS, CLASS_LABELS, BLOCKS, UNIVERSE, type UniverseLine } from '../data/catalog'
+import { CLASS_ASSUMPTIONS, CLASS_LABELS, BLOCKS, FNB_ID, UNIVERSE, type UniverseLine } from '../data/catalog'
 import type { AssetClass, Constraints, Holding, Level, Metrics, Portfolio, PortfolioId, Profile } from '../types'
 
 const CLASSES = Object.keys(CLASS_LABELS) as AssetClass[]
@@ -43,6 +43,15 @@ export function riskLabel(score: number): string {
 
 const level = (c: Constraints, block: keyof Constraints, id: string): Level => c[block][id] ?? 0
 
+/** Réglages du raccourci « FNB seulement » : FNB imposés, toutes les classes exclues en direct. */
+export function fnbOnlyClasses(): Record<string, Level> {
+  return { ...Object.fromEntries(CLASSES.map((k) => [k, -2 as Level])), [FNB_ID]: 2 }
+}
+
+export function isFnbOnly(c: Constraints): boolean {
+  return level(c, 'classes', FNB_ID) === 2 && CLASSES.every((k) => level(c, 'classes', k) === -2)
+}
+
 function classWeights(id: PortfolioId, score: number, c: Constraints, notes: string[]) {
   const s = clamp(score + (id === 'prudent' ? -20 : id === 'conviction' ? 10 : 0), 0, 100)
   const eq = 0.15 + 0.7 * (s / 100)
@@ -59,9 +68,13 @@ function classWeights(id: PortfolioId, score: number, c: Constraints, notes: str
   const risky: AssetClass[] = ['actions', 'immobilier', 'or', 'crypto']
   const plus = { prudent: 0.05, equilibre: 0.05, conviction: 0.12 }[id]
   const impose = { prudent: 0.1, equilibre: 0.1, conviction: 0.25 }[id]
+  // En « FNB seulement », les exclusions visent les titres en direct : chaque classe reste couverte par des FNB
+  // et la répartition suit le profil. L'univers d'exemple ne contient déjà que des FNB.
+  const fnbOnly = isFnbOnly(c)
+  if (fnbOnly) notes.push('FNB seulement : aucun titre en direct, chaque classe passe par un FNB.')
   for (const k of CLASSES) {
     const l = level(c, 'classes', k)
-    if (l === 0) continue
+    if (l === 0 || fnbOnly) continue
     if (l === -2) w[k] = 0
     else if (l === -1) w[k] *= id === 'conviction' ? 0.4 : 0.6
     else if (id === 'prudent' && risky.includes(k)) {
@@ -166,6 +179,8 @@ export function metricsOf(holdings: Holding[]): Metrics {
 /** Alertes de cohérence profil ↔ contraintes (rôle futur du Vérificateur). */
 export function coherenceWarnings(score: number, c: Constraints): string[] {
   const w: string[] = []
+  // Les classes « exclues » en FNB seulement restent présentes par les FNB : rien à signaler.
+  if (isFnbOnly(c)) return w
   const crypto = level(c, 'classes', 'crypto')
   const actions = level(c, 'classes', 'actions')
   if (score < 40 && crypto >= 1)

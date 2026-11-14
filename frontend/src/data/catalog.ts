@@ -42,11 +42,20 @@ export const CLASS_EXPLAINERS: Record<AssetClass, string> = {
   liquidites: 'À l’abri et disponible en tout temps. Ton coussin pour les passages difficiles.',
 }
 
+/**
+ * Préférence de véhicule, pas une classe du portefeuille : un FNB peut détenir des actions, des obligations, de l'or…
+ * Il vit dans le bloc « classes » mais n'a ni couleur ni part dans la répartition.
+ */
+export const FNB_ID = 'fnb'
+
 export const BLOCKS: Record<ConstraintBlock, { title: string; hint: string; items: CatalogItem[] }> = {
   classes: {
     title: 'Quels types de placements veux-tu dans ton portefeuille?',
     hint: 'Laisse « Neutre » si tu n’as pas d’avis : les agents choisiront pour toi.',
-    items: (Object.keys(CLASS_LABELS) as AssetClass[]).map((id) => ({ id, label: CLASS_LABELS[id] })),
+    items: [
+      ...(Object.keys(CLASS_LABELS) as AssetClass[]).map((id) => ({ id, label: CLASS_LABELS[id] })),
+      { id: FNB_ID, label: 'Fonds négociés en bourse (FNB)', hint: 'Des paniers tout faits de dizaines de titres, achetés en un seul placement.' },
+    ],
   },
   regions: {
     title: 'Des régions du monde à privilégier ou à éviter?',
