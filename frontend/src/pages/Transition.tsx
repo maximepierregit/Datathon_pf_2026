@@ -1,9 +1,9 @@
 import { useNavigate } from 'react-router-dom'
 import { Pepite } from '../components/Pepite'
 import { Arrow, Button, Separator } from '../components/ui'
-import { riskLabel } from '../lib/engine'
-import { money } from '../lib/format'
-import { effectiveScore, useApp } from '../store'
+import { riskLabel, riskScore } from '../lib/engine'
+import { contribution, money } from '../lib/format'
+import { useApp } from '../store'
 
 const OBJECTIVE = { securiser: 'Sécuriser', fructifier: 'Faire fructifier', 'viser-haut': 'Viser haut' }
 
@@ -11,17 +11,15 @@ const OBJECTIVE = { securiser: 'Sécuriser', fructifier: 'Faire fructifier', 'vi
 export default function Transition() {
   const navigate = useNavigate()
   const state = useApp()
-  const { profile, riskOverride } = state
-  const facts: [string, string][] =
-    riskOverride != null
-      ? [['Niveau choisi', riskLabel(riskOverride)]]
-      : [
-          ['Âge', `${profile.age} ans`],
-          ['Montant', money(profile.amount)],
-          ['Objectif', OBJECTIVE[profile.objective]],
-          ['Horizon', `${profile.horizon} ans`],
-          ['Aisance', `${profile.comfort} / 5`],
-        ]
+  const { profile } = state
+  const facts: [string, string][] = [
+    ['Âge', `${profile.age} ans`],
+    ['Montant', money(profile.amount)],
+    ['Ajouts', contribution(state.contribution)],
+    ['Objectif', OBJECTIVE[profile.objective]],
+    ['Horizon', `${profile.horizon} ans`],
+    ['Aisance', `${profile.comfort} / 5`],
+  ]
 
   return (
     <div className="flex flex-1 flex-col">
@@ -30,10 +28,10 @@ export default function Transition() {
         <Pepite pose="thumbsup" size={150} className="bob" />
         <div className="flex flex-col items-center">
           <span className="text-sm font-semibold text-slate">Étape 1 terminée</span>
-          <h1 className="text-[30px] font-semibold leading-9 text-navy md:text-[38px] md:leading-[44px]">Ton profil est {riskLabel(effectiveScore(state)).toLowerCase()}.</h1>
+          <h1 className="text-[30px] font-semibold leading-9 text-navy md:text-[38px] md:leading-[44px]">Ton profil est {riskLabel(riskScore(profile)).toLowerCase()}.</h1>
           <Separator />
         </div>
-        <dl className="m-0 flex flex-wrap justify-center gap-2">
+        <dl className="m-0 grid w-full grid-cols-2 gap-2 sm:grid-cols-3">
           {facts.map(([k, v]) => (
             <div key={k} className="rounded-[var(--radius-card)] border border-line-soft px-4 py-2">
               <dt className="text-xs text-ink-soft">{k}</dt>
@@ -61,7 +59,7 @@ export default function Transition() {
             Préciser mes préférences <Arrow />
           </Button>
         </div>
-        <Button variant="ghost" onClick={() => navigate(riskOverride != null ? '/niveau' : '/profil/6')}>
+        <Button variant="ghost" onClick={() => navigate('/profil/7')}>
           <Arrow back /> Modifier mon profil
         </Button>
       </div>

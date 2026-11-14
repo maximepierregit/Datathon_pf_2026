@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { Pepite } from '../components/Pepite'
-import { Arrow, Badge, Separator } from '../components/ui'
+import { Arrow, Separator } from '../components/ui'
 import { useApp } from '../store'
 
 const HOW = [
@@ -28,30 +28,18 @@ export default function Home() {
       </section>
 
       <section className="bg-mist">
-        <div className="mx-auto grid max-w-[1020px] gap-4 px-4 py-12 sm:px-6 md:grid-cols-2">
+        <div className="mx-auto max-w-[1020px] px-4 py-12 sm:px-6">
           <Link
             to="/profil/1"
             onClick={reset}
-            className="on-dark group flex flex-col gap-3 rounded-[var(--radius-card)] bg-navy p-7 text-white no-underline transition-shadow hover:shadow-[var(--shadow-hover)]"
+            className="on-dark flex flex-col gap-4 rounded-[var(--radius-card)] bg-navy p-7 text-white no-underline transition-shadow hover:shadow-[var(--shadow-hover)] md:flex-row md:items-center md:justify-between md:px-10"
           >
-            <span className="flex items-center justify-between">
+            <span className="flex flex-col gap-2">
               <span className="text-[24px] font-semibold leading-7">Répondre à quelques questions</span>
-              <Badge tone="red">Recommandé</Badge>
+              <span className="text-white/80">7 questions sur toi, puis tes préférences. Environ 3 minutes.</span>
             </span>
-            <span className="text-white/80">6 questions sur toi, puis tes préférences. Environ 3 minutes.</span>
-            <span className="mt-auto inline-flex items-center gap-2 pt-2 font-medium">
+            <span className="inline-flex shrink-0 items-center gap-2 self-start rounded-[var(--radius-pill)] bg-red px-6 py-2.5 font-medium md:self-auto">
               Commencer <Arrow />
-            </span>
-          </Link>
-          <Link
-            to="/niveau"
-            onClick={reset}
-            className="group flex flex-col gap-3 rounded-[var(--radius-card)] border border-line-soft bg-white p-7 text-ink no-underline transition-shadow hover:shadow-[var(--shadow-hover)]"
-          >
-            <span className="text-[24px] font-semibold leading-7 text-navy">Choisir mon niveau de risque</span>
-            <span className="text-ink-soft">Tu sais déjà ce que tu veux? Choisis parmi 3 niveaux : prudent, modéré ou audacieux.</span>
-            <span className="mt-auto inline-flex items-center gap-2 pt-2 font-medium text-red">
-              Choisir un niveau <Arrow />
             </span>
           </Link>
         </div>

@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { proposeAdjustment } from '../../api'
 import { Pepite } from '../../components/Pepite'
 import { Alert, Button } from '../../components/ui'
+import { riskScore } from '../../lib/engine'
 import { pct, points } from '../../lib/format'
-import { effectiveScore, useApp } from '../../store'
+import { useApp } from '../../store'
 import type { AdjustProposal, Portfolio } from '../../types'
 
 interface Msg {
@@ -35,7 +36,7 @@ export function AdjustPanel({ p, onClose }: { p: Portfolio; onClose: () => void 
     setDraft('')
     setMsgs((m) => [...m, { from: 'user', text: t }])
     setBusy(true)
-    const proposal = await proposeAdjustment(p, t, effectiveScore(state), (patch, riskShift) =>
+    const proposal = await proposeAdjustment(p, t, riskScore(state.profile), (patch, riskShift) =>
       state.previewAdjustment({ portfolio: p.id, patch, riskShift }),
     )
     setBusy(false)

@@ -11,6 +11,15 @@ export interface Profile {
   comfort: number
 }
 
+export type ContributionFrequency = 'aucune' | 'deux-semaines' | 'mensuelle' | 'annuelle'
+
+/** Ajouts prévus. Jamais envoyé aux agents : sert seulement aux projections du tableau de bord. */
+export interface Contribution {
+  frequency: ContributionFrequency
+  /** Montant par versement, ignoré si la fréquence est « aucune ». */
+  amount: number
+}
+
 /** Échelle unique des contraintes : Exclure (−2) … Imposer (+2). */
 export type Level = -2 | -1 | 0 | 1 | 2
 

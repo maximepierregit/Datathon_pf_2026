@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import { buildAll, emptyConstraints, riskScore } from './lib/engine'
-import type { Constraints, ConstraintBlock, DashboardLevel, Level, Portfolio, PortfolioId, Profile } from './types'
+import type { Constraints, ConstraintBlock, Contribution, DashboardLevel, Level, Portfolio, PortfolioId, Profile } from './types'
 
 export const DEFAULT_PROFILE: Profile = {
   age: 35,
@@ -12,6 +12,8 @@ export const DEFAULT_PROFILE: Profile = {
   comfort: 3,
 }
 
+export const DEFAULT_CONTRIBUTION: Contribution = { frequency: 'aucune', amount: 100 }
+
 export interface AppliedAdjustment {
   id: string
   portfolio: PortfolioId
@@ -20,16 +22,15 @@ export interface AppliedAdjustment {
   riskShift: number
 }
 
-interface State {
+export interface State {
   profile: Profile
-  /** Score imposé par le raccourci « Choisir mon niveau de risque ». */
-  riskOverride: number | null
+  contribution: Contribution
   constraints: Constraints
   portfolios: Record<PortfolioId, Portfolio> | null
   adjustments: AppliedAdjustment[]
   disclaimerSeen: boolean
   setProfile: (patch: Partial<Profile>) => void
-  setRiskOverride: (score: number | null) => void
+  setContribution: (patch: Partial<Contribution>) => void
   setLevel: (block: ConstraintBlock, id: string, level: Level) => void
   clearConstraints: () => void
   acceptDisclaimer: () => void
@@ -40,8 +41,6 @@ interface State {
   undoAdjustment: (id: string) => void
   reset: () => void
 }
-
-export const effectiveScore = (s: Pick<State, 'profile' | 'riskOverride'>) => s.riskOverride ?? riskScore(s.profile)
 
 export function defaultDashboardLevel(comfort: number): DashboardLevel {
   return comfort <= 2 ? 'debutant' : comfort === 3 ? 'intermediaire' : 'avance'
@@ -72,32 +71,32 @@ export const useApp = create<State>()(
   persist(
     (set, get) => ({
       profile: DEFAULT_PROFILE,
-      riskOverride: null,
+      contribution: DEFAULT_CONTRIBUTION,
       constraints: emptyConstraints(),
       portfolios: null,
       adjustments: [],
       disclaimerSeen: false,
       setProfile: (patch) => set((s) => ({ profile: { ...s.profile, ...patch } })),
-      setRiskOverride: (riskOverride) => set({ riskOverride }),
+      setContribution: (patch) => set((s) => ({ contribution: { ...s.contribution, ...patch } })),
       setLevel: (block, id, level) =>
         set((s) => ({ constraints: { ...s.constraints, [block]: { ...s.constraints[block], [id]: level } } })),
       clearConstraints: () => set({ constraints: emptyConstraints() }),
       acceptDisclaimer: () => set({ disclaimerSeen: true }),
-      build: () => set((s) => ({ adjustments: [], portfolios: rebuild(effectiveScore(s), s.constraints, []) })),
+      build: () => set((s) => ({ adjustments: [], portfolios: rebuild(riskScore(s.profile), s.constraints, []) })),
       previewAdjustment: (a) => {
         const s = get()
-        return rebuild(effectiveScore(s), s.constraints, [...s.adjustments, { ...a, id: 'preview', label: '' }])[a.portfolio]
+        return rebuild(riskScore(s.profile), s.constraints, [...s.adjustments, { ...a, id: 'preview', label: '' }])[a.portfolio]
       },
       applyAdjustment: (a) => {
         const adjustments = [...get().adjustments, { ...a, id: crypto.randomUUID() }]
-        set((s) => ({ adjustments, portfolios: rebuild(effectiveScore(s), s.constraints, adjustments) }))
+        set((s) => ({ adjustments, portfolios: rebuild(riskScore(s.profile), s.constraints, adjustments) }))
       },
       undoAdjustment: (id) => {
         const adjustments = get().adjustments.filter((a) => a.id !== id)
-        set((s) => ({ adjustments, portfolios: rebuild(effectiveScore(s), s.constraints, adjustments) }))
+        set((s) => ({ adjustments, portfolios: rebuild(riskScore(s.profile), s.constraints, adjustments) }))
       },
       reset: () =>
-        set({ profile: DEFAULT_PROFILE, riskOverride: null, constraints: emptyConstraints(), portfolios: null, adjustments: [], disclaimerSeen: false }),
+        set({ profile: DEFAULT_PROFILE, contribution: DEFAULT_CONTRIBUTION, constraints: emptyConstraints(), portfolios: null, adjustments: [], disclaimerSeen: false }),
     }),
     { name: 'bas-de-laine', storage: createJSONStorage(() => sessionStorage) },
   ),
