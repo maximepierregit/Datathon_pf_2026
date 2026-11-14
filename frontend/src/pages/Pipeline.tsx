@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { runPipeline } from '../api'
 import { Pepite, PepiteSays, type Pose } from '../components/Pepite'
 import { Alert, Arrow, Badge, Button, Card, Separator } from '../components/ui'
-import { riskLabel } from '../lib/engine'
-import { effectiveScore, useApp } from '../store'
+import { riskLabel, riskScore } from '../lib/engine'
+import { useApp } from '../store'
 import type { AgentId, AgentStatus, PipelineEvent } from '../types'
 
 const AGENTS: { id: AgentId; name: string; role: string; pose: Pose }[] = [
@@ -18,7 +18,7 @@ const STATUS_LABEL: Record<AgentStatus, string> = { pending: 'À venir', running
 export default function Pipeline() {
   const navigate = useNavigate()
   const state = useApp()
-  const score = effectiveScore(state)
+  const score = riskScore(state.profile)
   const [agents, setAgents] = useState<Record<AgentId, { status: AgentStatus; message: string }>>({
     eclaireur: { status: 'pending', message: '' },
     compositeur: { status: 'pending', message: '' },
@@ -60,7 +60,7 @@ export default function Pipeline() {
         <h1 className="text-[36px] font-semibold leading-10 text-navy md:text-[50px] md:leading-[54px]">Profil {riskLabel(score)}</h1>
         <Separator />
         <p className="m-0 max-w-[560px] text-ink-soft">
-          {state.riskOverride != null ? 'Tu as choisi ce niveau toi-même.' : `Selon tes réponses : ${state.profile.age} ans, horizon de ${state.profile.horizon} ans.`} Les agents construisent maintenant trois propositions.
+          Selon tes réponses : {state.profile.age} ans, horizon de {state.profile.horizon} ans. Les agents construisent maintenant trois propositions.
         </p>
       </div>
 

@@ -57,6 +57,22 @@ export function ChoiceCards<T extends string | number>({ options, value, onChang
   )
 }
 
+/** Choix unique en pastilles, pour des options courtes. */
+export function ChoicePills<T extends string | number>({ options, value, onChange, label }: { options: Option<T>[]; value: T | undefined; onChange: (v: T) => void; label: string }) {
+  return (
+    <div role="radiogroup" aria-label={label} className="flex flex-wrap justify-center gap-2">
+      {options.map((o) => {
+        const on = o.value === value
+        return (
+          <button key={String(o.value)} role="radio" aria-checked={on} onClick={() => onChange(o.value)} className={`min-h-14 rounded-full border px-5 text-lg font-semibold transition-colors ${on ? selected : idle}`}>
+            {o.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 /** Échelle 1–5. */
 export function Scale({ value, onChange, minLabel, maxLabel, label }: { value: number | undefined; onChange: (v: number) => void; minLabel: string; maxLabel: string; label: string }) {
   return (
@@ -111,12 +127,12 @@ export function Slider({ value, onChange, min, max, step = 1, format, label }: {
 }
 
 /** Montant en dollars avec raccourcis. */
-export function AmountInput({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+export function AmountInput({ value, onChange, label = 'Montant à investir', presets = [5000, 10000, 25000, 50000, 100000] }: { value: number; onChange: (v: number) => void; label?: string; presets?: number[] }) {
   const id = useId()
   return (
     <div className="flex flex-col gap-4">
       <label htmlFor={id} className="sr-only">
-        Montant à investir
+        {label}
       </label>
       <div className="mx-auto flex w-full max-w-[360px] items-baseline gap-2 border-b-2 border-navy pb-2">
         <input
@@ -130,7 +146,7 @@ export function AmountInput({ value, onChange }: { value: number; onChange: (v: 
         <span className="text-3xl font-light text-slate">$</span>
       </div>
       <div className="flex flex-wrap justify-center gap-2">
-        {[5000, 10000, 25000, 50000, 100000].map((v) => (
+        {presets.map((v) => (
           <button key={v} onClick={() => onChange(v)} className={`min-h-11 rounded-full border px-5 text-base font-medium ${v === value ? selected : idle}`}>
             {v.toLocaleString('fr-CA')}&nbsp;$
           </button>

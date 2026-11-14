@@ -1,18 +1,28 @@
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
-import { AmountInput, ChoiceCards, ChoiceList, Scale, Slider } from '../components/inputs'
+import { AmountInput, ChoiceCards, ChoiceList, ChoicePills, Scale, Slider, type Option } from '../components/inputs'
 import type { Pose } from '../components/Pepite'
 import { QuestionShell } from '../components/QuestionShell'
-import { money } from '../lib/format'
-import { useApp } from '../store'
-import type { Objective, Profile as P } from '../types'
+import { contribution, money } from '../lib/format'
+import { useApp, type State } from '../store'
+import type { ContributionFrequency, Objective } from '../types'
+
+type Answers = Pick<State, 'profile' | 'setProfile' | 'contribution' | 'setContribution'>
 
 interface Step {
   question: string
   hint?: string
   pose: Pose
-  pepite: string
-  render: (p: P, set: (patch: Partial<P>) => void) => React.ReactNode
+  pepite: string | ((a: Answers) => string)
+  canNext?: (a: Answers) => boolean
+  render: (a: Answers) => React.ReactNode
 }
+
+const FREQUENCIES: Option<ContributionFrequency>[] = [
+  { value: 'aucune', label: 'Pas prévu' },
+  { value: 'deux-semaines', label: 'Aux 2 semaines' },
+  { value: 'mensuelle', label: 'Chaque mois' },
+  { value: 'annuelle', label: 'Chaque année' },
+]
 
 const STEPS: Step[] = [
   {
@@ -20,21 +30,40 @@ const STEPS: Step[] = [
     hint: 'Ça nous aide à estimer combien de temps ton argent peut travailler.',
     pose: 'wave',
     pepite: 'Salut! On commence simple.',
-    render: (p, set) => <Slider label="Ton âge" value={p.age} min={18} max={85} format={(v) => `${v} ans`} onChange={(age) => set({ age })} />,
+    render: ({ profile: p, setProfile: set }) => <Slider label="Ton âge" value={p.age} min={18} max={85} format={(v) => `${v} ans`} onChange={(age) => set({ age })} />,
   },
   {
     question: 'Combien veux-tu investir?',
     hint: 'Un montant approximatif suffit. Tu pourras le changer plus tard.',
     pose: 'coffee',
-    pepite: 'Petit ou gros montant, chaque bas de laine compte.',
-    render: (p, set) => <AmountInput value={p.amount} onChange={(amount) => set({ amount })} />,
+    pepite: ({ profile: p }) => (p.amount ? `${money(p.amount)}, c’est noté.` : 'Petit ou gros montant, chaque bas de laine compte.'),
+    canNext: ({ profile: p }) => p.amount >= 100,
+    render: ({ profile: p, setProfile: set }) => <AmountInput value={p.amount} onChange={(amount) => set({ amount })} />,
+  },
+  {
+    question: 'Prévois-tu d’ajouter de l’argent plus tard?',
+    hint: 'À quelle fréquence, et combien à chaque fois. Ça sert seulement à projeter ton portefeuille dans le temps.',
+    pose: 'question',
+    pepite: ({ contribution: c }) => (c.frequency === 'aucune' ? 'Pas de souci, on part de ton montant de départ.' : `${contribution(c)}, c’est noté.`),
+    canNext: ({ contribution: c }) => c.frequency === 'aucune' || c.amount > 0,
+    render: ({ contribution: c, setContribution: set }) => (
+      <div className="flex flex-col gap-8">
+        <ChoicePills label="Fréquence des ajouts" options={FREQUENCIES} value={c.frequency} onChange={(frequency) => set({ frequency })} />
+        {c.frequency !== 'aucune' && (
+          <div className="fade-in flex flex-col gap-2">
+            <span className="text-center text-lg font-semibold text-navy">Combien à chaque fois?</span>
+            <AmountInput label="Montant par ajout" value={c.amount} onChange={(amount) => set({ amount })} presets={[50, 100, 250, 500, 1000]} />
+          </div>
+        )}
+      </div>
+    ),
   },
   {
     question: 'À quoi va servir cet argent?',
     hint: 'Choisis ce qui te correspond le mieux.',
     pose: 'map',
     pepite: 'Ton objectif, c’est notre boussole.',
-    render: (p, set) => (
+    render: ({ profile: p, setProfile: set }) => (
       <ChoiceCards<Objective>
         label="Objectif"
         value={p.objective}
@@ -52,14 +81,14 @@ const STEPS: Step[] = [
     hint: 'Glisse pour indiquer un nombre d’années approximatif.',
     pose: 'binoculars',
     pepite: 'Plus l’horizon est loin, plus on peut patienter.',
-    render: (p, set) => <Slider label="Horizon" value={p.horizon} min={1} max={30} format={(v) => (v === 1 ? '1 an' : `${v} ans`)} onChange={(horizon) => set({ horizon })} />,
+    render: ({ profile: p, setProfile: set }) => <Slider label="Horizon" value={p.horizon} min={1} max={30} format={(v) => (v === 1 ? '1 an' : `${v} ans`)} onChange={(horizon) => set({ horizon })} />,
   },
   {
     question: 'Ton portefeuille perd 20 % en un mois. Que fais-tu?',
     hint: 'Il n’y a pas de mauvaise réponse.',
     pose: 'surprised',
     pepite: 'Sois honnête, ça reste entre nous!',
-    render: (p, set) => (
+    render: ({ profile: p, setProfile: set }) => (
       <ChoiceList
         label="Réaction à une baisse"
         value={p.lossReaction}
@@ -78,7 +107,7 @@ const STEPS: Step[] = [
     hint: 'De 1 (pas du tout) à 5 (très à l’aise). On adaptera les explications.',
     pose: 'thinking',
     pepite: 'Débutant ou expert, je m’adapte à toi.',
-    render: (p, set) => <Scale label="Aisance" value={p.comfort} minLabel="Pas du tout" maxLabel="Très à l’aise" onChange={(comfort) => set({ comfort })} />,
+    render: ({ profile: p, setProfile: set }) => <Scale label="Aisance" value={p.comfort} minLabel="Pas du tout" maxLabel="Très à l’aise" onChange={(comfort) => set({ comfort })} />,
   },
 ]
 
@@ -86,12 +115,9 @@ export default function Profile() {
   const { step: raw } = useParams()
   const step = Number(raw)
   const navigate = useNavigate()
-  const profile = useApp((s) => s.profile)
-  const setProfile = useApp((s) => s.setProfile)
-  const setRiskOverride = useApp((s) => s.setRiskOverride)
+  const answers = useApp()
   if (!(step >= 1 && step <= STEPS.length)) return <Navigate to="/profil/1" replace />
   const s = STEPS[step - 1]
-  const canNext = step !== 2 || profile.amount >= 100
   return (
     <QuestionShell
       chapter="Ton profil"
@@ -100,17 +126,12 @@ export default function Profile() {
       question={s.question}
       hint={s.hint}
       pose={s.pose}
-      pepite={step === 2 && profile.amount ? `${money(profile.amount)}, c’est noté.` : s.pepite}
-      canNext={canNext}
+      pepite={typeof s.pepite === 'function' ? s.pepite(answers) : s.pepite}
+      canNext={s.canNext?.(answers) ?? true}
       onBack={() => navigate(step === 1 ? '/' : `/profil/${step - 1}`)}
-      onNext={() => {
-        if (step === STEPS.length) {
-          setRiskOverride(null)
-          navigate('/transition')
-        } else navigate(`/profil/${step + 1}`)
-      }}
+      onNext={() => navigate(step === STEPS.length ? '/transition' : `/profil/${step + 1}`)}
     >
-      {s.render(profile, setProfile)}
+      {s.render(answers)}
     </QuestionShell>
   )
 }

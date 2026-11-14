@@ -2,7 +2,7 @@ import { Link, Outlet, useLocation } from 'react-router-dom'
 import { Pepite } from './Pepite'
 
 const STEPS = [
-  { label: 'Ton profil', match: ['/profil', '/niveau', '/transition'] },
+  { label: 'Ton profil', match: ['/profil', '/transition'] },
   { label: 'Tes préférences', match: ['/preferences'] },
   { label: 'Construction', match: ['/construction'] },
   { label: 'Portefeuilles', match: ['/portefeuille'] },

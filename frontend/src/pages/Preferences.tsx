@@ -4,8 +4,8 @@ import type { Pose } from '../components/Pepite'
 import { QuestionShell } from '../components/QuestionShell'
 import { Alert } from '../components/ui'
 import { BLOCKS } from '../data/catalog'
-import { coherenceWarnings } from '../lib/engine'
-import { effectiveScore, useApp } from '../store'
+import { coherenceWarnings, riskScore } from '../lib/engine'
+import { useApp } from '../store'
 import type { ConstraintBlock } from '../types'
 
 const POSES: Record<ConstraintBlock, Pose> = { classes: 'laptop', regions: 'map', themes: 'question', factors: 'cool' }
@@ -30,7 +30,7 @@ export default function Preferences() {
   if (!(step >= 1 && step <= blocks.length)) return <Navigate to="/preferences/1" replace />
   const block = blocks[step - 1]
   const def = BLOCKS[block]
-  const warnings = block === 'classes' ? coherenceWarnings(effectiveScore(state), state.constraints) : []
+  const warnings = block === 'classes' ? coherenceWarnings(riskScore(state.profile), state.constraints) : []
   const last = step === blocks.length
   return (
     <QuestionShell
