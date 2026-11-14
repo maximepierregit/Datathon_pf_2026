@@ -25,7 +25,13 @@ export type Level = -2 | -1 | 0 | 1 | 2
 
 export type ConstraintBlock = 'classes' | 'regions' | 'themes' | 'factors'
 
-export type Constraints = Record<ConstraintBlock, Record<string, Level>>
+/** « fnb » : FNB seulement. « tous » : FNB et titres individuels. */
+export type Vehicles = 'fnb' | 'tous'
+
+export type Constraints = Record<ConstraintBlock, Record<string, Level>> & {
+  /** Indépendant des classes : un FNB peut détenir des actions, des obligations, de l'or… */
+  vehicles: Vehicles
+}
 
 export type AssetClass = 'actions' | 'obligations' | 'immobilier' | 'or' | 'crypto' | 'liquidites'
 

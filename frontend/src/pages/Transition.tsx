@@ -42,7 +42,7 @@ export default function Transition() {
         <div className="flex flex-col gap-2 rounded-[var(--radius-card)] bg-sky px-6 py-5">
           <p className="m-0 font-semibold text-navy">Veux-tu préciser ce que tu veux dans ton portefeuille?</p>
           <p className="m-0 text-[15px] text-ink-soft">
-            Types de placements, régions, thématiques{profile.comfort >= 4 ? ', styles d’investissement' : ''} : environ 2 minutes. Sinon, mes agents choisissent pour toi.
+            FNB ou non, types de placements, régions, thématiques{profile.comfort >= 4 ? ', styles d’investissement' : ''} : environ 2 minutes. Sinon, mes agents choisissent pour toi.
           </p>
         </div>
         <div className="flex w-full flex-col-reverse items-center justify-center gap-3 sm:flex-row">

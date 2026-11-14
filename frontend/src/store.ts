@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
-import { buildAll, emptyConstraints, fnbOnlyClasses, riskScore } from './lib/engine'
-import type { Constraints, ConstraintBlock, Contribution, DashboardLevel, Level, Portfolio, PortfolioId, Profile } from './types'
+import { buildAll, emptyConstraints, riskScore } from './lib/engine'
+import type { Constraints, ConstraintBlock, Contribution, DashboardLevel, Level, Portfolio, PortfolioId, Profile, Vehicles } from './types'
 
 export const DEFAULT_PROFILE: Profile = {
   age: 35,
@@ -32,8 +32,7 @@ export interface State {
   setProfile: (patch: Partial<Profile>) => void
   setContribution: (patch: Partial<Contribution>) => void
   setLevel: (block: ConstraintBlock, id: string, level: Level) => void
-  /** Active « FNB seulement », ou remet toutes les classes à « Neutre ». */
-  setFnbOnly: (on: boolean) => void
+  setVehicles: (vehicles: Vehicles) => void
   clearConstraints: () => void
   acceptDisclaimer: () => void
   build: () => void
@@ -82,7 +81,7 @@ export const useApp = create<State>()(
       setContribution: (patch) => set((s) => ({ contribution: { ...s.contribution, ...patch } })),
       setLevel: (block, id, level) =>
         set((s) => ({ constraints: { ...s.constraints, [block]: { ...s.constraints[block], [id]: level } } })),
-      setFnbOnly: (on) => set((s) => ({ constraints: { ...s.constraints, classes: on ? fnbOnlyClasses() : {} } })),
+      setVehicles: (vehicles) => set((s) => ({ constraints: { ...s.constraints, vehicles } })),
       clearConstraints: () => set({ constraints: emptyConstraints() }),
       acceptDisclaimer: () => set({ disclaimerSeen: true }),
       build: () => set((s) => ({ adjustments: [], portfolios: rebuild(riskScore(s.profile), s.constraints, []) })),
