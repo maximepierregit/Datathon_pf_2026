@@ -1,10 +1,10 @@
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
-import { PreferenceTuner } from '../components/inputs'
+import { CheckCard, PreferenceTuner } from '../components/inputs'
 import type { Pose } from '../components/Pepite'
 import { QuestionShell } from '../components/QuestionShell'
 import { Alert } from '../components/ui'
 import { BLOCKS } from '../data/catalog'
-import { coherenceWarnings, riskScore } from '../lib/engine'
+import { coherenceWarnings, isFnbOnly, riskScore } from '../lib/engine'
 import { useApp } from '../store'
 import type { ConstraintBlock } from '../types'
 
@@ -31,6 +31,7 @@ export default function Preferences() {
   const block = blocks[step - 1]
   const def = BLOCKS[block]
   const warnings = block === 'classes' ? coherenceWarnings(riskScore(state.profile), state.constraints) : []
+  const fnbOnly = block === 'classes' && isFnbOnly(state.constraints)
   const last = step === blocks.length
   return (
     <QuestionShell
@@ -40,7 +41,7 @@ export default function Preferences() {
       question={def.title}
       hint={def.hint}
       pose={warnings.length ? 'thinking' : POSES[block]}
-      pepite={warnings.length ? 'Hmm, quelque chose cloche…' : PEPITE[block]}
+      pepite={warnings.length ? 'Hmm, quelque chose cloche…' : fnbOnly ? 'Que des FNB? Simple et bien diversifié, j’aime ça.' : PEPITE[block]}
       canNext
       nextLabel={last ? 'Lancer la construction' : 'Continuer'}
       onBack={() => navigate(step === 1 ? '/transition' : `/preferences/${step - 1}`)}
@@ -57,7 +58,17 @@ export default function Preferences() {
         )
       }
     >
-      <PreferenceTuner items={def.items} value={state.constraints[block]} onChange={(id, l) => state.setLevel(block, id, l)} />
+      <div className="flex flex-col gap-4">
+        {block === 'classes' && (
+          <CheckCard
+            checked={fnbOnly}
+            onChange={state.setFnbOnly}
+            label="FNB seulement"
+            desc="Aucun titre en direct. Ton portefeuille couvre quand même actions, obligations et le reste, mais seulement par des FNB."
+          />
+        )}
+        <PreferenceTuner items={def.items} value={state.constraints[block]} onChange={(id, l) => state.setLevel(block, id, l)} />
+      </div>
     </QuestionShell>
   )
 }
