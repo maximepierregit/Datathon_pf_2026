@@ -1,1 +1,28 @@
-.venv\*
+# Environnements virtuels Python (n'importe où dans le dépôt)
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+*.egg-info/
+
+# Secrets et configuration locale
+.env
+.env.*
+!.env.example
+
+# Artefacts de build
+build/
+dist/
+*.zip
+
+# Node (le frontend a aussi son propre .gitignore)
+node_modules/
+
+# Éditeurs et système
+.DS_Store
+.idea/
