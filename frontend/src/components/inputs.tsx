@@ -19,25 +19,6 @@ function Radio({ on }: { on: boolean }) {
   )
 }
 
-/** Case à cocher pleine largeur, pour un raccourci qui règle plusieurs réponses d'un coup. */
-export function CheckCard({ checked, onChange, label, desc }: { checked: boolean; onChange: (v: boolean) => void; label: string; desc?: string }) {
-  return (
-    <button role="checkbox" aria-checked={checked} onClick={() => onChange(!checked)} className={`flex min-h-[72px] items-center gap-4 rounded-[var(--radius-card)] border px-5 py-4 text-left text-lg transition-colors ${checked ? selected : idle}`}>
-      <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 ${checked ? 'border-navy bg-navy' : 'border-line'}`} aria-hidden>
-        {checked && (
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M5 12l5 5 9-10" />
-          </svg>
-        )}
-      </span>
-      <span className="flex flex-col">
-        <span className="font-semibold">{label}</span>
-        {desc && <span className="text-base text-ink-soft">{desc}</span>}
-      </span>
-    </button>
-  )
-}
-
 /** QCM vertical : une option par ligne. */
 export function ChoiceList<T extends string | number>({ options, value, onChange, label }: { options: Option<T>[]; value: T | undefined; onChange: (v: T) => void; label: string }) {
   return (
