@@ -12,7 +12,7 @@ const variants: Record<Variant, string> = {
   ghost: 'min-w-0 border-transparent px-2 text-slate hover:shadow-none hover:text-navy',
 }
 
-export function Button({ variant = 'primary', className = '', ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant }) {
+export function Button({ variant = 'primary', className = '', ...rest }: React.ComponentProps<'button'> & { variant?: Variant }) {
   return <button type="button" className={`${base} ${variants[variant]} ${className}`} {...rest} />
 }
 

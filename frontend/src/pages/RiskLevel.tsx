@@ -31,7 +31,7 @@ export default function RiskLevel() {
       onNext={() => {
         setProfile({ comfort: DEFAULT_PROFILE.comfort, amount: DEFAULT_PROFILE.amount })
         setRiskOverride(value!)
-        navigate('/preferences/1')
+        navigate('/transition')
       }}
     >
       <ChoiceList label="Niveau de risque" options={LEVELS} value={value} onChange={setValue} />

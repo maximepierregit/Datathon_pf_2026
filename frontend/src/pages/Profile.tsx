@@ -106,7 +106,7 @@ export default function Profile() {
       onNext={() => {
         if (step === STEPS.length) {
           setRiskOverride(null)
-          navigate('/preferences/1')
+          navigate('/transition')
         } else navigate(`/profil/${step + 1}`)
       }}
     >

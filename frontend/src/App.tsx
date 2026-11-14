@@ -6,6 +6,7 @@ import Pipeline from './pages/Pipeline'
 import Preferences from './pages/Preferences'
 import Profile from './pages/Profile'
 import RiskLevel from './pages/RiskLevel'
+import Transition from './pages/Transition'
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
         <Route index element={<Home />} />
         <Route path="profil/:step" element={<Profile />} />
         <Route path="niveau" element={<RiskLevel />} />
+        <Route path="transition" element={<Transition />} />
         <Route path="preferences/:step" element={<Preferences />} />
         <Route path="construction" element={<Pipeline />} />
         <Route path="portefeuille" element={<Dashboard />} />

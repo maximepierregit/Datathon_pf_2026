@@ -6,6 +6,7 @@ import { money, pct } from '../../lib/format'
 import { defaultDashboardLevel, useApp } from '../../store'
 import type { DashboardLevel, PortfolioId } from '../../types'
 import { AdjustPanel } from './AdjustPanel'
+import { Disclaimer } from './Disclaimer'
 import { Advanced, Beginner, Intermediate } from './Views'
 
 const LEVELS: { id: DashboardLevel; label: string }[] = [
@@ -17,6 +18,8 @@ const LEVELS: { id: DashboardLevel; label: string }[] = [
 export default function Dashboard() {
   const portfolios = useApp((s) => s.portfolios)
   const profile = useApp((s) => s.profile)
+  const disclaimerSeen = useApp((s) => s.disclaimerSeen)
+  const acceptDisclaimer = useApp((s) => s.acceptDisclaimer)
   const [params, setParams] = useSearchParams()
   const [chat, setChat] = useState(false)
   if (!portfolios) return <Navigate to="/" replace />
@@ -94,6 +97,7 @@ export default function Dashboard() {
       </section>
 
       {chat && <AdjustPanel p={p} onClose={() => setChat(false)} />}
+      {!disclaimerSeen && <Disclaimer onAccept={acceptDisclaimer} />}
     </div>
   )
 }

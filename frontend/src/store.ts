@@ -27,9 +27,12 @@ interface State {
   constraints: Constraints
   portfolios: Record<PortfolioId, Portfolio> | null
   adjustments: AppliedAdjustment[]
+  disclaimerSeen: boolean
   setProfile: (patch: Partial<Profile>) => void
   setRiskOverride: (score: number | null) => void
   setLevel: (block: ConstraintBlock, id: string, level: Level) => void
+  clearConstraints: () => void
+  acceptDisclaimer: () => void
   build: () => void
   /** Portefeuille tel qu'il serait avec cet ajustement en plus, sans l'appliquer. */
   previewAdjustment: (a: Omit<AppliedAdjustment, 'id' | 'label'>) => Portfolio
@@ -73,10 +76,13 @@ export const useApp = create<State>()(
       constraints: emptyConstraints(),
       portfolios: null,
       adjustments: [],
+      disclaimerSeen: false,
       setProfile: (patch) => set((s) => ({ profile: { ...s.profile, ...patch } })),
       setRiskOverride: (riskOverride) => set({ riskOverride }),
       setLevel: (block, id, level) =>
         set((s) => ({ constraints: { ...s.constraints, [block]: { ...s.constraints[block], [id]: level } } })),
+      clearConstraints: () => set({ constraints: emptyConstraints() }),
+      acceptDisclaimer: () => set({ disclaimerSeen: true }),
       build: () => set((s) => ({ adjustments: [], portfolios: rebuild(effectiveScore(s), s.constraints, []) })),
       previewAdjustment: (a) => {
         const s = get()
@@ -91,7 +97,7 @@ export const useApp = create<State>()(
         set((s) => ({ adjustments, portfolios: rebuild(effectiveScore(s), s.constraints, adjustments) }))
       },
       reset: () =>
-        set({ profile: DEFAULT_PROFILE, riskOverride: null, constraints: emptyConstraints(), portfolios: null, adjustments: [] }),
+        set({ profile: DEFAULT_PROFILE, riskOverride: null, constraints: emptyConstraints(), portfolios: null, adjustments: [], disclaimerSeen: false }),
     }),
     { name: 'bas-de-laine', storage: createJSONStorage(() => sessionStorage) },
   ),

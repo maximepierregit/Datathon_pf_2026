@@ -43,7 +43,7 @@ export default function Preferences() {
       pepite={warnings.length ? 'Hmm, quelque chose cloche…' : PEPITE[block]}
       canNext
       nextLabel={last ? 'Lancer la construction' : 'Continuer'}
-      onBack={() => navigate(step === 1 ? (state.riskOverride != null ? '/niveau' : '/profil/6') : `/preferences/${step - 1}`)}
+      onBack={() => navigate(step === 1 ? '/transition' : `/preferences/${step - 1}`)}
       onNext={() => navigate(last ? '/construction' : `/preferences/${step + 1}`)}
       aside={
         warnings.length > 0 && (
