@@ -53,6 +53,57 @@ def rounded(pts, r=10):
     return d + " Z"
 
 
+# ---------------------------------------------------------------- animation
+# Discreet CSS loops embedded in each SVG (they run inside <img> too). Animated
+# parts are wrapped in their own <g class> so CSS never fights a transform attribute.
+# --d offsets a whole cell so poses on one page don't move in lockstep.
+STYLE = """<style>
+.bob,.blink,.sway,.wave,.pump,.tap,.tilt,.scan,.twinkle,.float,.zzz,.dot,.pulse,.drip,.flutter{
+ transform-box:fill-box;animation-delay:var(--d,0s);animation-iteration-count:infinite;animation-timing-function:ease-in-out}
+.bob{animation-name:pp-bob;animation-duration:3.6s}
+.bob.slow{animation-name:pp-breathe;animation-duration:5s}
+.bob.bouncy{animation-name:pp-hop;animation-duration:1.8s}
+.blink{transform-origin:50% 50%;animation-name:pp-blink;animation-duration:5.2s;animation-timing-function:linear}
+.sway{transform-origin:55% 0%;animation-name:pp-sway;animation-duration:3.6s}
+.wave{transform-origin:50% 90%;animation-name:pp-wave;animation-duration:1.8s}
+.pump{animation-name:pp-pump;animation-duration:2.4s}
+.tap{animation-name:pp-tap;animation-duration:.9s}
+.tilt{transform-origin:50% 50%;animation-name:pp-tilt;animation-duration:4s}
+.scan{animation-name:pp-scan;animation-duration:4.4s}
+.twinkle{transform-origin:50% 50%;animation-name:pp-twinkle;animation-duration:2.6s}
+.float{animation-name:pp-float;animation-duration:3s}
+.zzz{animation-name:pp-zzz;animation-duration:3.4s}
+.dot{animation-name:pp-dot;animation-duration:1.6s}
+.pulse{transform-origin:50% 50%;animation-name:pp-pulse;animation-duration:1.6s}
+.drip{animation-name:pp-drip;animation-duration:3.2s;animation-timing-function:ease-in}
+.flutter{transform-origin:0% 50%;animation-name:pp-flutter;animation-duration:2s}
+.late{animation-delay:calc(var(--d,0s) - .45s)}
+@keyframes pp-bob{50%{transform:translateY(-3px)}}
+@keyframes pp-breathe{50%{transform:translateY(-1.5px) scaleY(1.01)}}
+@keyframes pp-hop{0%,100%{transform:translateY(0)}40%{transform:translateY(-6px)}60%{transform:translateY(-5px)}}
+@keyframes pp-blink{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.1)}}
+@keyframes pp-sway{50%{transform:rotate(5deg)}}
+@keyframes pp-wave{0%,100%{transform:rotate(-8deg)}50%{transform:rotate(14deg)}}
+@keyframes pp-pump{50%{transform:translateY(-4px)}}
+@keyframes pp-tap{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-3px)}}
+@keyframes pp-tilt{50%{transform:rotate(-2.5deg)}}
+@keyframes pp-scan{0%,100%{transform:translateX(0)}30%{transform:translateX(-4px)}70%{transform:translateX(4px)}}
+@keyframes pp-twinkle{50%{transform:scale(.65) rotate(25deg);opacity:.55}}
+@keyframes pp-float{0%,100%{transform:translateY(0) rotate(0)}50%{transform:translateY(-5px) rotate(6deg)}}
+@keyframes pp-zzz{0%{transform:translate(0,6px);opacity:0}25%,70%{opacity:1}100%{transform:translate(6px,-8px);opacity:0}}
+@keyframes pp-dot{0%,100%{opacity:.25}40%{opacity:1}}
+@keyframes pp-pulse{50%{transform:scale(.85);opacity:.45}}
+@keyframes pp-drip{0%{transform:translateY(-2px);opacity:0}20%{opacity:1}80%{transform:translateY(6px);opacity:1}100%{transform:translateY(9px);opacity:0}}
+@keyframes pp-flutter{50%{transform:scaleX(.92) skewY(5deg)}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>"""
+
+
+def anim(cls, content, delay=None):
+    style = f' style="animation-delay:calc(var(--d,0s) + {delay}s)"' if delay is not None else ""
+    return f'<g class="{cls}"{style}>{content}</g>'
+
+
 # ---------------------------------------------------------------- base shape
 # Mascot frame: body is roughly 0..218 x 0..176, face centred at FACE_C.
 BODY_PTS = [(0, 34, 14), (65, 8, 14), (112, 38, 10), (205, 4, 14), (218, 124, 22), (110, 176, 26), (6, 156, 20)]
@@ -104,7 +155,7 @@ def eyes(kind):
             out.append(f'<path d="M{x-12},{y+4} Q{x},{y-11} {x+12},{y+4}" fill="none" {st(6)}/>')
         elif kind == "sleep":   # closed, relaxed
             out.append(f'<path d="M{x-11},{y} Q{x},{y+9} {x+11},{y}" fill="none" {st(5.5)}/>')
-    return "".join(out)
+    return anim("blink", "".join(out)) if kind in ("open", "wide", "soft") else "".join(out)
 
 
 def blush():
@@ -251,10 +302,10 @@ def flag(s):
     return (f'<path d="M0,-70 L0,90" stroke="{NAVY}" stroke-width="{10 / s:.2f}" stroke-linecap="round"/>'
             f'<path d="M0,-66 L0,86" stroke="#3b4775" stroke-width="{3 / s:.2f}" stroke-linecap="round"/>'
             f'<circle cx="0" cy="-72" r="6.5" fill="{NAVY}"/>'
-            f'<path d="M4,-66 C20,-74 36,-58 58,-66 C64,-68 66,-63 63,-59 L55,-46 C53,-43 53,-41 55,-38 L62,-27 '
+            f'<g class="flutter"><path d="M4,-66 C20,-74 36,-58 58,-66 C64,-68 66,-63 63,-59 L55,-46 C53,-43 53,-41 55,-38 L62,-27 '
             f'C65,-22 62,-19 58,-19 C38,-15 22,-29 4,-23 Z" fill="{RED}" {ln}/>'
             f'<path d="M14,-58 C26,-62 36,-52 48,-56" fill="none" stroke="{RED_LIGHT}" stroke-width="{3.5 / s:.2f}" '
-            f'stroke-linecap="round" opacity=".7"/>')
+            f'stroke-linecap="round" opacity=".7"/></g>')
 
 
 # ------------------------------------------------------------------- extras
@@ -264,32 +315,33 @@ def lines(x, y, rot=0, s=1.0):
     for a in (rot - 38, rot, rot + 38):
         dx, dy = sin(radians(a)), -cos(radians(a))
         out += f'<path d="M{x + dx * 13 * s:.1f},{y + dy * 13 * s:.1f} L{x + dx * 24 * s:.1f},{y + dy * 24 * s:.1f}"/>'
-    return f'<g fill="none" {st(5.5)}>{out}</g>'
+    return anim("pulse", f'<g fill="none" {st(5.5)}>{out}</g>')
 
 
 def sparkle(x, y, s=1.0):
-    return (f'<path transform="translate({x},{y}) scale({s})" d="M0,-14 C1,-4 4,-1 13,0 C4,1 1,4 0,14 '
-            f'C-1,4 -4,1 -13,0 C-4,-1 -1,-4 0,-14 Z" fill="{NAVY}" {st(2)}/>')
+    return anim("twinkle", f'<path transform="translate({x},{y}) scale({s})" d="M0,-14 C1,-4 4,-1 13,0 C4,1 1,4 0,14 '
+                           f'C-1,4 -4,1 -13,0 C-4,-1 -1,-4 0,-14 Z" fill="{NAVY}" {st(2)}/>')
 
 
 def question(x, y):
-    return (f'<path transform="translate({x},{y})" d="M-11,-8 C-11,-22 13,-22 13,-8 C13,1 2,3 2,12" fill="none" {st(5.5)}/>'
-            f'<circle cx="{x + 2}" cy="{y + 24}" r="4.5" fill="{NAVY}"/>')
+    return anim("float", f'<path transform="translate({x},{y})" d="M-11,-8 C-11,-22 13,-22 13,-8 C13,1 2,3 2,12" fill="none" {st(5.5)}/>'
+                         f'<circle cx="{x + 2}" cy="{y + 24}" r="4.5" fill="{NAVY}"/>')
 
 
 def dots(x, y):
-    return "".join(f'<circle cx="{x + i * 12}" cy="{y - i * 3}" r="{3.5 + i * 0.5}" fill="{NAVY}"/>' for i in range(3))
+    return "".join(anim("dot", f'<circle cx="{x + i * 12}" cy="{y - i * 3}" r="{3.5 + i * 0.5}" fill="{NAVY}"/>', i * 0.25)
+                   for i in range(3))
 
 
 def zzz(x, y):
     z = lambda dx, dy, s: (f'<path transform="translate({x + dx},{y + dy}) scale({s})" '
                            f'd="M-7,-7 L7,-7 L-7,7 L7,7" fill="none" {st(5 / s)}/>')
-    return z(0, 10, 1.0) + z(22, -6, 0.75)
+    return anim("zzz", z(0, 10, 1.0)) + anim("zzz", z(22, -6, 0.75), 1.1)
 
 
 def drop(x, y, s=1.0):
-    return (f'<path transform="translate({x},{y}) scale({s})" d="M0,-12 C5,-4 9,1 9,6 C9,11 5,14 0,14 '
-            f'C-5,14 -9,11 -9,6 C-9,1 -5,-4 0,-12 Z" fill="{DROP}" {st(4.5 / s)}/>')
+    return anim("drip", f'<path transform="translate({x},{y}) scale({s})" d="M0,-12 C5,-4 9,1 9,6 C9,11 5,14 0,14 '
+                        f'C-5,14 -9,11 -9,6 C-9,1 -5,-4 0,-12 Z" fill="{DROP}" {st(4.5 / s)}/>')
 
 
 # -------------------------------------------------------------------- poses
@@ -298,10 +350,10 @@ def drop(x, y, s=1.0):
 POSES = {
     "01-wave": dict(rot=-6, dx=8, eyes="open", mouth="open",
                     back=arm("M16,124 C-4,118 -20,104 -24,88"),
-                    front=hand(-24, 76, -18),
+                    front=anim("wave", hand(-24, 76, -18)),
                     top=lines(50, 64, -40)),
     "02-happy": dict(rot=-4, eyes="happy", mouth="small",
-                     front=hand(46, 134, -25) + hand(212, 124, 25, flip=True)),
+                     front=anim("pump", hand(46, 134, -25)) + anim("pump late", hand(212, 124, 25, flip=True))),
     "03-question": dict(rot=-3, eyes="open", mouth="content",
                         top=question(286, 74)),
     "04-thinking": dict(rot=-2, eyes="open", brows="raised", mouth="content", mouth_dx=-2,
@@ -311,30 +363,30 @@ POSES = {
                          front=hand(82, 138, -12) + hand(186, 132, 12, flip=True),
                          top=lines(282, 82, 40)),
     "06-coffee": dict(rot=-2, eyes="happy", mouth="smile",
-                      front=place(mug, 148, 162, 0, 1.3) + hand(118, 180, 15, flip=True) + hand(180, 178, -15)),
+                      front=anim("bob", place(mug, 148, 162, 0, 1.3) + hand(118, 180, 15, flip=True) + hand(180, 178, -15))),
     "07-laptop": dict(rot=-2, eyes="open", mouth="smile",
-                      front=place(laptop, 144, 206, -4, 1.05) + hand(94, 200, 20, flip=True) + hand(194, 194, -20),
+                      front=place(laptop, 144, 206, -4, 1.05) + anim("tap", hand(94, 200, 20, flip=True)) + anim("tap late", hand(194, 194, -20)),
                       top=lines(282, 96, 45, 0.85)),
     "08-map": dict(rot=-3, eyes="open", mouth="o",
-                   front=place(map_, 146, 184, -6, 1.3) + hand(98, 186, 15, flip=True) + hand(194, 180, -15)),
+                   front=anim("tilt", place(map_, 146, 184, -6, 1.3) + hand(98, 186, 15, flip=True) + hand(194, 180, -15))),
     "09-binoculars": dict(rot=-2, eyes=None, brows="up", mouth="smile",
-                          front=place(binoculars, EYE_L[0] + EYE_DX, EYE_L[1], 0, 1.0)
-                                + hand(EYE_L[0] - 16, EYE_L[1] + 18, 25, flip=True) + hand(EYE_R[0] + 16, EYE_R[1] + 18, -25)),
+                          front=anim("scan", place(binoculars, EYE_L[0] + EYE_DX, EYE_L[1], 0, 1.0)
+                                + hand(EYE_L[0] - 16, EYE_L[1] + 18, 25, flip=True) + hand(EYE_R[0] + 16, EYE_R[1] + 18, -25))),
     "10-thumbsup": dict(rot=-2, eyes="open", mouth="smile",
-                        front=hand(218, 126, 0, shape="thumb"),
+                        front=anim("pump", hand(218, 126, 0, shape="thumb")),
                         top=sparkle(292, 74)),
-    "11-sleep": dict(rot=-14, dy=4, eyes="sleep", mouth="content",
+    "11-sleep": dict(rot=-14, dy=4, bob="slow", eyes="sleep", mouth="content",
                      front=hand(216, 146, 10),
                      top=zzz(268, 86)),
     "12-tired": dict(rot=-3, eyes="soft", brows="worried", mouth="wavy",
                      face_extra=drop(FACE_C[0] + 50, FACE_C[1] - 28, 0.8),
                      front=hand(104, 188, 0, flip=True) + hand(176, 184, 0)),
     "13-cool": dict(rot=-3, eyes=None, mouth="smile", glasses=True,
-                    front=hand(220, 132, 12),
+                    front=anim("wave", hand(220, 132, 12)),
                     top=sparkle(290, 96)),
-    "14-excited": dict(rot=-5, dx=-2, eyes="happy", mouth="big",
+    "14-excited": dict(rot=-5, dx=-2, bob="bouncy", eyes="happy", mouth="big",
                        back=arm("M18,128 C0,122 -14,108 -18,94") + arm("M214,118 C232,110 240,98 242,86"),
-                       front=hand(-18, 82, -20) + hand(242, 74, 20, flip=True),
+                       front=anim("pump", hand(-18, 82, -20)) + anim("pump late", hand(242, 74, 20, flip=True)),
                        top=lines(52, 64, -35)),
     "15-flag": dict(rot=-2, dx=-32, eyes="open", mouth="open",
                     front=place(flag, 232, 86, 0, 1.1) + hand(231, 150, 0)),
@@ -344,7 +396,7 @@ CELL = 340
 SCALE = 0.95
 
 
-def mascot(p):
+def mascot(p, phase=0.0):
     face = FACE + (blush() if p.get("blush", True) else "") + eyes(p.get("eyes"))
     face += brows(p.get("brows")) + mouth(p.get("mouth"), p.get("mouth_dx", 0))
     if p.get("glasses"):
@@ -352,30 +404,32 @@ def mascot(p):
     face += p.get("face_extra", "")
     body = f'<path d="{BODY}" fill="{RED}"/>' + SHINE + f'<path d="{BODY}" fill="none" {LINE}/>'
     face = f'<g transform="rotate({p.get("tilt", -4)},{FACE_C[0]},{FACE_C[1]})">{face}</g>'
-    inner = (FEET + p.get("back", "") + SCARF_TAIL + body + face
+    inner = (FEET + p.get("back", "") + anim("sway", SCARF_TAIL) + body + face
              + SCARF_BAND + p.get("front", ""))
-    return (f'<g transform="translate({CELL / 2 + p.get("dx", 0)},{CELL / 2 + 8 + p.get("dy", 0)}) '
-            f'rotate({p.get("rot", 0)}) scale({SCALE}) translate(-108,-104)">{inner}</g>{p.get("top", "")}')
+    g = (f'<g transform="translate({CELL / 2 + p.get("dx", 0)},{CELL / 2 + 8 + p.get("dy", 0)}) '
+         f'rotate({p.get("rot", 0)}) scale({SCALE}) translate(-108,-104)">{inner}</g>')
+    bob = f'bob {p["bob"]}' if "bob" in p else "bob"
+    return f'<g style="--d:{-phase:.2f}s">{anim(bob, g)}{p.get("top", "")}</g>'
 
 
 def svg(content, w=CELL, h=CELL, box=None):
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{box or f"0 0 {w} {h}"}" width="{w}" height="{h}">'
-            f'{content}</svg>\n')
+            f'{STYLE}{content}</svg>\n')
 
 
 def avatar():
     """Small-size Pépite: no tails, hands or extras, upright, bolder outline, cropped to the body."""
     face = FACE + blush() + eyes("open") + mouth("smile")
     face = f'<g transform="rotate(-4,{FACE_C[0]},{FACE_C[1]})">{face}</g>'
-    return svg(f'<path d="{BODY}" fill="{RED}" {st(9)}/>' + SHINE + face + SCARF_BAND, 240, 212, "-14 -14 260 220")
+    return svg(anim("bob", f'<path d="{BODY}" fill="{RED}" {st(9)}/>' + SHINE + face + SCARF_BAND), 240, 212, "-14 -14 260 220")
 
 
 def build():
     OUT.mkdir(exist_ok=True)
     cells = []
     for i, (name, p) in enumerate(POSES.items()):
-        g = mascot(p)
-        (OUT / f"{name}.svg").write_text(svg(g))
+        (OUT / f"{name}.svg").write_text(svg(mascot(p)))
+        g = mascot(p, phase=i * 0.37)
         cells.append(f'<g transform="translate({(i % 5) * CELL},{(i // 5) * CELL})">{g}</g>')
     (OUT.parent / "sheet.svg").write_text(svg("".join(cells), CELL * 5, CELL * 3))
     (OUT.parent / "avatar.svg").write_text(avatar())
