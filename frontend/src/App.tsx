@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { Layout } from './components/Layout'
+import { Splash } from './components/Splash'
 import Dashboard from './pages/dashboard/Dashboard'
 import Home from './pages/Home'
 import Pipeline from './pages/Pipeline'
@@ -9,16 +10,19 @@ import Transition from './pages/Transition'
 
 export default function App() {
   return (
-    <Routes>
-      <Route element={<Layout />}>
-        <Route index element={<Home />} />
-        <Route path="profil/:step" element={<Profile />} />
-        <Route path="transition" element={<Transition />} />
-        <Route path="preferences/:step" element={<Preferences />} />
-        <Route path="construction" element={<Pipeline />} />
-        <Route path="portefeuille" element={<Dashboard />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Route>
-    </Routes>
+    <>
+      <Splash />
+      <Routes>
+        <Route element={<Layout />}>
+          <Route index element={<Home />} />
+          <Route path="profil/:step" element={<Profile />} />
+          <Route path="transition" element={<Transition />} />
+          <Route path="preferences/:step" element={<Preferences />} />
+          <Route path="construction" element={<Pipeline />} />
+          <Route path="portefeuille" element={<Dashboard />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
+    </>
   )
 }

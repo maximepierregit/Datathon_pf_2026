@@ -18,7 +18,7 @@ export function Header() {
           <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white">
             <Pepite pose="happy" size={34} />
           </span>
-          Bas de Laine
+          MonPort
         </Link>
         {current >= 0 && (
           <ol aria-label="Progression" className="m-0 flex list-none flex-wrap items-center gap-x-5 gap-y-1 p-0 text-sm font-medium">
@@ -40,7 +40,7 @@ export function Header() {
 export function Footer() {
   return (
     <footer className="border-t border-line-soft bg-mist px-4 py-5 text-center text-xs leading-5 text-ink-soft">
-      Prototype réalisé pour le Datathon 2026 · Bas de Laine propose des portefeuilles modèles à titre éducatif.
+      Prototype réalisé pour le Datathon 2026 · MonPort propose des portefeuilles modèles à titre éducatif.
       <br />
       Ceci n’est pas un conseil financier : c’est toi qui décides.
     </footer>

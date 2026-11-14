@@ -3,7 +3,7 @@ import { Pepite } from '../../components/Pepite'
 import { Button, Separator } from '../../components/ui'
 
 const POINTS = [
-  'Bas de Laine propose des portefeuilles modèles à titre éducatif. Ce ne sont pas des recommandations personnalisées.',
+  'MonPort propose des portefeuilles modèles à titre éducatif. Ce ne sont pas des recommandations personnalisées.',
   'Aucun ordre n’est passé : c’est toi qui décides si, quand et comment investir.',
   'Les rendements affichés sont des estimations, sans aucune garantie. Tu peux perdre de l’argent.',
 ]

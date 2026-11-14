@@ -1,10 +1,12 @@
-# Bas de Laine · Datathon 2026
+# MonPort · Datathon 2026
 
 Équipe 20 (Maxime Pierre, Ioannis Nikoloudis, Jorge Velez, Jérémy Langevin). Client : BNCD (Banque Nationale Courtage Direct). Remise le 2026-11-15 au soir ; le jury juge une vidéo et un one-pager, l'UI et le marketing comptent pour 25 %. Hackathon de 34 h : on vise ce qui se voit dans la démo.
 
 ## Le produit
 
 Outil agentique qui **propose** trois portefeuilles à un client de courtage direct, sans jamais en imposer un. C'est le client qui choisit.
+
+Le produit s'appelle **MonPort** (signature « BNCD | MonPort »). Il s'appelait Bas de Laine : les identifiants internes (`bas-de-laine`, `bas_de_laine`, ressources AWS) gardent l'ancien nom.
 
 - **Prudent** : le profil passe avant les préférences.
 - **Équilibré** : le juste milieu, portefeuille affiché par défaut (« Point de départ »).
@@ -48,6 +50,8 @@ Le code suit la même langue : commentaires et docstrings en français, courts ;
 **`deploy/`** : `deploy.sh` build le front et le publie sur une EC2 (`bas-de-laine-front`, t3.micro, nginx). `provision.sh` crée ou réutilise l'instance, la clé SSH (`~/.ssh/bas-de-laine-front.pem`) et le security group. `nginx.conf` garde un `location /api/` commenté pour le backend.
 
 **`assets/mascot/`** : les 15 poses de Pépite (`svg/`), générées par `build.py` à partir de pièces communes. Pour modifier une pose, édite `build.py` puis relance `python3 assets/mascot/build.py`. Le front les importe depuis `../assets` (d'où `server.fs.allow: ['..']` dans `vite.config.ts`).
+
+**`assets/intro/`** : l'intro de 3 s « BNCD | MonPort », jouée en écran de chargement par `components/Splash.tsx` une fois par session. `intro.html` est la source ; après l'avoir modifiée, relance `npm --prefix assets/intro run render` pour régénérer `intro.mp4`.
 
 ### À garder synchronisé
 
