@@ -51,6 +51,12 @@
       ]
     },
     {
+      "Sid": "ToolsGateway",
+      "Effect": "Allow",
+      "Action": "bedrock-agentcore:InvokeGateway",
+      "Resource": "arn:aws:bedrock-agentcore:${REGION}:${ACCOUNT}:gateway/monport-tools-*"
+    },
+    {
       "Sid": "Guardrails",
       "Effect": "Allow",
       "Action": "bedrock:ApplyGuardrail",

@@ -45,6 +45,7 @@ from ..monport import (
     to_form,
     to_portfolio,
 )
+from .. import gateway
 from ..guardrail import screen
 from ..schemas import PepiteCheck
 from .pepite import build_turn, chat_turn, check_turn
@@ -77,6 +78,7 @@ async def _verify(session: Session, bus) -> None:
 
 async def check_questionnaire(payload: dict, bus, translator: Translator) -> None:
     profile, prefs = _questionnaire(payload)
+    gateway.prewarm()  # les outils seront prêts quand les gestionnaires en auront besoin
     market = await asyncio.to_thread(get_market)
     form, skipped = to_form(profile, prefs, market)  # valide le profil avant d'appeler le modèle
     session = SESSIONS.create(profile, prefs, form, skipped, market)
@@ -167,6 +169,7 @@ def _reset_results(session: Session) -> None:
 
 async def build_portfolios(payload: dict, bus, translator: Translator) -> None:
     profile, prefs = _questionnaire(payload)
+    gateway.prewarm()
     market = await asyncio.to_thread(get_market)
     session = SESSIONS.get(payload.get("session"))
     if session and (session.profile != profile or session.prefs != prefs):

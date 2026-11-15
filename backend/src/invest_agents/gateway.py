@@ -97,6 +97,22 @@ def call_remote(name: str, arguments: dict) -> dict:
     return _parse(result)
 
 
+def prewarm() -> None:
+    """Ouvre la session MCP et réveille le serveur d'outils en arrière-plan (environ 25 s à froid: microVM et
+    dataset), pendant que Pépite vérifie le questionnaire. Sans effet en mode local."""
+    if not enabled():
+        return
+
+    def warm() -> None:
+        try:
+            call_remote("describe_universe", {"constraints": []})
+            logger.info("Gateway préchauffée")
+        except Exception:  # noqa: BLE001
+            logger.warning("Préchauffage de la Gateway en échec", exc_info=True)
+
+    threading.Thread(target=warm, name="gateway-prewarm", daemon=True).start()
+
+
 def run(name: str, market: Any = None, **arguments: Any) -> dict:
     """Exécute l'outil `name` de `tool_core` (à travers la Gateway si activée, avec repli local)."""
     if name not in TOOLS:
