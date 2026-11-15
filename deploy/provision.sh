@@ -5,7 +5,9 @@ set -euo pipefail
 
 NAME=bas-de-laine-front
 KEY_PATH="$HOME/.ssh/$NAME.pem"
-INSTANCE_TYPE="${INSTANCE_TYPE:-t3.micro}"
+# t3.small (2 Go) : le backend sur le dataset réel ne tient pas confortablement dans 1 Go. Ne s'applique qu'au
+# lancement ; pour une instance existante : arrêt, modify-instance-attribute --instance-type, démarrage (l'IP change).
+INSTANCE_TYPE="${INSTANCE_TYPE:-t3.small}"
 
 log() { echo "› $*" >&2; }
 
