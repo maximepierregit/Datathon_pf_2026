@@ -35,7 +35,9 @@ Colonnes lues dans le dataset: `date`, `symbol`, `total_return_cad` (obligatoire
 | `data.py` | Chargement du dataset fixe (local ou `s3://`), moments, métriques |
 | `events.py` | Bus d'événements pour le streaming (réflexion, outils, statuts) |
 | `schemas.py` | Contrats Pydantic (formulaire, contraintes, portefeuilles, rapport) |
-| `monport.py` | Pont avec le frontend MonPort: profil et préférences en entrée, événements `PipelineEvent` en sortie |
+| `monport.py` | Parcours du frontend MonPort: vérification par Pépite, profils de contraintes, gestionnaires, juges, mélanges 80/20 ou juge final |
+| `agents/pepite.py` | Pépite, l'analyste: cohérence du questionnaire, puis les 3 profils de contraintes (MonPort) |
+| `agents/final_judge.py` | Juge final: garde un seul portefeuille quand le profil est cohérent (MonPort) |
 
 ## Contrat d'entrée
 
@@ -47,8 +49,9 @@ Colonnes lues dans le dataset: `date`, `symbol`, `total_return_cad` (obligatoire
 {"mode": "refine", "message": "texte libre", "context": { /* result.data.context */ }}
 
 // Frontend MonPort: Profile et Constraints de frontend/src/types.ts. Les événements renvoyés sont ceux de
-// `PipelineEvent` (agent_status, pepite, universe, warning, portfolios, error, done), pas ceux décrits plus bas.
-{"mode": "monport", "profile": { /* Profile */ }, "constraints": { /* Constraints */ }}
+// `PipelineEvent` (check, agent_status, pepite, universe, portfolios, error, done), pas ceux décrits plus bas.
+{"mode": "monport_check", "profile": { /* Profile */ }, "constraints": { /* Constraints */ }}
+{"mode": "monport", "profile": {}, "constraints": {}, "check": { /* PepiteCheck reçu */ }, "adjustment": "texte libre"}
 ```
 
 ## Contrat de sortie (SSE, un JSON par événement)

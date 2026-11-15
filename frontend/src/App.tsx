@@ -7,6 +7,7 @@ import Pipeline from './pages/Pipeline'
 import Preferences from './pages/Preferences'
 import Profile from './pages/Profile'
 import Transition from './pages/Transition'
+import Verification from './pages/Verification'
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
           <Route path="profil/:step" element={<Profile />} />
           <Route path="transition" element={<Transition />} />
           <Route path="preferences/:step" element={<Preferences />} />
+          <Route path="verification" element={<Verification />} />
           <Route path="construction" element={<Pipeline />} />
           <Route path="portefeuille" element={<Dashboard />} />
           <Route path="*" element={<Navigate to="/" replace />} />

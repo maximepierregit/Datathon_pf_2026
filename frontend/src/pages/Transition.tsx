@@ -50,7 +50,7 @@ export default function Transition() {
             variant="tertiary"
             onClick={() => {
               state.clearConstraints()
-              navigate('/construction')
+              navigate('/verification')
             }}
           >
             Passer cette étape

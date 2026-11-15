@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
-import { buildAll, emptyConstraints, PORTFOLIO_IDS, PORTFOLIO_META, riskScore } from './lib/engine'
-import type { BackendPortfolio, Constraints, ConstraintBlock, Contribution, DashboardLevel, Level, Portfolio, PortfolioId, Profile, Vehicles } from './types'
+import { buildAll, emptyConstraints, PORTFOLIO_META, riskScore, WINNER_META } from './lib/engine'
+import type { BackendPortfolio, Constraints, ConstraintBlock, Contribution, DashboardLevel, Level, Portfolio, PortfolioId, Profile, ProfileCheck, Vehicles } from './types'
 
 export const DEFAULT_PROFILE: Profile = {
   age: 35,
@@ -22,11 +22,20 @@ export interface AppliedAdjustment {
   riskShift: number
 }
 
+/** Profil cohérent : un seul portefeuille (le gagnant). Profil incohérent : les trois. */
+export type Portfolios = Partial<Record<PortfolioId, Portfolio>>
+
 export interface State {
   profile: Profile
   contribution: Contribution
   constraints: Constraints
-  portfolios: Record<PortfolioId, Portfolio> | null
+  /** Verdict de Pépite sur le questionnaire, renvoyé au backend avec la construction. */
+  check: ProfileCheck | null
+  /** Ajustement écrit avant l'envoi aux gestionnaires (profil cohérent seulement). */
+  adjustment: string
+  /** Portefeuilles tels que construits, avant les ajustements du chat. */
+  base: Portfolios | null
+  portfolios: Portfolios | null
   adjustments: AppliedAdjustment[]
   disclaimerSeen: boolean
   setProfile: (patch: Partial<Profile>) => void
@@ -34,9 +43,11 @@ export interface State {
   setLevel: (block: ConstraintBlock, id: string, level: Level) => void
   setVehicles: (vehicles: Vehicles) => void
   clearConstraints: () => void
+  setCheck: (check: ProfileCheck | null) => void
+  setAdjustment: (text: string) => void
   acceptDisclaimer: () => void
+  /** Portefeuilles du moteur d'exemple, quand le backend n'en a pas fourni. */
   build: () => void
-  /** Portefeuilles reçus du backend ; un portefeuille manquant vient du moteur d'exemple. */
   setPortfolios: (received: Partial<Record<PortfolioId, BackendPortfolio>>) => void
   /** Portefeuille tel qu'il serait avec cet ajustement en plus, sans l'appliquer. */
   previewAdjustment: (a: Omit<AppliedAdjustment, 'id' | 'label'>) => Portfolio
@@ -55,19 +66,19 @@ function merge(base: Constraints, patch: Partial<Constraints>): Constraints {
   return out
 }
 
-/** Reconstruit les 3 portefeuilles en appliquant les ajustements de chacun. */
-function rebuild(score: number, c: Constraints, adjustments: AppliedAdjustment[]) {
-  const all = buildAll(score, c)
-  for (const id of Object.keys(all) as PortfolioId[]) {
+/** Applique les ajustements du chat : un portefeuille ajusté est recalculé par le moteur d'exemple, les autres restent tels quels. */
+function withAdjustments(base: Portfolios, score: number, c: Constraints, adjustments: Omit<AppliedAdjustment, 'id'>[]): Portfolios {
+  const out: Portfolios = { ...base }
+  for (const id of Object.keys(base) as PortfolioId[]) {
     const mine = adjustments.filter((a) => a.portfolio === id)
     if (!mine.length) continue
     const patched = mine.reduce((acc, a) => merge(acc, a.patch), c)
     const shift = mine.reduce((acc, a) => acc + a.riskShift, 0)
     const rebuilt = buildAll(Math.min(95, Math.max(5, score + shift)), patched)[id]
-    rebuilt.agentNotes.push(...mine.map((a) => `Ajustement demandé : ${a.label}.`))
-    all[id] = rebuilt
+    rebuilt.agentNotes.push(...mine.filter((a) => a.label).map((a) => `Ajustement demandé : ${a.label}.`))
+    out[id] = { ...rebuilt, name: base[id]!.name, tagline: base[id]!.tagline }
   }
-  return all
+  return out
 }
 
 export const useApp = create<State>()(
@@ -76,6 +87,9 @@ export const useApp = create<State>()(
       profile: DEFAULT_PROFILE,
       contribution: DEFAULT_CONTRIBUTION,
       constraints: emptyConstraints(),
+      check: null,
+      adjustment: '',
+      base: null,
       portfolios: null,
       adjustments: [],
       disclaimerSeen: false,
@@ -85,31 +99,45 @@ export const useApp = create<State>()(
         set((s) => ({ constraints: { ...s.constraints, [block]: { ...s.constraints[block], [id]: level } } })),
       setVehicles: (vehicles) => set((s) => ({ constraints: { ...s.constraints, vehicles } })),
       clearConstraints: () => set({ constraints: emptyConstraints() }),
+      setCheck: (check) => set({ check }),
+      setAdjustment: (adjustment) => set({ adjustment }),
       acceptDisclaimer: () => set({ disclaimerSeen: true }),
-      build: () => set((s) => ({ adjustments: [], portfolios: rebuild(riskScore(s.profile), s.constraints, []) })),
-      setPortfolios: (received) =>
+      build: () =>
         set((s) => {
-          const fallback = rebuild(riskScore(s.profile), s.constraints, [])
-          const entries = PORTFOLIO_IDS.map((id) => {
-            const p = received[id]
-            return [id, p ? { ...p, ...PORTFOLIO_META[id] } : fallback[id]] as const
-          })
-          return { adjustments: [], portfolios: Object.fromEntries(entries) as Record<PortfolioId, Portfolio> }
+          const all = buildAll(riskScore(s.profile), s.constraints)
+          const base: Portfolios = s.check?.coherent ? { equilibre: { ...all.equilibre, ...WINNER_META } } : all
+          return { adjustments: [], base, portfolios: base }
         }),
+      setPortfolios: (received) => {
+        const base: Portfolios = {}
+        for (const [id, p] of Object.entries(received) as [PortfolioId, BackendPortfolio][]) base[id] = { ...PORTFOLIO_META[id], ...p }
+        if (Object.keys(base).length) set({ adjustments: [], base, portfolios: base })
+        else get().build()
+      },
       previewAdjustment: (a) => {
         const s = get()
-        return rebuild(riskScore(s.profile), s.constraints, [...s.adjustments, { ...a, id: 'preview', label: '' }])[a.portfolio]
+        return withAdjustments(s.base ?? {}, riskScore(s.profile), s.constraints, [...s.adjustments, { ...a, label: '' }])[a.portfolio]!
       },
       applyAdjustment: (a) => {
         const adjustments = [...get().adjustments, { ...a, id: crypto.randomUUID() }]
-        set((s) => ({ adjustments, portfolios: rebuild(riskScore(s.profile), s.constraints, adjustments) }))
+        set((s) => ({ adjustments, portfolios: withAdjustments(s.base ?? {}, riskScore(s.profile), s.constraints, adjustments) }))
       },
       undoAdjustment: (id) => {
         const adjustments = get().adjustments.filter((a) => a.id !== id)
-        set((s) => ({ adjustments, portfolios: rebuild(riskScore(s.profile), s.constraints, adjustments) }))
+        set((s) => ({ adjustments, portfolios: withAdjustments(s.base ?? {}, riskScore(s.profile), s.constraints, adjustments) }))
       },
       reset: () =>
-        set({ profile: DEFAULT_PROFILE, contribution: DEFAULT_CONTRIBUTION, constraints: emptyConstraints(), portfolios: null, adjustments: [], disclaimerSeen: false }),
+        set({
+          profile: DEFAULT_PROFILE,
+          contribution: DEFAULT_CONTRIBUTION,
+          constraints: emptyConstraints(),
+          check: null,
+          adjustment: '',
+          base: null,
+          portfolios: null,
+          adjustments: [],
+          disclaimerSeen: false,
+        }),
     }),
     { name: 'bas-de-laine', storage: createJSONStorage(() => sessionStorage) },
   ),

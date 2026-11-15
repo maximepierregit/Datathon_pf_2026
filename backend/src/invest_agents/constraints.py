@@ -28,6 +28,7 @@ class Spec:
 
 SPECS: dict[T, Spec] = {
     T.MAX_POSITION_WEIGHT: Spec(None, "fraction", "max", "Poids maximal d'un titre (0.10 = 10 %)"),
+    T.MAX_STOCK_WEIGHT: Spec(None, "fraction", "max", "Poids maximal d'un titre détenu en direct, hors FNB (0.10 = 10 %)"),
     T.MIN_POSITIONS: Spec(None, "count", "min", "Nombre minimal de positions"),
     T.MAX_POSITIONS: Spec(None, "count", "max", "Nombre maximal de positions"),
     T.MAX_VOLATILITY: Spec(None, "fraction", "max", "Volatilité annualisée maximale du portefeuille (0.12 = 12 %)"),
@@ -192,6 +193,11 @@ def detect_conflicts(constraints: list[Constraint]) -> list[str]:
 # --------------------------------------------------------------------------- #
 # Univers admissible et vérification
 # --------------------------------------------------------------------------- #
+def is_fund(market: Market, symbol: str) -> bool:
+    """Un FNB est diversifié par nature: `max_stock_weight` ne le plafonne pas."""
+    return str(market.assets.loc[symbol].get("instrument_type", "")).lower() == "etf"
+
+
 def excluded_mask(market: Market, constraints: list[Constraint], hard_only: bool = True):
     """Masque booléen (index = symbole) des actifs exclus par les contraintes."""
     a = market.assets
@@ -217,6 +223,7 @@ def describe(c: Constraint) -> str:
     pct = f"{v:.1%}".replace(".0%", "%") if v is not None else ""
     names = {
         T.MAX_POSITION_WEIGHT: f"Poids maximal par titre ≤ {pct}",
+        T.MAX_STOCK_WEIGHT: f"Poids maximal par titre hors FNB ≤ {pct}",
         T.MIN_POSITIONS: f"Au moins {v:.0f} positions" if v else "",
         T.MAX_POSITIONS: f"Au plus {v:.0f} positions" if v else "",
         T.MAX_VOLATILITY: f"Volatilité annualisée ≤ {pct}",
@@ -265,6 +272,9 @@ def evaluate(market: Market, weights: dict[str, float], constraints: list[Constr
 
         if c.type is T.MAX_POSITION_WEIGHT:
             actual = max(held.values(), default=0.0)
+            passed = actual <= (v or 0) + WTOL
+        elif c.type is T.MAX_STOCK_WEIGHT:
+            actual = max((w for s, w in held.items() if not is_fund(market, s)), default=0.0)
             passed = actual <= (v or 0) + WTOL
         elif c.type is T.MIN_POSITIONS:
             actual = float(len(held))

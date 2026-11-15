@@ -59,7 +59,7 @@ export default function Preferences() {
       canNext
       nextLabel={last ? 'Lancer la construction' : 'Continuer'}
       onBack={() => navigate(step === 1 ? '/transition' : `/preferences/${step - 1}`)}
-      onNext={() => navigate(last ? '/construction' : `/preferences/${step + 1}`)}
+      onNext={() => navigate(last ? '/verification' : `/preferences/${step + 1}`)}
       aside={
         warnings.length > 0 && (
           <div className="flex flex-col gap-2">

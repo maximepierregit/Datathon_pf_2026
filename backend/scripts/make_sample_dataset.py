@@ -70,13 +70,25 @@ def main(seed: int = 7, n_days: int = 780) -> None:
                 sector, country, cur, "Equity", "Stock",
                 mu=rng.uniform(0.02, mu_hi), vol=rng.uniform(vol_hi * 0.6, vol_hi * 1.2),
                 beta=rng.uniform(0.5, 1.4), sf=True)
-    for k, (name, mu, vol, beta) in enumerate(
-        [("Synthetic Canada Broad ETF", 0.07, 0.13, 0.9), ("Synthetic US Broad ETF", 0.09, 0.15, 1.0),
-         ("Synthetic Global Bond ETF", 0.035, 0.05, 0.1), ("Synthetic Dividend ETF", 0.06, 0.11, 0.7),
-         ("Synthetic Gold ETF", 0.05, 0.14, 0.05)]
+    # FNB: comme dans l'univers réel, asset_class reprend la catégorie du fonds (category_group).
+    # Assez de FNB d'obligations pour qu'un profil prudent tienne sous la limite de 40 % par ligne.
+    for k, (name, asset_class, country, mu, vol, beta) in enumerate(
+        [("Synthetic Canada Broad ETF", "Equities", "Canada", 0.07, 0.13, 0.9),
+         ("Synthetic US Broad ETF", "Equities", "United States", 0.09, 0.15, 1.0),
+         ("Synthetic Dividend ETF", "Equities", "Canada", 0.06, 0.11, 0.7),
+         ("Synthetic International Developed ETF", "Equities", "United States", 0.07, 0.14, 0.85),
+         ("Synthetic Emerging Markets ETF", "Equities", "United States", 0.08, 0.18, 1.1),
+         ("Synthetic Canada Short-Term Government Bond ETF", "Fixed Income", "Canada", 0.03, 0.025, 0.02),
+         ("Synthetic Canada Aggregate Bond ETF", "Fixed Income", "Canada", 0.035, 0.05, 0.05),
+         ("Synthetic Canada Corporate Bond ETF", "Fixed Income", "Canada", 0.04, 0.055, 0.12),
+         ("Synthetic US Treasury Bond ETF", "Fixed Income", "United States", 0.033, 0.06, -0.05),
+         ("Synthetic Global Aggregate Bond ETF (CAD-Hedged)", "Fixed Income", "Canada", 0.035, 0.045, 0.05),
+         ("Synthetic Real Return Bond ETF", "Fixed Income", "Canada", 0.03, 0.06, 0.05),
+         ("Synthetic Money Market ETF", "Money Market", "Canada", 0.02, 0.005, 0.0),  # ≈ taux sans risque
+         ("Synthetic Gold ETF", "Commodities", "United States", 0.05, 0.14, 0.05),
+         ("Synthetic REIT ETF", "Real Estate", "Canada", 0.06, 0.17, 0.8)]
     ):
-        add(f"SETF{k + 1}", name, "Non classé", "Canada" if k % 2 == 0 else "United States", "CAD",
-            "ETF", "ETF", mu, vol, beta, sf=False)
+        add(f"SETF{k + 1}", name, "Non classé", country, "CAD", asset_class, "ETF", mu, vol, beta, sf=False)
     for k, (name, mu, vol, beta) in enumerate(
         [("Synthetic Bitcoin", 0.35, 0.65, 1.6), ("Synthetic Ether", 0.40, 0.80, 1.9)]
     ):

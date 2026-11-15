@@ -84,7 +84,7 @@ def make_pm_tools(market: Market, state: PMState) -> list:
         Args:
             sector: Secteur exact à conserver (optionnel).
             country: Pays exact à conserver (optionnel).
-            asset_class: Classe d'actifs exacte (ex. Equity, ETF, Crypto) (optionnel).
+            asset_class: Classe d'actifs exacte (ex. Equity, Fixed Income, Crypto) (optionnel).
             max_volatility: Volatilité annualisée maximale d'un actif, en fraction (0.25 = 25 %).
             min_sharpe: Ratio de Sharpe historique minimal.
             sort_by: Critère de tri: "sharpe", "ann_return" ou "ann_vol" (croissant pour ann_vol).
