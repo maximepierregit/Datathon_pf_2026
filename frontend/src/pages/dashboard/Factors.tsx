@@ -3,6 +3,7 @@ import { useEffect, useId, useState } from 'react'
 import { Card } from '../../components/ui'
 import { FACTOR_IDS, FACTOR_TARGETS, FACTOR_VIEW, LEVELS } from '../../data/catalog'
 import { pct } from '../../lib/format'
+import { FactorModel } from './FactorModel'
 import { useApp } from '../../store'
 import type { FactorId, FactorView, Level, Portfolio } from '../../types'
 
@@ -279,6 +280,7 @@ export function FactorExposure({ p }: { p: Portfolio }) {
           <Contributions f={f} />
         </>
       )}
+      <FactorModel />
     </Card>
   )
 }

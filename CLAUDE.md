@@ -66,7 +66,7 @@ Ces paires sont dupliquées à la main ; toute modification touche les deux côt
 - `frontend/src/types.ts` (`PipelineEvent`, `Portfolio`, `Profile`, `Constraints`) ↔ `backend/src/invest_agents/monport.py`.
 - Les identifiants de `frontend/src/data/catalog.ts` (classes, régions, thématiques) ↔ les tables `CLASS_TARGETS`, `REGION_COUNTRIES`, `THEME_SECTORS` de `monport.py`.
 - `metricsOf()` de `frontend/src/lib/engine.ts` ↔ `to_portfolio()` de `monport.py` (pire année, VaR, ES).
-- Facteurs : `factorsOf()` de `engine.ts` ↔ `factor_view()` de `monport.py` (`FactorView` de `types.ts` : coverage, exposure, stocks) ; `FACTOR_TARGETS` de `catalog.ts` ↔ `FACTOR_LEVELS` de `monport.py` ; identifiants `taille`, `qualite`, `momentum`, `value`, `croissance` ↔ `FACTOR_TARGETS` de `monport.py`.
+- Facteurs : `factorsOf()` de `engine.ts` ↔ `factor_view()` de `monport.py` (`FactorView` de `types.ts` : coverage, exposure, stocks) ; `FACTOR_TARGETS` de `catalog.ts` ↔ `FACTOR_LEVELS` de `monport.py` ; `FACTOR_MODEL` de `catalog.ts` (sous-mesures et groupe comparable, affichés dans « Comment on calcule les scores? ») ↔ `FACTORS` et `CELL` de `data-prep/factors_model.ipynb` ; identifiants `taille`, `qualite`, `momentum`, `value`, `croissance` ↔ `FACTOR_TARGETS` de `monport.py`.
 - Les messages de Pépite et des agents : script d'exemple de `api.ts` ↔ `Translator` et `build_portfolios` de `monport.py`.
 - Les balises des réponses de Pépite dans le chat : `components/RichText.tsx` ↔ « FORMAT DE `message` » de `CHAT_TASK` (`workflow/pepite.py`).
 - Le format des préférences (`Share`, `Vehicles`, `shownClasses()` de `catalog.ts`) ↔ `preference_constraints()`, `SHOWN_CLASSES` et `LEGEND` (`workflow/pepite.py`).
