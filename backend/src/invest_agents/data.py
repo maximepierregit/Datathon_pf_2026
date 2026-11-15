@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .classify import CLASS_PRIOR_MU, CASH_NAME, CASH_SYMBOL, NO_REGION, SEP, WORLD, cash_series, classify
 from .config import get_settings
 from .schemas import PortfolioMetrics
 
@@ -23,7 +24,13 @@ UNKNOWN = "Non classé"
 
 # Colonnes produites par `create_opt_inputs` dans Universe_Cleaned.ipynb
 REQUIRED_COLUMNS = {"date", "symbol", "total_return_cad"}
-META_COLUMNS = ["name", "sector", "industry", "country", "currency", "asset_class", "instrument_type", "market"]
+META_COLUMNS = ["name", "sector", "industry", "country", "currency", "asset_class", "instrument_type", "market",
+                "category_group", "category", "market_cap", "expense_ratio"]
+# Dimension de contrainte -> colonne de `Market.assets`. `theme` et `factor` sont des ensembles encodés "|a|b|".
+DIMENSION_COLUMN = {"sector": "sector", "country": "country", "asset_class": "asset_class", "region": "region",
+                    "instrument_type": "instrument_type", "theme": "themes", "factor": "factors"}
+SET_DIMENSIONS = {"theme", "factor"}
+NOT_A_GROUP = {UNKNOWN, NO_REGION, WORLD, ""}
 
 
 def _resolve_path(path: str) -> str:
@@ -50,12 +57,29 @@ class Market:
     # ------------------------------------------------------------------ #
     def allowed_values(self) -> dict[str, list[str]]:
         a = self.assets
-        return {
-            "sector": sorted(a["sector"].dropna().unique().tolist()),
-            "country": sorted(a["country"].dropna().unique().tolist()),
-            "asset_class": sorted(a["asset_class"].dropna().unique().tolist()),
-            "symbol": sorted(a.index.tolist()),
-        }
+        out = {d: self.groups(d) for d in DIMENSION_COLUMN}
+        out["symbol"] = sorted(a.index.tolist())
+        return out
+
+    def members(self, dimension: str, target: str) -> pd.Series:
+        """Masque booléen (index = symbole) des actifs qui appartiennent au groupe `target` de la dimension."""
+        a = self.assets
+        t = (target or "").strip().lower()
+        if dimension == "symbol":
+            return pd.Series(a.index.str.lower() == t, index=a.index)
+        col = a[DIMENSION_COLUMN[dimension]].astype(str).str.lower()
+        if dimension in SET_DIMENSIONS:
+            return col.str.contains(f"{SEP}{t}{SEP}", regex=False)
+        return col == t
+
+    def groups(self, dimension: str) -> list[str]:
+        """Groupes réels d'une dimension (sans « Non classé », « aucune », « monde »)."""
+        col = self.assets[DIMENSION_COLUMN[dimension]].astype(str)
+        if dimension in SET_DIMENSIONS:
+            values = {v for cell in col for v in cell.split(SEP) if v}
+        else:
+            values = set(col)
+        return sorted(values - NOT_A_GROUP)
 
     def search(self, query: str, limit: int = 10) -> list[dict]:
         """Recherche par symbole ou nom d'entreprise (insensible à la casse, tolérante aux fautes)."""
@@ -82,6 +106,9 @@ class Market:
                     "sector": r["sector"],
                     "country": r["country"],
                     "asset_class": r["asset_class"],
+                    "region": r["region"],
+                    "instrument_type": r["instrument_type"],
+                    "themes": [x for x in str(r["themes"]).split(SEP) if x],
                     "ann_return": round(float(r["ann_return"]), 4),
                     "ann_vol": round(float(r["ann_vol"]), 4),
                     "sharpe": round(float(r["sharpe"]), 3),
@@ -95,7 +122,12 @@ class Market:
     def moments(self, symbols: list[str]) -> tuple[np.ndarray, np.ndarray]:
         """Rendements espérés et covariance annualisés (covariance corrigée pour être semi-définie positive)."""
         r = self.returns[symbols]
-        mu = (r.mean() * TRADING_DAYS).to_numpy(dtype=float)
+        hist = (r.mean() * TRADING_DAYS).to_numpy(dtype=float)
+        # Le dataset couvre moins d'un an: la moyenne historique est très bruitée. On la rapproche de
+        # l'hypothèse de sa classe d'actifs (mêmes hypothèses que le frontend). MU_SHRINK=0 la désactive.
+        prior = self.assets.loc[symbols, "asset_class"].map(CLASS_PRIOR_MU).fillna(0.05).to_numpy(dtype=float)
+        k = get_settings().mu_shrink
+        mu = (1 - k) * hist + k * prior
         cov = r.cov(min_periods=60) * TRADING_DAYS
         var = np.array(np.diag(cov.to_numpy()), dtype=float)
         cov = np.array(cov.fillna(0.0).to_numpy(), dtype=float)  # copie modifiable
@@ -120,8 +152,9 @@ class Market:
         a = self.assets.loc[symbols]
 
         def group(col: str) -> dict[str, float]:
+            # Les FNB et l'encaisse n'ont ni secteur ni pays: ils ne forment pas un groupe « Non classé ».
             g = pd.Series(w, index=symbols).groupby(a[col].fillna(UNKNOWN)).sum()
-            return {k: round(float(v), 4) for k, v in g.sort_values(ascending=False).items()}
+            return {k: round(float(v), 4) for k, v in g.sort_values(ascending=False).items() if k not in NOT_A_GROUP}
 
         return PortfolioMetrics(
             expected_return=round(ret, 4),
@@ -134,6 +167,8 @@ class Market:
             sector_weights=group("sector"),
             country_weights=group("country"),
             asset_class_weights=group("asset_class"),
+            region_weights=group("region"),
+            fees=round(float(self.assets.loc[symbols, "fee"].to_numpy(dtype=float) @ w), 5),
         )
 
 
@@ -158,10 +193,18 @@ def build_market(df: pd.DataFrame) -> Market:
             meta[col] = np.nan
     meta = meta.loc[returns.columns]
     meta["name"] = meta["name"].fillna(pd.Series(meta.index, index=meta.index))
-    for col in ("sector", "country", "asset_class"):
+    meta = meta.rename(columns={"asset_class": "asset_class_raw"})
+
+    # Encaisse: absente des données de marché, mais indispensable (classe « liquidités » du frontend).
+    rf = get_settings().risk_free_rate
+    if CASH_SYMBOL not in returns.columns:
+        returns[CASH_SYMBOL] = cash_series(returns.index, rf)
+        meta.loc[CASH_SYMBOL, ["name", "instrument_type", "currency"]] = [CASH_NAME, "Cash", "CAD"]
+
+    meta = classify(meta, returns)
+    for col in ("sector", "country"):
         meta[col] = meta[col].fillna(UNKNOWN).astype(str)
 
-    rf = get_settings().risk_free_rate
     ann_ret = returns.mean() * TRADING_DAYS
     ann_vol = returns.std() * np.sqrt(TRADING_DAYS)
     stats = pd.DataFrame(

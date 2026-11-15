@@ -1,7 +1,8 @@
-"""Mandats des trois gestionnaires de portefeuille.
+"""Mandats des trois portefeuilles, alignés sur le frontend (`PORTFOLIO_META` dans lib/engine.ts).
 
-Les trois PM reçoivent le même profil et les mêmes contraintes. Ils diffèrent par leur objectif
-d'optimisation et leur style de sélection. Modifier cette liste pour changer leur différenciation.
+- Prudent: le profil passe avant les préférences.
+- Équilibré: le juste milieu, affiché par défaut.
+- Conviction: les préférences passent avant le profil, dans les limites de sécurité.
 """
 
 from __future__ import annotations
@@ -14,50 +15,59 @@ from .optimizer import Objective
 
 @dataclass(frozen=True)
 class Mandate:
-    id: str
+    id: str  # PortfolioId du frontend
     name: str
+    tagline: str
     objective: Objective
     description: str
     guidance: str
     vol_cap_factor: Optional[float]  # fraction de la volatilité maximale du profil; None = pas de plafond propre
+    score_shift: int  # décalage du score de risque, comme `classWeights` dans engine.ts
 
 
 MANDATES: list[Mandate] = [
     Mandate(
-        id="pm1",
-        name="Défensif",
+        id="prudent",
+        name="Prudent",
+        tagline="Ton profil d’abord : on privilégie la stabilité, quitte à mettre de côté certaines préférences.",
         objective="min_volatility",
-        description="Minimise la volatilité sous les contraintes. Priorité à la préservation du capital.",
+        description="Minimise la volatilité dans la répartition prudente. Le profil passe avant les préférences.",
         guidance=(
-            "Choisis des actifs à faible volatilité et à faible corrélation entre eux: titres défensifs, "
-            "ETF diversifiés, secteurs stables. Évite les actifs très volatils (crypto incluse) sauf si une "
-            "contrainte l'exige."
+            "Choisis des placements stables et peu corrélés entre eux: FNB obligataires, FNB diversifiés, "
+            "titres défensifs. Évite les placements très volatils (crypto incluse) sauf si une contrainte l'exige."
         ),
         vol_cap_factor=None,
+        score_shift=-20,
     ),
     Mandate(
-        id="pm2",
+        id="equilibre",
         name="Équilibré",
+        tagline="Le juste milieu entre ton profil et tes préférences. Un bon point de départ.",
         objective="max_sharpe",
-        description="Maximise le rendement ajusté du risque (ratio de Sharpe historique) sous les contraintes.",
+        description="Maximise le rendement ajusté du risque, sous la volatilité maximale du profil.",
         guidance=(
-            "Cherche le meilleur compromis rendement/risque. Diversifie sur plusieurs secteurs, pays et classes "
-            "d'actifs, avec des actifs au Sharpe élevé."
-        ),
-        vol_cap_factor=0.85,
-    ),
-    Mandate(
-        id="pm3",
-        name="Croissance",
-        objective="max_return",
-        description="Maximise le rendement historique sous la volatilité maximale du profil et les contraintes.",
-        guidance=(
-            "Privilégie les actifs au rendement historique élevé, tout en gardant assez de diversification pour "
-            "que la volatilité reste sous le plafond du profil. Ne concentre pas le portefeuille."
+            "Cherche le meilleur compromis rendement/risque. Diversifie entre classes d'actifs, régions et "
+            "placements au Sharpe élevé."
         ),
         vol_cap_factor=1.0,
+        score_shift=0,
+    ),
+    Mandate(
+        id="conviction",
+        name="Conviction",
+        tagline="Tes préférences d’abord : on suit tes choix, dans les limites de sécurité.",
+        objective="max_return",
+        description="Maximise le rendement en suivant les préférences, sous un plafond de volatilité élargi.",
+        guidance=(
+            "Suis les préférences du client en priorité. Privilégie les placements au rendement élevé, tout en "
+            "gardant assez de diversification pour rester sous le plafond de volatilité. Ne concentre pas le portefeuille."
+        ),
+        vol_cap_factor=1.3,
+        score_shift=10,
     ),
 ]
+
+MANDATE_BY_ID = {m.id: m for m in MANDATES}
 
 
 def vol_cap_for(mandate: Mandate, suggested_max_volatility: float) -> Optional[float]:

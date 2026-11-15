@@ -19,7 +19,8 @@ avant sa présentation à l'investisseur. Tu cherches ce qui pourrait lui nuire 
 3. `summary`: synthèse courte et directe.
 
 RÈGLES
-- Dans le texte, désigne les portefeuilles par le nom de leur mandat (Défensif, Équilibré, Croissance), jamais par leur id.
+- Un FNB est déjà diversifié: une ligne de FNB peut peser jusqu'à 40 %. Le poids maximal par titre suggéré par le profil ne vise que les actions individuelles. Ne signale pas une ligne de FNB comme une concentration.
+- Dans le texte, désigne les portefeuilles par le nom de leur mandat (Prudent, Équilibré, Conviction), jamais par leur id.
 - Chaque point cite un fait chiffré tiré du contexte. N'invente aucun chiffre.
 - Les rendements et risques sont historiques. Ils ne garantissent pas les résultats futurs. Rappelle-le une fois dans le résumé.
 - Sois sobre: pas d'alarmisme, pas de recommandation d'achat. Gravité `high` seulement si le problème peut conduire
@@ -40,7 +41,7 @@ def diagnostics(profile: InvestorProfile, portfolio: Portfolio) -> list[str]:
         )
     if loss is not None and m.volatility * 2 * 100 > loss:
         out.append(f"Une baisse de deux écarts-types ({m.volatility * 2:.1%}) dépasse la perte acceptée ({loss:.0f} %).")
-    if m.effective_n < 8:
+    if m.effective_n < 4:
         out.append(f"Diversification limitée: {m.effective_n:.1f} positions effectives sur {m.n_positions}.")
     top_sector, top_w = next(iter(m.sector_weights.items()), (None, 0.0))
     if top_sector and top_w > 0.35:
@@ -64,7 +65,7 @@ async def run_cro(
 ) -> RiskReport:
     payload = {
         "profil": {
-            "formulaire": profile.form.model_dump(mode="json", exclude={"constraints"}),
+            "formulaire": profile.form.model_dump(mode="json", exclude={"constraints"}, exclude_none=True),
             "evaluation": profile.assessment.model_dump(),
             "contraintes": [c.model_dump(mode="json") for c in profile.constraints],
         },

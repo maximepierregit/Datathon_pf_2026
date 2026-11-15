@@ -1,6 +1,7 @@
-# Backend - Pipeline multi-agents de profil d'investisseur
+# Backend - Pipeline multi-agents de MonPort
 
-Strands Agents + Amazon Bedrock, hébergé sur Bedrock AgentCore Runtime. Voir `../architecture-workflow.md` pour le schéma.
+Strands Agents + Amazon Bedrock, hébergé sur Bedrock AgentCore Runtime. Schéma: `../docs/architecture-workflow.md`.
+Le contrat avec le frontend est celui de `frontend/src/types.ts` (section « Contrat du frontend » ci-dessous).
 
 ## Démarrage local
 
@@ -9,59 +10,113 @@ cd backend
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .
 cp .env.example .env            # puis exporter les variables (ou laisser les valeurs par défaut)
 
-# Dataset: exporter le DataFrame de create_opt_inputs (Universe_Cleaned.ipynb), ou générer un jeu SYNTHÉTIQUE
-#   df.to_parquet("backend/data/universe.parquet")
+# Dataset: exporter le DataFrame de create_opt_inputs (data-prep/Universe_Cleaned.ipynb), ou générer un jeu SYNTHÉTIQUE
+#   opt.to_parquet("backend/data/universe.parquet")
 .venv/bin/python scripts/make_sample_dataset.py
 
-.venv/bin/python scripts/run_local.py                          # parcours initial (appelle Bedrock)
-.venv/bin/python scripts/run_local.py --refine "exclus la techno"  # relance
-PORT=8091 .venv/bin/python main.py                             # serveur AgentCore local (POST /invocations)
+.venv/bin/python scripts/run_web.py                                  # contrat du frontend (appelle Bedrock, ~70 s)
+.venv/bin/python scripts/run_web.py --adjust "pas de pétrole"        # chat d'ajustement (~45 s)
+PORT=8091 .venv/bin/python main.py                                   # serveur AgentCore local (POST /invocations)
 ```
 
-Colonnes lues dans le dataset: `date`, `symbol`, `total_return_cad` (obligatoires), puis `name`, `sector`, `industry`,
-`country`, `currency`, `asset_class`, `instrument_type`, `market`, `is_included_universe` (si présentes).
+Colonnes lues dans le dataset: `date`, `symbol`, `total_return_cad` (obligatoires), puis `name`, `currency`,
+`asset_class`, `instrument_type`, `sector`, `industry`, `country`, `category_group`, `category`, `market_cap`,
+`expense_ratio`, `is_included_universe` (si présentes).
+
+## Contrat du frontend
+
+### Requêtes (`POST /invocations`, JSON)
+
+```jsonc
+// Construction des 3 portefeuilles (page /construction)
+{"mode": "pipeline", "profile": Profile, "constraints": Constraints}
+
+// Chat « Ajuster avec Pépite »
+{"mode": "adjust", "portfolio": "equilibre", "message": "plus de tech",
+ "profile": Profile, "constraints": Constraints,   // préférences en vigueur pour ce portefeuille
+ "current": Portfolio}                              // portefeuille affiché, pour les valeurs « avant »
+```
+
+`Profile` et `Constraints` sont exactement ceux de `types.ts`. `Contribution` n'est jamais envoyé. Le score de risque
+est recalculé par le backend avec la même formule que `riskScore` (engine.ts).
+
+### Événements (SSE, une ligne `data: {json}` par événement)
+
+| `type` | Champs | Émis par |
+|---|---|---|
+| `agent_status` | `agent` (eclaireur, compositeur, verificateur), `status`, `message` | Tous les agents |
+| `pepite` | `text` | Début et fin |
+| `universe` | `before`, `after` | Éclaireur |
+| `rerun` | `portfolio`, `reason` | Vérificateur, quand un portefeuille ne respecte pas ses limites |
+| `warning` | `text` | Vérificateur (incohérences profil ↔ préférences) |
+| `portfolios` | `portfolios` (`Record<PortfolioId, Portfolio>`) | **Nouveau.** Juste avant `done` |
+| `adjust` | `proposal` (`AdjustProposal` + `portfolio: Portfolio \| null`) | **Nouveau.** Mode `adjust` |
+| `thinking` | `agent`, `source`, `text` | **Nouveau.** Réflexion des modèles (facultatif à afficher) |
+| `error` | `code`, `message` | **Nouveau.** Le flux s'arrête sans `done` |
+| `heartbeat` | rien | **Nouveau.** Toutes les 10 s sans activité, à ignorer |
+| `done` | rien | Fin |
+
+Les types marqués « Nouveau » ne sont pas encore dans `PipelineEvent`. Le frontend actuel les ignore sans erreur.
+
+### Correspondance des agents
+
+| Frontend | Backend |
+|---|---|
+| Éclaireur | Agent Profil + exclusions de l'univers (FNB seulement, « Exclure ») |
+| Compositeur | Traduction des préférences en contraintes + 3 gestionnaires en parallèle |
+| Vérificateur | 3 Juges, nouvel essai des portefeuilles non conformes, Chief Risk Officer |
+
+### Traduction des préférences (`contract.py`)
+
+- **Exclure (−2)**: exclusion dure dans les 3 portefeuilles. `vehicles: "fnb"` exclut les titres individuels.
+- **Classes d'actifs**: chaque portefeuille part de la répartition de `classWeights` (engine.ts), avec une bande
+  de ±20 %. « Moins » abaisse le plafond, « Plus » et « Imposer » relèvent le plancher. Prudent met de côté les
+  demandes de plus de risque (actions, immobilier, or, crypto) et l'écrit dans `agentNotes`.
+- **Régions, thèmes, facteurs**: poids minimal (Plus, Imposer) ou maximal (Moins), plus fort pour Conviction.
+- **Sécurité, jamais assouplie**: aucune ligne au-delà de 40 %, au moins 3 placements, crypto ≤ 20 %, chaque
+  action individuelle ≤ plafond du profil (5 à 15 %).
+- **Faisabilité**: si la combinaison est impossible, le code assouplit d'abord les facteurs, puis les thèmes, les
+  régions et les classes (Conviction assouplit la répartition du mandat avant les préférences). Chaque préférence
+  assouplie est signalée dans `agentNotes`.
+
+### Classement de l'univers (`classify.py`)
+
+Le dataset ne contient pas les catégories du frontend. Elles sont déduites:
+- **classe**: `asset_class`/`category_group` du notebook (Equities, Fixed Income, Alternative, Commodities), puis mots
+  du nom (bond, gold, REIT, money market…);
+- **région**: pays, mots du nom (Emerging, EAFE, S&P 500…), suffixe boursier (`.TO`, `.PA`). Les FNB mondiaux sont
+  « monde » et les préférences régionales ne les touchent pas;
+- **thèmes**: secteur et mots du nom. **Facteurs**: `market_cap`, mots du nom, et momentum calculé (tiers supérieur
+  du rendement cumulé);
+- **liquidités**: une ligne d'encaisse `CASH-CAD` (rendement = taux sans risque, volatilité nulle) est ajoutée;
+- **frais**: `expense_ratio` si la colonne existe, sinon une estimation (FNB 0,20 %, crypto 0,40 %, action 0 %).
+
+### Métriques (`Portfolio.metrics`)
+
+`expectedReturn` mélange la moyenne historique et l'hypothèse de la classe (`CLASS_ASSUMPTIONS` du frontend), à 50/50
+par défaut (`MU_SHRINK`), car le dataset couvre moins d'un an. `volatility` vient de la covariance historique.
+`worstYear`, `var95` et `es95` utilisent les mêmes formules que `metricsOf` (engine.ts). `maxDrawdown` est historique.
+
+## Contrat interne (scripts de développement)
+
+`{"mode": "initial", "form": InvestorForm}` et `{"mode": "refine", "message", "context"}` restent disponibles
+(`scripts/run_local.py`). Ils renvoient les événements internes (`status`, `thinking`, `tool`, `result`…).
 
 ## Structure
 
 | Fichier | Rôle |
 |---|---|
-| `main.py` | Point d'entrée AgentCore (`@app.entrypoint`, générateur asynchrone, SSE) |
-| `orchestrator.py` | Flux déterministe: extraction, fusion, profil, 3 PM, 3 juges, nouvel essai, CRO, résultat |
-| `agents/` | Profil, Extraction, PM, Juge, CRO (prompts et sorties structurées) |
-| `mandates.py` | Les 3 mandats des PM (Défensif, Équilibré, Croissance) |
-| `constraints.py` | Catalogue de contraintes, validation, fusion, conflits, vérification (code pur) |
-| `optimizer.py` | Optimisation moyenne-variance sous contraintes (SLSQP) |
-| `tools.py` | Outils Strands liés au contexte de chaque agent |
-| `data.py` | Chargement du dataset fixe (local ou `s3://`), moments, métriques |
-| `events.py` | Bus d'événements pour le streaming (réflexion, outils, statuts) |
-| `schemas.py` | Contrats Pydantic (formulaire, contraintes, portefeuilles, rapport) |
-
-## Contrat d'entrée
-
-```jsonc
-// Premier passage
-{"mode": "initial", "form": { /* InvestorForm, voir schemas.py */ }}
-
-// Relance: `context` est copié tel quel depuis le dernier événement `result`
-{"mode": "refine", "message": "texte libre", "context": { /* result.data.context */ }}
-```
-
-## Contrat de sortie (SSE, un JSON par événement)
-
-Tous les événements ont `type`, `step` et `agent`.
-
-| `type` | Contenu | Usage frontend |
-|---|---|---|
-| `status` | `state` (start, done, retry, warning, error, skipped), `text` | Ligne de statut par agent |
-| `thinking` | `text` (réflexion du modèle, par blocs) | Panneau repliable |
-| `tool` | `name` | « Outil en cours » |
-| `profile` | `data`, `labels` | Affichage anticipé du profil |
-| `clarification` | `questions`, `understood` | Afficher les questions dans le chat; le parcours s'arrête |
-| `result` | `data` (profil, portefeuilles + verdicts, rapport CRO, `context`) | Visualisation finale |
-| `error` | `code`, `message`, `details` | Message d'erreur; le flux s'arrête |
-| `heartbeat` | rien | Ignorer |
-
-`step`: `3` orchestrateur, `3b` extraction, `3c` fusion, `4` profil, `5` PM, `8` juges, `9` CRO, `10` assemblage.
+| `main.py` | Point d'entrée AgentCore, aiguillage par `mode` |
+| `web_pipeline.py` | Pipeline du frontend et traduction des événements en `PipelineEvent` |
+| `web_adjust.py` | Chat d'ajustement (agent Pépite, puis un seul portefeuille recalculé) |
+| `contract.py` | Modèles du frontend, `risk_score`, préférences → contraintes, faisabilité, `Portfolio` |
+| `classify.py` | Classes, régions, thèmes, facteurs, frais de chaque actif |
+| `mandates.py` | Prudent, Équilibré, Conviction |
+| `selection.py` | Sélection déterministe (repli des PM, test de faisabilité) |
+| `orchestrator.py` | Pipeline du contrat interne |
+| `agents/` | Profil, Extraction, PM, Juge, CRO |
+| `constraints.py`, `optimizer.py` | Catalogue, vérification, optimisation (code pur) |
+| `tools.py`, `data.py`, `events.py`, `schemas.py` | Outils Strands, données, bus d'événements, contrats Pydantic |
 
 ## Déploiement sur AgentCore Runtime (déploiement par code, arm64)
 
@@ -80,17 +135,18 @@ est lu depuis S3. Pour l'appel depuis l'EC2: `bedrock-agentcore:InvokeAgentRunti
 
 ## Principes de conception
 
-- Les agents proposent, le code garantit. Poids, métriques et conformité sont calculés par `optimizer.py` et
+- Les agents proposent, le code garantit. Poids, métriques et conformité viennent de `optimizer.py` et
   `constraints.evaluate`. Le texte des agents ne contient aucun chiffre qui n'en vienne pas.
-- Une contrainte dure de l'utilisateur ne peut pas être modifiée par un agent: elle est appliquée par l'optimiseur et
-  revérifiée indépendamment par le Juge.
-- Les défauts du profil (volatilité maximale, poids maximal par titre) sont des préférences. L'optimiseur les applique
-  tant qu'ils n'entrent pas en conflit avec les contraintes de l'utilisateur.
-- Aucune donnée n'est conservée côté serveur. Le frontend renvoie `context` à chaque relance.
+- Une contrainte dure ne peut pas être modifiée par un agent: elle est appliquée par l'optimiseur et revérifiée
+  indépendamment par le Juge.
+- Aucune donnée n'est conservée côté serveur. Le frontend renvoie profil et préférences à chaque appel.
 
 ## Limites connues
 
-- Le dataset fourni par `make_sample_dataset.py` est synthétique. Les résultats chiffrés n'ont aucune valeur réelle.
-- Rendements et volatilités sont historiques (moyenne et covariance sur la période du dataset).
-- La réflexion du modèle est résumée et arrive surtout en anglais malgré la consigne en français.
-- Un nouvel essai (`MAX_PM_RETRIES`) ne se déclenche que si aucun portefeuille n'est conforme.
+- Le dataset de `make_sample_dataset.py` est synthétique (mêmes FNB que le notebook, prix inventés).
+- Le classement de l'univers repose en partie sur le nom des placements. Les FNB d'allocation (AOA, AOK…) sont
+  classés en actions alors qu'ils contiennent des obligations.
+- Le dataset réel ne contient ni or physique ni marché monétaire: « Or » se limite à COMT (matières premières) et
+  les liquidités à l'encaisse ajoutée par le backend.
+- La réflexion du modèle arrive surtout en anglais malgré la consigne.
+- Un parcours complet prend environ 70 s et un ajustement environ 45 s.

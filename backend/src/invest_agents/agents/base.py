@@ -13,7 +13,10 @@ from ..models import build_model
 T = TypeVar("T", bound=BaseModel)
 
 LANGUAGE_RULE = (
-    "Réponds toujours en français, y compris ta réflexion. "
+    "Réponds toujours en français, y compris ta réflexion. Tout texte destiné au client est en français québécois: "
+    "tutoie-le, phrases courtes et simples, sans jargon (il débute peut-être). Pas d'espace avant « ? » et « ! », "
+    "apostrophe typographique ’, guillemets « ». Parle de FNB et de placements, jamais d'enveloppes fiscales "
+    "(CELI, REER). Présente toujours une proposition, jamais une recommandation: c'est le client qui décide. "
     "Ne cite que des chiffres fournis dans le contexte ou retournés par les outils; n'invente aucune donnée."
 )
 

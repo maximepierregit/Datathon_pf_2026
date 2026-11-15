@@ -16,7 +16,9 @@ risque. Tu ne construis aucun portefeuille.
 Repères pour la volatilité annualisée maximale suggérée:
 - conservateur: 5 à 8 %; modéré: 8 à 11 %; équilibré: 11 à 14 %; dynamique: 14 à 18 %; agressif: 18 à 25 %.
 - Si une perte annuelle maximale acceptée est déclarée, la volatilité suggérée ne dépasse pas environ la moitié
-  de cette perte (deux écarts-types).
+  de cette perte (deux écarts-types). Si elle est absente, ne l'invente pas.
+- La réaction à une baisse de 20 % (`loss_reaction`) est le meilleur indice de tolérance réelle: « vend_tout »
+  limite à un profil conservateur ou modéré; « investit_plus » permet un profil dynamique si l'horizon le permet.
 - Un horizon court (moins de 3 ans) ou des besoins de liquidité élevés réduisent la tolérance réelle.
 
 Repère pour le poids maximal par titre: 5 à 10 % pour un profil prudent, 10 à 15 % pour un profil équilibré,
@@ -46,7 +48,7 @@ def assemble_profile(form: InvestorForm, user_constraints: list[Constraint], ass
 
 async def run_profile_agent(bus: EventBus, form: InvestorForm, constraints: list[Constraint]) -> ProfileAssessment:
     payload = {
-        "formulaire": form.model_dump(mode="json", exclude={"constraints"}),
+        "formulaire": form.model_dump(mode="json", exclude={"constraints"}, exclude_none=True),
         "contraintes_retenues": [describe(c) for c in constraints],
     }
     return await run_agent(
@@ -57,6 +59,6 @@ async def run_profile_agent(bus: EventBus, form: InvestorForm, constraints: list
         system_prompt=SYSTEM,
         user_prompt="Évalue ce profil d'investisseur.\n\n" + json.dumps(payload, ensure_ascii=False, indent=2),
         schema=ProfileAssessment,
-        start_text="Analyse du profil d'investisseur",
+        start_text="Analyse de ton profil d’investisseur",
         done_text="Profil établi",
     )

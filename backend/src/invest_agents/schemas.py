@@ -32,6 +32,17 @@ class ConstraintType(str, Enum):
     MIN_ASSET_CLASS_WEIGHT = "min_asset_class_weight"
     MAX_SYMBOL_WEIGHT = "max_symbol_weight"
     MIN_SYMBOL_WEIGHT = "min_symbol_weight"
+    EXCLUDE_REGION = "exclude_region"
+    MAX_REGION_WEIGHT = "max_region_weight"
+    MIN_REGION_WEIGHT = "min_region_weight"
+    EXCLUDE_THEME = "exclude_theme"
+    MAX_THEME_WEIGHT = "max_theme_weight"
+    MIN_THEME_WEIGHT = "min_theme_weight"
+    EXCLUDE_FACTOR = "exclude_factor"
+    MAX_FACTOR_WEIGHT = "max_factor_weight"
+    MIN_FACTOR_WEIGHT = "min_factor_weight"
+    EXCLUDE_INSTRUMENT_TYPE = "exclude_instrument_type"
+    MAX_INSTRUMENT_LINE_WEIGHT = "max_instrument_line_weight"
 
 
 class Constraint(BaseModel):
@@ -51,7 +62,7 @@ class Constraint(BaseModel):
         default=True,
         description="True: contrainte dure appliquée par l'optimiseur. False: préférence, évaluée mais non bloquante.",
     )
-    source: Literal["form", "chat", "profile"] = "form"
+    source: Literal["form", "chat", "profile", "preference", "safety", "mandate"] = "form"
     note: Optional[str] = Field(default=None, description="Phrase de l'utilisateur à l'origine de la contrainte.")
 
 
@@ -76,6 +87,9 @@ class InvestorForm(BaseModel):
     risk_tolerance: int = Field(ge=1, le=5, description="Auto-évaluation: 1 très prudent, 5 très agressif")
     max_acceptable_loss_pct: Optional[float] = Field(
         default=None, ge=0, le=100, description="Perte annuelle maximale acceptée, en %"
+    )
+    loss_reaction: Optional[Literal["vend_tout", "vend_une_partie", "attend", "investit_plus"]] = Field(
+        default=None, description="Réaction déclarée à une baisse de 20 % en un mois"
     )
     objective: Literal["preservation", "income", "balanced", "growth", "aggressive_growth"] = "balanced"
     experience: Literal["none", "basic", "intermediate", "advanced"] = "basic"
@@ -145,6 +159,8 @@ class PortfolioMetrics(BaseModel):
     sector_weights: dict[str, float]
     country_weights: dict[str, float]
     asset_class_weights: dict[str, float]
+    region_weights: dict[str, float] = Field(default_factory=dict)
+    fees: float = 0.0
 
 
 class Position(BaseModel):

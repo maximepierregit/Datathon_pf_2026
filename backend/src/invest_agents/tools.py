@@ -15,7 +15,6 @@ from typing import Optional
 
 from strands import tool
 
-from .config import get_settings
 from .constraints import evaluate, excluded_mask
 from .data import Market
 from .optimizer import Objective, OptimizationResult, optimize
@@ -64,6 +63,8 @@ def make_pm_tools(market: Market, state: PMState) -> list:
             "n_assets": int(len(a)),
             "by_asset_class": a["asset_class"].value_counts().to_dict(),
             "by_sector": a["sector"].value_counts().to_dict(),
+            "by_region": a["region"].value_counts().to_dict(),
+            "by_instrument_type": a["instrument_type"].value_counts().to_dict(),
             "by_country": a["country"].value_counts().to_dict(),
             "ann_vol_range": [round(float(a["ann_vol"].min()), 3), round(float(a["ann_vol"].max()), 3)],
             "ann_return_range": [round(float(a["ann_return"].min()), 3), round(float(a["ann_return"].max()), 3)],
@@ -74,6 +75,10 @@ def make_pm_tools(market: Market, state: PMState) -> list:
         sector: Optional[str] = None,
         country: Optional[str] = None,
         asset_class: Optional[str] = None,
+        region: Optional[str] = None,
+        theme: Optional[str] = None,
+        factor: Optional[str] = None,
+        instrument_type: Optional[str] = None,
         max_volatility: Optional[float] = None,
         min_sharpe: Optional[float] = None,
         sort_by: str = "sharpe",
@@ -84,7 +89,11 @@ def make_pm_tools(market: Market, state: PMState) -> list:
         Args:
             sector: Secteur exact à conserver (optionnel).
             country: Pays exact à conserver (optionnel).
-            asset_class: Classe d'actifs exacte (ex. Equity, ETF, Crypto) (optionnel).
+            asset_class: Classe d'actifs: actions, obligations, immobilier, or, crypto ou liquidites (optionnel).
+            region: Région: canada, usa, europe, asie, emergents, ou monde pour les FNB mondiaux (optionnel).
+            theme: Thématique (ex. tech, sante, finance, ia) (optionnel).
+            factor: Facteur: taille, qualite, momentum ou value (optionnel).
+            instrument_type: Stock, ETF, Cryptocurrency ou Cash (optionnel).
             max_volatility: Volatilité annualisée maximale d'un actif, en fraction (0.25 = 25 %).
             min_sharpe: Ratio de Sharpe historique minimal.
             sort_by: Critère de tri: "sharpe", "ann_return" ou "ann_vol" (croissant pour ann_vol).
@@ -95,8 +104,10 @@ def make_pm_tools(market: Market, state: PMState) -> list:
             a = a[a["sector"].str.lower() == sector.lower()]
         if country:
             a = a[a["country"].str.lower() == country.lower()]
-        if asset_class:
-            a = a[a["asset_class"].str.lower() == asset_class.lower()]
+        for dim, value in (("asset_class", asset_class), ("region", region), ("theme", theme),
+                           ("factor", factor), ("instrument_type", instrument_type)):
+            if value:
+                a = a[market.members(dim, value).reindex(a.index).fillna(False)]
         if max_volatility is not None:
             a = a[a["ann_vol"] <= max_volatility]
         if min_sharpe is not None:
@@ -140,11 +151,9 @@ def make_pm_tools(market: Market, state: PMState) -> list:
 
 def fallback_selection(market: Market, constraints: list[Constraint], objective: Objective) -> list[str]:
     """Sélection de repli si le PM n'a produit aucun portefeuille valide (garde le pipeline en marche)."""
-    hard = [c for c in constraints if c.hard]
-    a = market.assets[~excluded_mask(market, hard)]
-    n = min(15, get_settings().max_assets_per_portfolio)
-    key, asc = ("ann_vol", True) if objective == "min_volatility" else ("sharpe", False)
-    return a.sort_values(key, ascending=asc).head(n).index.tolist()
+    from .selection import default_selection
+
+    return default_selection(market, constraints, objective)
 
 
 # --------------------------------------------------------------------------- #

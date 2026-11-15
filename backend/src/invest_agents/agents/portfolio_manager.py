@@ -7,7 +7,7 @@ Le modèle choisit les titres et rédige l'explication. Les poids et toutes les 
 from __future__ import annotations
 
 import json
-from typing import Optional
+from typing import Literal, Optional
 
 from ..constraints import describe
 from ..data import Market
@@ -24,7 +24,9 @@ Style: {guidance}
 
 DÉMARCHE
 1. Appelle `describe_universe`, puis `screen_assets` (plusieurs fois, avec des filtres différents) pour repérer des candidats.
-2. Choisis entre {low} et {high} titres. Diversifie par secteur, pays et classe d'actifs.
+   Pour chaque contrainte de poids minimal (classe d'actifs, région, thématique, facteur), sélectionne plusieurs
+   placements du groupe concerné, sinon l'optimisation sera impossible.
+2. Choisis entre {low} et {high} placements. Diversifie par classe d'actifs, région et secteur.
 3. Appelle `optimize_portfolio` avec ta sélection. Les contraintes dures de l'utilisateur sont appliquées par l'outil;
    tu ne peux ni les changer ni les contourner.
 4. Si le statut est `infeasible` ou `invalid_selection`, lis le message, corrige la sélection et recommence.
@@ -32,7 +34,7 @@ DÉMARCHE
 5. Le dernier appel réussi (statut `optimal` ou `feasible`) est ton portefeuille. Rédige ensuite ta réponse finale.
 
 Dans ta réponse finale: un résumé de stratégie, une note par position principale (au moins les 8 plus lourdes)
-et les compromis. N'écris aucun poids ni indicateur qui ne vient pas de l'outil."""
+et les compromis, en t'adressant au client (tutoiement, 1 à 2 phrases courtes chacun). N'écris aucun poids ni indicateur qui ne vient pas de l'outil, et ne parle jamais des outils au client."""
 
 MAX_ATTEMPTS = 6
 
@@ -80,12 +82,14 @@ async def run_portfolio_manager(
     profile: InvestorProfile,
     pm_constraints: list[Constraint],
     feedback: Optional[str] = None,
+    vol_cap: Optional[float] | Literal["mandate"] = "mandate",
 ) -> Portfolio:
+    """`vol_cap="mandate"` applique le plafond du mandat; une valeur (ou None) le remplace."""
     label = f"PM {mandate.name}"
     state = PMState(
         constraints=pm_constraints,
         objective=mandate.objective,
-        vol_cap=vol_cap_for(mandate, profile.assessment.suggested_max_volatility),
+        vol_cap=vol_cap_for(mandate, profile.assessment.suggested_max_volatility) if vol_cap == "mandate" else vol_cap,
     )
     min_n = max([int(c.value) for c in pm_constraints if c.hard and c.type.value == "min_positions" and c.value] + [8])
     max_n = min([20] + [int(c.value) for c in pm_constraints if c.hard and c.type.value == "max_positions" and c.value])

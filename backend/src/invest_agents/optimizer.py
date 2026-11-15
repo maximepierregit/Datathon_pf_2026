@@ -13,8 +13,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from .config import get_settings
-from .constraints import ANY, DIMENSION_COLUMN, SPECS, evaluate, excluded_mask
-from .data import UNKNOWN
+from .constraints import ANY, SPECS, evaluate, excluded_mask
 from .data import Market
 from .schemas import Constraint, ConstraintCheck, ConstraintType as T, PortfolioMetrics
 
@@ -36,12 +35,7 @@ class OptimizationResult:
 
 
 def _group_vector(market: Market, symbols: list[str], dimension: str, target: str) -> np.ndarray:
-    t = target.lower()
-    if dimension == "symbol":
-        return np.array([1.0 if s.lower() == t else 0.0 for s in symbols])
-    col = DIMENSION_COLUMN[dimension]
-    values = market.assets.loc[symbols, col].str.lower()
-    return (values == t).to_numpy(dtype=float)
+    return market.members(dimension, target).reindex(symbols).fillna(False).to_numpy(dtype=float)
 
 
 def optimize(
@@ -90,6 +84,9 @@ def optimize(
     for c in hard:
         if c.type is T.MAX_POSITION_WEIGHT and c.value is not None:
             ub = np.minimum(ub, c.value)
+        elif c.type is T.MAX_INSTRUMENT_LINE_WEIGHT and c.value is not None:
+            vec = _group_vector(market, syms, "instrument_type", c.target or "")
+            ub = np.where(vec > 0, np.minimum(ub, c.value), ub)
         elif c.type in (T.MAX_SYMBOL_WEIGHT, T.MIN_SYMBOL_WEIGHT):
             vec = _group_vector(market, syms, "symbol", c.target or "")
             if vec.sum() == 0:
@@ -119,8 +116,7 @@ def optimize(
     for c in hard:
         spec = SPECS[c.type]
         if spec.dimension and spec.kind == "fraction" and c.target == ANY:
-            col = DIMENSION_COLUMN[spec.dimension]
-            for group in sorted(set(market.assets.loc[syms, col]) - {UNKNOWN}):
+            for group in market.groups(spec.dimension):
                 vec = _group_vector(market, syms, spec.dimension, group)
                 cons.append({"type": "ineq", "fun": lambda w, a=vec, v=float(c.value or 0): v - a @ w, "jac": lambda w, a=vec: -a})
             continue
@@ -132,7 +128,7 @@ def optimize(
                     "infeasible",
                     f"Aucun titre de la sélection n'appartient à {c.target}, alors qu'un poids minimal de {v:.0%} est exigé.",
                 )
-            if c.type in (T.MAX_SYMBOL_WEIGHT, T.MIN_SYMBOL_WEIGHT):
+            if c.type in (T.MAX_SYMBOL_WEIGHT, T.MIN_SYMBOL_WEIGHT, T.MAX_INSTRUMENT_LINE_WEIGHT):
                 continue  # déjà traité dans les bornes
             if spec.direction == "max":
                 cons.append({"type": "ineq", "fun": lambda w, a=vec, v=v: v - a @ w, "jac": lambda w, a=vec: -a})

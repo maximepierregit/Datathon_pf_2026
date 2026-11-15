@@ -10,7 +10,7 @@ import difflib
 from dataclasses import dataclass
 from typing import Optional
 
-from .data import UNKNOWN, Market
+from .data import Market
 from .schemas import Constraint, ConstraintCheck, ConstraintRef, ConstraintType as T
 
 TOL = 1e-3  # tolérance numérique sur la volatilité et le rendement
@@ -20,7 +20,7 @@ HELD = 5e-4  # poids à partir duquel une position est considérée comme déten
 
 @dataclass(frozen=True)
 class Spec:
-    dimension: Optional[str]  # sector | country | asset_class | symbol | None
+    dimension: Optional[str]  # sector | country | asset_class | region | theme | factor | instrument_type | symbol
     kind: str  # fraction | count | none
     direction: Optional[str]  # max | min | None
     description: str
@@ -44,13 +44,27 @@ SPECS: dict[T, Spec] = {
     T.MIN_ASSET_CLASS_WEIGHT: Spec("asset_class", "fraction", "min", "Poids minimal d'une classe d'actifs"),
     T.MAX_SYMBOL_WEIGHT: Spec("symbol", "fraction", "max", "Poids maximal d'un titre précis"),
     T.MIN_SYMBOL_WEIGHT: Spec("symbol", "fraction", "min", "Poids minimal d'un titre précis (le détenir)"),
+    T.EXCLUDE_REGION: Spec("region", "none", None, "Exclure une région (actions et immobilier)"),
+    T.MAX_REGION_WEIGHT: Spec("region", "fraction", "max", "Poids maximal d'une région"),
+    T.MIN_REGION_WEIGHT: Spec("region", "fraction", "min", "Poids minimal d'une région"),
+    T.EXCLUDE_THEME: Spec("theme", "none", None, "Exclure une thématique"),
+    T.MAX_THEME_WEIGHT: Spec("theme", "fraction", "max", "Poids maximal d'une thématique"),
+    T.MIN_THEME_WEIGHT: Spec("theme", "fraction", "min", "Poids minimal d'une thématique"),
+    T.EXCLUDE_FACTOR: Spec("factor", "none", None, "Exclure un facteur (style)"),
+    T.MAX_FACTOR_WEIGHT: Spec("factor", "fraction", "max", "Poids maximal d'un facteur"),
+    T.MIN_FACTOR_WEIGHT: Spec("factor", "fraction", "min", "Poids minimal d'un facteur"),
+    T.EXCLUDE_INSTRUMENT_TYPE: Spec("instrument_type", "none", None, "Exclure un type d'instrument (ex.: Stock)"),
+    T.MAX_INSTRUMENT_LINE_WEIGHT: Spec("instrument_type", "fraction", "max",
+                                       "Poids maximal de chaque ligne d'un type d'instrument (ex.: chaque Stock ≤ 10 %)"),
 }
 
 ANY = "*"  # cible générique: « chaque secteur » / « chaque pays » (plafonds seulement)
 WILDCARD_TYPES = {T.MAX_SECTOR_WEIGHT, T.MAX_COUNTRY_WEIGHT}
 
-DIMENSION_COLUMN = {"sector": "sector", "country": "country", "asset_class": "asset_class", "symbol": None}
-DIMENSION_FR = {"sector": "secteur", "country": "pays", "asset_class": "classe d'actifs", "symbol": "titre"}
+WILDCARD_TYPES |= {T.MAX_REGION_WEIGHT}
+DIMENSION_FR = {"sector": "secteur", "country": "pays", "asset_class": "classe d'actifs", "symbol": "titre",
+                "region": "région", "theme": "thématique", "factor": "facteur", "instrument_type": "type d'instrument"}
+ADDITIVE_DIMENSIONS = ("sector", "country", "asset_class", "region")  # groupes disjoints: les minimums s'additionnent
 
 
 # --------------------------------------------------------------------------- #
@@ -72,6 +86,10 @@ def catalog_prompt(allowed: dict[str, list[str]]) -> str:
         f"- sector: {', '.join(allowed['sector'])}",
         f"- country: {', '.join(allowed['country'])}",
         f"- asset_class: {', '.join(allowed['asset_class'])}",
+        f"- region: {', '.join(allowed['region'])}",
+        f"- theme: {', '.join(allowed['theme'])}",
+        f"- factor: {', '.join(allowed['factor'])}",
+        f"- instrument_type: {', '.join(allowed['instrument_type'])}",
         "- symbol: symbole boursier exact (utiliser l'outil search_universe pour retrouver un symbole à partir d'un nom)",
     ]
     return "\n".join(lines)
@@ -182,7 +200,7 @@ def detect_conflicts(constraints: list[Constraint]) -> list[str]:
         out.append(
             f"Conflit: avec au plus {mx:.0f} positions de {cap:.0%} maximum, le portefeuille ne peut pas atteindre 100 %."
         )
-    for dim in ("sector", "country", "asset_class"):
+    for dim in ADDITIVE_DIMENSIONS:
         total = sum((c.value or 0) for c in hard if c.type.value == f"min_{dim}_weight")
         if total > 1 + 1e-9:
             out.append(f"Conflit: la somme des poids minimaux par {DIMENSION_FR[dim]} dépasse 100 % ({total:.0%}).")
@@ -194,19 +212,13 @@ def detect_conflicts(constraints: list[Constraint]) -> list[str]:
 # --------------------------------------------------------------------------- #
 def excluded_mask(market: Market, constraints: list[Constraint], hard_only: bool = True):
     """Masque booléen (index = symbole) des actifs exclus par les contraintes."""
-    a = market.assets
-    mask = a["sector"].ne(a["sector"])  # tout False
+    mask = market.members("symbol", "\0")  # tout False
     for c in constraints:
         if hard_only and not c.hard:
             continue
-        if c.type is T.EXCLUDE_SECTOR:
-            mask |= a["sector"].str.lower().eq((c.target or "").lower())
-        elif c.type is T.EXCLUDE_COUNTRY:
-            mask |= a["country"].str.lower().eq((c.target or "").lower())
-        elif c.type is T.EXCLUDE_ASSET_CLASS:
-            mask |= a["asset_class"].str.lower().eq((c.target or "").lower())
-        elif c.type is T.EXCLUDE_SYMBOL:
-            mask |= a.index.str.lower().isin([(c.target or "").lower()])
+        spec = SPECS[c.type]
+        if spec.kind == "none" and spec.dimension:
+            mask |= market.members(spec.dimension, c.target or "")
     return mask
 
 
@@ -216,7 +228,8 @@ def describe(c: Constraint) -> str:
     v = c.value
     pct = f"{v:.1%}".replace(".0%", "%") if v is not None else ""
     names = {
-        T.MAX_POSITION_WEIGHT: f"Poids maximal par titre ≤ {pct}",
+        T.MAX_POSITION_WEIGHT: f"Poids maximal par placement ≤ {pct}",
+        T.MAX_INSTRUMENT_LINE_WEIGHT: f"Chaque ligne {c.target} ≤ {pct}",
         T.MIN_POSITIONS: f"Au moins {v:.0f} positions" if v else "",
         T.MAX_POSITIONS: f"Au plus {v:.0f} positions" if v else "",
         T.MAX_VOLATILITY: f"Volatilité annualisée ≤ {pct}",
@@ -238,24 +251,14 @@ def evaluate(market: Market, weights: dict[str, float], constraints: list[Constr
     """Vérifie un portefeuille contre toutes les contraintes (dures et souples)."""
     held = {s: w for s, w in weights.items() if w > HELD}
     metrics = market.portfolio_metrics(held) if held else None
-    a = market.assets
     checks: list[ConstraintCheck] = []
 
     def group_weight(dimension: str, target: str) -> float:
-        t = target.lower()
-        if dimension == "symbol":
-            return sum(w for s, w in held.items() if s.lower() == t)
-        col = DIMENSION_COLUMN[dimension]
-        return sum(w for s, w in held.items() if str(a.loc[s, col]).lower() == t)
+        inside = market.members(dimension, target)
+        return sum(w for s, w in held.items() if bool(inside.get(s, False)))
 
     def max_group_weight(dimension: str) -> float:
-        col = DIMENSION_COLUMN[dimension]
-        sums: dict[str, float] = {}
-        for s, w in held.items():
-            key = str(a.loc[s, col])
-            if key != UNKNOWN:  # les ETF et cryptos sans secteur ne forment pas un « secteur »
-                sums[key] = sums.get(key, 0.0) + w
-        return max(sums.values(), default=0.0)
+        return max((group_weight(dimension, g) for g in market.groups(dimension)), default=0.0)
 
     for c in constraints:
         spec = SPECS[c.type]
@@ -278,6 +281,10 @@ def evaluate(market: Market, weights: dict[str, float], constraints: list[Constr
         elif c.type is T.MIN_EXPECTED_RETURN:
             actual = metrics.expected_return if metrics else 0.0
             passed = actual >= (v or 0) - TOL
+        elif c.type is T.MAX_INSTRUMENT_LINE_WEIGHT:
+            inside = market.members("instrument_type", c.target or "")
+            actual = max((w for s, w in held.items() if bool(inside.get(s, False))), default=0.0)
+            passed = actual <= (v or 0) + WTOL
         elif spec.kind == "none":
             actual = group_weight(spec.dimension or "symbol", c.target or "")
             passed = actual <= HELD

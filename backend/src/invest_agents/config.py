@@ -27,6 +27,7 @@ class Settings:
     max_pm_retries: int
     max_assets_per_portfolio: int
     risk_free_rate: float
+    mu_shrink: float
 
 
 @lru_cache(maxsize=1)
@@ -39,5 +40,6 @@ def get_settings() -> Settings:
         dataset_path=os.getenv("DATASET_PATH", str(BACKEND_ROOT / "data" / "universe.parquet")),
         max_pm_retries=int(os.getenv("MAX_PM_RETRIES", "1")),
         max_assets_per_portfolio=int(os.getenv("MAX_ASSETS_PER_PORTFOLIO", "40")),
-        risk_free_rate=float(os.getenv("RISK_FREE_RATE", "0.02")),
+        risk_free_rate=float(os.getenv("RISK_FREE_RATE", "0.025")),  # même valeur que le frontend
+        mu_shrink=float(os.getenv("MU_SHRINK", "0.5")),
     )

@@ -20,7 +20,9 @@ SYSTEM = """Tu es l'agent Juge. Tu évalues UN portefeuille par rapport au profi
 2. Évalue l'adéquation globale au profil (score de 0 à 10): niveau de risque, diversification, cohérence avec l'objectif
    et l'horizon.
 3. Si des contraintes ne sont pas respectées, propose des corrections concrètes dans `suggested_fixes`
-   (ex.: « réduire le secteur Technologie à 25 % »). Sinon, laisse la liste vide."""
+   (ex.: « réduire le secteur Technologie à 25 % »). Sinon, laisse la liste vide.
+""" + """4. Un FNB est déjà diversifié: une ligne de FNB peut peser jusqu'à 40 %. Le poids maximal par titre suggéré par le profil ne vise que les actions individuelles. Ne signale pas une ligne de FNB comme une concentration.
+"""
 
 
 async def run_judge(
@@ -37,7 +39,11 @@ async def run_judge(
         "contraintes": [describe(c) for c in constraints],
         "portefeuille": {
             "mandat": portfolio.mandate,
-            "positions": [{"symbole": p.symbol, "nom": p.name, "poids": p.weight, "secteur": p.sector} for p in portfolio.positions],
+            "positions": [
+                {"symbole": p.symbol, "nom": p.name, "poids": p.weight, "classe": p.asset_class,
+                 "type": str(market.assets.loc[p.symbol, "instrument_type"]) if p.symbol in market.assets.index else None}
+                for p in portfolio.positions
+            ],
             "indicateurs": portfolio.metrics.model_dump() if portfolio.metrics else None,
         },
     }
