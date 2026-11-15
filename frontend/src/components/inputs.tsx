@@ -1,6 +1,7 @@
-import { useId } from 'react'
-import { LEVELS, type CatalogItem } from '../data/catalog'
-import type { Level } from '../types'
+import { useId, useState } from 'react'
+import { LEVELS, shareTotal, type CatalogItem } from '../data/catalog'
+import { pct } from '../lib/format'
+import type { Level, Share } from '../types'
 
 export interface Option<T> {
   value: T
@@ -162,6 +163,93 @@ const LEVEL_STYLE: Record<Level, string> = {
   0: 'bg-white text-navy ring-1 ring-line',
   1: 'bg-sky text-navy',
   2: 'bg-navy text-white',
+}
+
+/**
+ * Exclure, Neutre ou un pourcentage, une ligne par élément. Choisir « % » propose la part encore libre, répartie entre
+ * les éléments neutres. `percent` faux : seulement Exclure et Neutre.
+ */
+export function ShareTuner({ items, value, onChange, percent = true }: { items: CatalogItem[]; value: Record<string, Share>; onChange: (id: string, s: Share | null) => void; percent?: boolean }) {
+  const { total, free } = shareTotal(value, items.map((it) => it.id))
+  // Seul le champ ouvert par un clic sur « % » prend le focus : pas ceux qu'un modèle de thématiques fait apparaître.
+  const [opened, setOpened] = useState<string | null>(null)
+  return (
+    <div className="flex flex-col gap-2">
+      {items.map((it) => {
+        const cur = value[it.id]
+        const num = typeof cur === 'number'
+        const seg = (on: boolean, style: string) => `min-h-11 rounded-md px-3.5 text-sm font-semibold transition-colors ${on ? style : 'text-ink-soft hover:text-navy'}`
+        return (
+          <div key={it.id} role="group" aria-label={it.label} className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[var(--radius-card)] border border-line-soft bg-white py-3 pl-5 pr-3">
+            <span className="flex min-w-[150px] flex-1 flex-col">
+              <span className="text-lg font-semibold text-navy">{it.label}</span>
+              {it.hint && <span className="text-[15px] text-ink-soft">{it.hint}</span>}
+            </span>
+            <span className="flex flex-wrap items-center gap-0.5 rounded-[var(--radius-card)] bg-mist p-1">
+              <button aria-pressed={cur === 'exclure'} onClick={() => onChange(it.id, 'exclure')} className={seg(cur === 'exclure', 'bg-red text-white')}>
+                Exclure
+              </button>
+              <button aria-pressed={cur === undefined} onClick={() => onChange(it.id, null)} className={seg(cur === undefined, 'bg-white text-navy ring-1 ring-line')}>
+                Neutre
+              </button>
+              {percent &&
+                (num ? (
+                  <label className="flex min-h-11 items-center gap-1 rounded-md bg-navy px-2.5 text-sm font-semibold text-white">
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={0}
+                      max={100}
+                      autoFocus={opened === it.id}
+                      aria-label={`Pourcentage pour ${it.label}`}
+                      value={cur}
+                      onChange={(e) => onChange(it.id, Math.min(100, Math.max(0, Math.round(Number(e.target.value) || 0))))}
+                      className="w-12 bg-transparent text-right text-white outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+                    />
+                    %
+                  </label>
+                ) : (
+                  <button
+                    aria-pressed={false}
+                    aria-label={`Fixer un pourcentage pour ${it.label}`}
+                    onClick={() => {
+                      setOpened(it.id)
+                      onChange(it.id, Math.max(0, Math.round((100 - total) / Math.max(1, free))))
+                    }}
+                    className={seg(false, '')}
+                  >
+                    %
+                  </button>
+                ))}
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Total des pourcentages d'un bloc : ce qui est fixé, ce qui reste libre, ce qui manque ou dépasse. */
+export function ShareTotal({ value, ids }: { value: Record<string, Share>; ids: string[] }) {
+  const { total, entered, free } = shareTotal(value, ids)
+  if (!entered) return <p className="m-0 text-center text-base text-ink-soft">Aucun pourcentage fixé : les gestionnaires répartissent librement.</p>
+  const over = total > 100
+  const short = !free && total < 100
+  const message = over
+    ? `Tes pourcentages font ${pct(total / 100, 0)} : enlève ${total - 100} points.`
+    : short
+      ? `Tout est fixé, mais il manque ${100 - total} points pour arriver à ${pct(1, 0)}.`
+      : total === 100
+        ? `${pct(1, 0)} fixés : tout est réparti.`
+        : `${pct(total / 100, 0)} fixés · ${pct((100 - total) / 100, 0)} laissés libres aux gestionnaires.`
+  return (
+    <div className="flex flex-col gap-2" role="status">
+      <div className="h-2 overflow-hidden rounded-full bg-mist" aria-hidden>
+        <div className={`h-full transition-[width] duration-300 ${over || short ? 'bg-red' : 'bg-navy'}`} style={{ width: `${Math.min(100, total)}%` }} />
+      </div>
+      <p className={`m-0 text-base ${over || short ? 'font-semibold text-red-dark' : 'text-ink-soft'}`}>{message}</p>
+    </div>
+  )
 }
 
 /** Échelle unique Exclure → Imposer, une ligne par élément. */
