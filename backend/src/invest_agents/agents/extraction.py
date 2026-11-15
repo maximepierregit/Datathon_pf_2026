@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..constraints import catalog_prompt, describe, validate_all
-from ..data import Market
+from ..catalog import catalog_prompt, describe, validate_all
+from ..market import Market
 from ..events import EventBus
 from ..schemas import Constraint, ConstraintRef, ExtractionResult
 from ..tools import make_extraction_tools

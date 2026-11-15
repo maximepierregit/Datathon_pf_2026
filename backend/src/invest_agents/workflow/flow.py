@@ -26,8 +26,8 @@ from typing import AsyncIterator, Optional
 from pydantic import ValidationError
 
 from ..agents.base import AgentError
-from ..config import get_settings
-from ..data import get_market
+from ..runtime import get_runtime_settings
+from ..market import get_market
 from ..monport import (
     MAX_ADJUSTMENT,
     SLOTS,
@@ -103,13 +103,14 @@ async def ensure_pipeline(session: Session) -> None:
         return
     if session.judged_round != session.build_round:
         await judge_round(session)
-    while session.reoptimize and session.rebuilds_left > 0:
-        session.rebuilds_left -= 1
-        slots = [s for s in session.reoptimize if s in session.portfolios]
-        front(session.bus, status("pepite", "running", "Le juge demande de reconstruire : " +
-                                  ", ".join(session.portfolios[s].mandate for s in slots)))
-        await build_slots(session, slots, session.reoptimize)
-        await judge_round(session)
+        # Le juge vient de parler sur ces portefeuilles: ses demandes de réoptimisation sont à traiter.
+        while session.reoptimize and session.rebuilds_left > 0:
+            session.rebuilds_left -= 1
+            slots = [s for s in session.reoptimize if s in session.portfolios]
+            front(session.bus, status("pepite", "running", "Le juge demande de reconstruire : " +
+                                      ", ".join(session.portfolios[s].mandate for s in slots)))
+            await build_slots(session, slots, session.reoptimize)
+            await judge_round(session)
 
 
 def _warnings_for(session: Session, target: str, sources: list[str]) -> list[dict]:
@@ -186,7 +187,7 @@ async def build_portfolios(payload: dict, bus, translator: Translator) -> None:
             _bind(session, bus, translator)
         _reset_results(session)
         adjustment = str(payload.get("adjustment") or "").strip()[:MAX_ADJUSTMENT]
-        session.rebuilds_left = get_settings().max_pm_retries
+        session.rebuilds_left = get_runtime_settings().max_pm_retries
 
         front(bus, pepite("C’est parti! J’écris les consignes de tes trois gestionnaires."))
         front(bus, status("pepite", "running", "Je prépare la construction…"))
@@ -219,7 +220,7 @@ async def chat(payload: dict, bus, translator: Translator) -> None:
     async with session.lock:
         _bind(session, bus, translator)
         # Une relance pour le juge, plus une pour une demande du client.
-        session.rebuilds_left = get_settings().max_pm_retries + 1
+        session.rebuilds_left = get_runtime_settings().max_pm_retries + 1
         try:
             reply = (await chat_turn(session, bus, message)).message
         except AgentError:

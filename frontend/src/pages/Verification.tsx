@@ -17,16 +17,20 @@ export default function Verification() {
   const constraints = useApp((s) => s.constraints)
   const check = useApp((s) => s.check)
   const setCheck = useApp((s) => s.setCheck)
+  const setSession = useApp((s) => s.setSession)
   const setAdjustment = useApp((s) => s.setAdjustment)
   const [draft, setDraft] = useState(useApp.getState().adjustment)
+  const [answers, setAnswers] = useState('')
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const ctrl = new AbortController()
     setCheck(null)
+    setSession(null)
     checkProfile({ score: riskScore(profile), profile, constraints }, ctrl.signal)
-      .then((c) => {
+      .then(({ check: c, session }) => {
         setCheck(c)
+        setSession(session)
         setLoading(false)
       })
       .catch(() => {})
@@ -35,8 +39,11 @@ export default function Verification() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const questions = check?.questions ?? []
   const send = () => {
-    setAdjustment(check?.coherent ? draft.trim() : '')
+    // Profil incohérent : les réponses aux questions de Pépite lui reviennent, elle s'y ajuste à la construction.
+    if (check?.coherent) setAdjustment(draft.trim())
+    else setAdjustment(answers.trim() ? `Mes réponses à tes questions :\n${questions.map((q) => `- ${q}`).join('\n')}\n${answers.trim()}` : '')
     navigate('/construction')
   }
 
@@ -96,6 +103,30 @@ export default function Verification() {
               </li>
             ))}
           </ul>
+          {questions.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <PepiteSays pose="question">
+                <span className="flex flex-col gap-1">
+                  <span>Aide-moi à comprendre ce que tu veux vraiment :</span>
+                  {questions.map((q) => (
+                    <span key={q}>• {q}</span>
+                  ))}
+                </span>
+              </PepiteSays>
+              <label htmlFor="answers" className="font-semibold text-navy">
+                Tes réponses <span className="font-normal text-ink-soft">(facultatif : je m’ajusterai en construisant tes portefeuilles)</span>
+              </label>
+              <textarea
+                id="answers"
+                value={answers}
+                onChange={(e) => setAnswers(e.target.value)}
+                maxLength={900}
+                rows={3}
+                placeholder="Ex. : la crypto, c’est un petit pari que j’assume…"
+                className="rounded-[var(--radius-card)] border border-line bg-white px-3 py-2 text-[15px] outline-none focus:border-navy"
+              />
+            </div>
+          )}
           <div className="flex flex-col gap-2 rounded-[var(--radius-card)] bg-sky px-6 py-5">
             <p className="m-0 font-semibold text-navy">Je te propose de recommencer le questionnaire.</p>
             <p className="m-0 text-[15px] text-ink-soft">

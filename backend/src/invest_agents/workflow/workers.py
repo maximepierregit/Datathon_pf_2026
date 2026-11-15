@@ -17,7 +17,7 @@ from strands import tool
 from ..agents.base import AgentError, AgentHandle
 from ..agents.cro import diagnostics
 from ..agents.portfolio_manager import make_pm_worker, run_pm_worker
-from ..constraints import describe, evaluate, excluded_mask
+from ..catalog import describe, evaluate, excluded_mask
 from ..mandates import Mandate
 from ..monport import (
     BASE_NAMES,
@@ -31,6 +31,7 @@ from ..monport import (
     pick_winner,
     status,
 )
+from ..tools import MACRO_PROMPT, make_macro_tools
 from ..schemas import (
     ConstraintPlan,
     InvestorProfile,
@@ -83,21 +84,25 @@ cherches ce qui pourrait nuire à l'investisseur s'il n'en est pas averti.
    perte acceptée très faible; horizon court avec objectif de croissance agressive).
 2. `warnings`: mises en garde sur ce portefeuille, avec `portfolio_id` = « {slot} ». Appuie-toi sur les indicateurs, sur
    la conformité et sur les `diagnostics` calculés par le système (concentration, perte maximale historique comparée à
-   la perte acceptée, volatilité, préférences non respectées).
+   la perte acceptée, volatilité, préférences non respectées). Appelle `get_latest_macro_snapshot`: signale une
+   exposition que le régime macro rend plus risquée (sensibilité aux taux, inflation, ralentissement de l'emploi).
 3. `summary`: synthèse courte et directe.
 
 RÈGLES
-- Chaque point cite un fait chiffré tiré du contexte. N'invente aucun chiffre.
+- Chaque point cite un fait chiffré tiré du contexte ou des outils. N'invente aucun chiffre.
 - Les rendements et risques sont historiques. Ils ne garantissent pas les résultats futurs. Rappelle-le une fois dans le résumé.
 - Sois sobre: pas d'alarmisme, pas de recommandation d'achat. Gravité `high` seulement si le problème peut conduire
-  l'investisseur à une perte supérieure à ce qu'il accepte ou à un portefeuille inadapté à son horizon.
+  l'investisseur à une perte supérieure à ce qu'il accepte ou à un portefeuille inadapté à son horizon. Un risque
+  macro seul ne justifie pas `high`.
 - Un problème que le gestionnaire peut corriger sans enfreindre les contraintes (concentration, diversification)
   s'écrit comme tel: le juge peut demander une réoptimisation. Ce qui vient des contraintes du client s'écrit aussi,
   mais n'est pas corrigeable.
 - S'il n'y a rien à signaler, retourne des listes vides.
 
 PLUS TARD
-Pépite peut t'interroger sur ton rapport. Réponds alors en texte, avec les faits de ton rapport, sans rien recalculer."""
+Pépite peut t'interroger sur ton rapport. Réponds alors en texte, avec les faits de ton rapport, sans rien recalculer.
+
+""" + MACRO_PROMPT
 
 
 def _portfolio_payload(session: Session, slot: str, p: Portfolio) -> dict:
@@ -124,7 +129,7 @@ async def run_risk(session: Session, slot: str) -> RiskReport:
     if handle is None:
         handle = session.risk_agents[slot] = AgentHandle(
             label=f"Risque {p.mandate}", step="7", kind="strong", persistent=True,
-            system_prompt=RISK_SYSTEM.format(name=p.mandate, slot=slot),
+            system_prompt=RISK_SYSTEM.format(name=p.mandate, slot=slot), tools=make_macro_tools(),
         )
     payload = {
         "profil": {
@@ -188,22 +193,27 @@ leur agent Risque l'a relu. Tu reçois les portefeuilles, la conformité calcul�
 
 1. Appelle `check_portfolio_constraints` pour chaque portefeuille. Ses résultats font foi: ne les contredis jamais.
 2. `opinions`: un avis par portefeuille construit (adéquation de 0 à 10, commentaire, corrections suggérées).
-3. Rapport de risque: lis-le avec soin. S'il révèle un problème que le gestionnaire peut corriger sans enfreindre ses
-   contraintes dures (concentration, diversification, perte maximale au-delà de la perte acceptée), ou si le rapport
-   lui-même est incomplet ou contredit les indicateurs, demande une réoptimisation dans `reoptimize`, avec des
-   instructions précises. Ne demande rien pour un problème qui vient des contraintes du client.
-4. Un portefeuille non conforme (contrainte dure) doit être reconstruit: ajoute-le à `reoptimize`.
+3. Rapport de risque: lis-le avec soin. Demande une réoptimisation (`reoptimize`, avec des instructions précises)
+   seulement si c'est sérieux et corrigeable: une mise en garde de gravité `high` que le gestionnaire peut régler sans
+   enfreindre ses contraintes dures, ou un rapport incomplet qui contredit les indicateurs. Une mise en garde `low`
+   ou `medium`, un risque normal pour le profil ou un problème qui vient des contraintes du client ne justifie pas de
+   reconstruire: mentionne-le dans l'avis. Une reconstruction coûte cher: en cas de doute, ne la demande pas.
+4. Un portefeuille non conforme (contrainte dure) est reconstruit d'office par le code: inutile de le demander.
 5. PROFIL COHÉRENT: les trois portefeuilles sont des variantes en concurrence. Désigne le meilleur dans `winner`:
    celui qui correspond le mieux au profil (niveau de risque, horizon, objectif), qui respecte le mieux les thèmes
-   et les préférences du client, puis la diversification et le rendement espéré pour le risque pris. Un portefeuille
-   non conforme ne gagne que si aucun ne l'est. `justification`: deux ou trois phrases tutoyées qui expliquent le
-   choix au client, sans jargon (ni Sharpe, ni volatilité, ni écart-type, ni drawdown): « le meilleur rendement pour
+   et les préférences du client, puis la diversification, le rendement espéré pour le risque pris et la tenue probable
+   dans le régime macro actuel (`get_latest_macro_snapshot`). Un portefeuille
+   non conforme ne gagne que si aucun ne l'est. `justification`: deux ou trois phrases tutoyées qui expliquent
+   pourquoi ce portefeuille correspond le mieux au profil, sans le recommander (jamais « je te recommande », « tu
+   devrais »: c'est le client qui décide), sans jargon (ni Sharpe, ni volatilité, ni écart-type, ni drawdown): « le meilleur rendement pour
    le risque pris », « des variations plus douces ». Seulement des chiffres fournis, à une décimale au plus.
 6. PROFIL INCOHÉRENT: les trois portefeuilles sont trois bases (« Ton profil », « Tes contraintes », « Tes
    préférences »). Le client choisira. `winner` vaut null et `justification` est vide.
 
 PLUS TARD
-Pépite peut t'interroger sur ta décision. Réponds alors en texte, avec les faits de ton analyse."""
+Pépite peut t'interroger sur ta décision. Réponds alors en texte, avec les faits de ton analyse.
+
+""" + MACRO_PROMPT
 
 
 def _verdict(session: Session, slot: str, decision: JudgeDecision) -> JudgeVerdict:
@@ -238,7 +248,7 @@ def _judge_tools(session: Session) -> list:
                         "limit": c.limit} for c in checks],
         }
 
-    return [check_portfolio_constraints]
+    return [check_portfolio_constraints, *make_macro_tools()]
 
 
 def _correction_text(v: JudgeVerdict) -> str:

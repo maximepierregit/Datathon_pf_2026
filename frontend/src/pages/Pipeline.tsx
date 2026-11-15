@@ -23,28 +23,30 @@ function stepsFor(coherent: boolean): { title: string; role: string; agents: Age
   return [
     {
       title: 'Pépite',
-      role: 'Traduit tes réponses en 3 profils de contraintes, un par gestionnaire.',
+      role: 'Seule à te parler : elle calcule ton profil, écrit les consignes des gestionnaires et coordonne toute l’équipe.',
       agents: [{ id: 'pepite', name: 'Pépite', pose: 'map' }],
     },
     {
       title: coherent ? 'Trois gestionnaires en concurrence' : 'Trois gestionnaires, en parallèle',
       role: coherent
-        ? 'Chacun reçoit une variante de tes consignes. L’optimiseur calcule les poids.'
+        ? 'Un suit exactement tes consignes, les deux autres une variante proposée par Pépite. L’optimiseur calcule les poids.'
         : 'Un portefeuille de base chacun : ton profil, tes contraintes, tes préférences. L’optimiseur calcule les poids.',
       agents: PORTFOLIO_IDS.map((id) => ({ id: `gestionnaire-${id}`, name: names[id], pose: 'laptop' })),
     },
     {
-      title: 'Trois juges',
-      role: 'Chacun vérifie qu’un portefeuille respecte ses limites.',
-      agents: PORTFOLIO_IDS.map((id) => ({ id: `juge-${id}`, name: `Juge · ${names[id]}`, pose: 'thinking' })),
+      title: 'Agents Risque',
+      role: 'Chaque gestionnaire a son agent Risque : il relit le portefeuille et envoie son rapport au juge.',
+      agents: [{ id: 'risques', name: 'Agents Risque', pose: 'flag' }],
     },
-    ...(coherent
-      ? [{ title: 'Juge final', role: 'Compare les 3 portefeuilles et garde le meilleur pour toi.', agents: [{ id: 'juge-final' as const, name: 'Juge final', pose: 'cool' as const }] }]
-      : []),
     {
-      title: 'Responsable des risques',
-      role: 'Relit les portefeuilles présentés et prépare les mises en garde.',
-      agents: [{ id: 'risques', name: 'Responsable des risques', pose: 'flag' }],
+      title: 'Juge',
+      role: coherent
+        ? 'Vérifie tes limites, lit les rapports de risque, demande une réoptimisation au besoin et garde le meilleur portefeuille.'
+        : 'Vérifie tes limites, lit les rapports de risque et demande une réoptimisation au besoin.',
+      agents: [
+        { id: 'juge-final', name: 'Juge', pose: 'cool' },
+        ...PORTFOLIO_IDS.map((id) => ({ id: `juge-${id}` as const, name: `Limites · ${names[id]}`, pose: 'thinking' as const })),
+      ],
     },
   ]
 }
@@ -90,22 +92,23 @@ export default function Pipeline() {
     const ctrl = new AbortController()
     let received = false
     let failed = false
-    runPipeline({ score, profile: state.profile, constraints: state.constraints, check: state.check, adjustment: state.adjustment }, (e) => {
+    runPipeline({ score, profile: state.profile, constraints: state.constraints, check: state.check, adjustment: state.adjustment, session: state.session }, (e) => {
       setLog((l) => [...l, e])
       if (e.type === 'agent_status') setAgents((a) => ({ ...a, [e.agent]: { status: e.status, message: e.message } }))
       if (e.type === 'pepite') setPepite(e.text)
       if (e.type === 'rerun') {
-        const name = PORTFOLIO_META[e.portfolio].name
+        const name = (coherent ? VARIANTS : BASES)[e.portfolio] ?? PORTFOLIO_META[e.portfolio].name
         setRerun(true)
-        setPepite(`Oh! Le juge ${name} renvoie son portefeuille au gestionnaire.`)
+        setPepite(`Oh! Le juge renvoie le portefeuille « ${name} » à son gestionnaire.`)
         setAgents((a) => ({
           ...a,
-          [`juge-${e.portfolio}`]: { status: 'running', message: `Portefeuille ${e.reason}` },
+          [`juge-${e.portfolio}`]: { status: 'running', message: e.reason },
           [`gestionnaire-${e.portfolio}`]: { status: 'running', message: 'Nouveau calcul demandé par le juge…' },
         }))
       }
       if (e.type === 'portfolios') {
         state.setPortfolios(e.portfolios)
+        if (e.session) state.setSession(e.session)
         received = true
       }
       if (e.type === 'error') {

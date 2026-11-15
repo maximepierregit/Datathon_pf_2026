@@ -13,13 +13,13 @@ import json
 from dataclasses import dataclass
 from typing import Optional
 
-from ..constraints import describe
-from ..data import Market
+from ..catalog import describe
+from ..market import Market
 from ..events import EventBus
 from ..mandates import Mandate, vol_cap_for
-from ..optimizer import optimize
+from ..allocator import optimize
 from ..schemas import Constraint, InvestorProfile, PMNarrative, Portfolio, Position
-from ..tools import PMState, fallback_selection, make_pm_tools
+from ..tools import MACRO_PROMPT, PMState, fallback_selection, make_pm_tools
 from .base import AgentError, AgentHandle
 
 SYSTEM_TEMPLATE = """Tu es le gestionnaire de portefeuille « {name} » d'un service de conseil en placement canadien (CAD).
@@ -27,16 +27,18 @@ Mandat: {description}
 Style: {guidance}
 
 DÉMARCHE
-1. Appelle `describe_universe`, puis `screen_assets` (plusieurs fois, avec des filtres différents) pour repérer des candidats.
-2. Choisis entre {low} et {high} titres. Diversifie par secteur, pays et classe d'actifs.
+1. Appelle `get_latest_macro_snapshot` pour situer le régime macro, puis `describe_universe` et `screen_assets`
+   (plusieurs fois, avec des filtres différents) pour repérer des candidats.
+2. Choisis entre {low} et {high} titres. Diversifie par secteur, pays et classe d'actifs. Le régime macro peut orienter
+   tes choix (par exemple la part d'obligations selon le niveau des taux), dans le respect de ton mandat.
 3. Appelle `optimize_portfolio` avec ta sélection. Les contraintes dures de l'utilisateur sont appliquées par l'outil;
    tu ne peux ni les changer ni les contourner.
 4. Si le statut est `infeasible` ou `invalid_selection`, lis le message, corrige la sélection et recommence.
    Au plus {attempts} appels à `optimize_portfolio` au total.
 5. Le dernier appel réussi (statut `optimal` ou `feasible`) est ton portefeuille. Rédige ensuite ta réponse finale.
 
-Dans ta réponse finale: un résumé de stratégie, une note par position principale (au moins les 8 plus lourdes)
-et les compromis. N'écris aucun poids ni indicateur qui ne vient pas de l'outil.
+Dans ta réponse finale: un résumé de stratégie (avec, en une phrase, le régime macro retenu), une note par position
+principale (au moins les 8 plus lourdes) et les compromis. N'écris aucun poids ni indicateur qui ne vient pas de l'outil.
 
 PLUS TARD
 Pépite, l'agente qui parle au client, peut te redemander de reconstruire ton portefeuille (le juge ou le client
@@ -106,7 +108,7 @@ def make_pm_worker(market: Market, mandate: Mandate, profile: InvestorProfile,
     system = SYSTEM_TEMPLATE.format(
         name=mandate.name, description=mandate.description, guidance=mandate.guidance,
         low=min(min_n, max_n), high=max_n, attempts=MAX_ATTEMPTS,
-    )
+    ) + "\n\n" + MACRO_PROMPT
     handle = AgentHandle(label=f"PM {mandate.name}", step="5", kind="strong", system_prompt=system,
                          tools=make_pm_tools(market, state), persistent=True)
     return PMWorker(mandate=mandate, state=state, handle=handle)

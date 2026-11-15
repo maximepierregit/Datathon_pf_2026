@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { proposeAdjustment } from '../../api'
+import { askPepite, proposeAdjustment } from '../../api'
 import { Pepite } from '../../components/Pepite'
 import { Alert, Button } from '../../components/ui'
 import { riskScore } from '../../lib/engine'
@@ -16,19 +16,68 @@ interface Msg {
 }
 
 const SUGGESTIONS = ['Plus de tech', 'Pas de pétrole', 'Plus de crypto', 'Moins de risque']
+const LIVE_SUGGESTIONS = ['Pourquoi ce portefeuille?', 'C’est quoi un FNB?', 'Pas de pétrole', 'Moins de risque']
 
-/** Chat d'ajustement : toujours appliqué au portefeuille affiché. */
+/**
+ * Chat avec Pépite. Avec le backend (session ouverte), elle répond elle-même : elle interroge au besoin ses
+ * gestionnaires, ses agents Risque et le juge, et peut reconstruire les portefeuilles. Sans backend, le moteur
+ * d'exemple propose des ajustements simulés sur le portefeuille affiché.
+ */
 export function AdjustPanel({ p, onClose }: { p: Portfolio; onClose: () => void }) {
   const state = useApp()
-  const [msgs, setMsgs] = useState<Msg[]>([{ from: 'pepite', text: `Que veux-tu changer dans le portefeuille ${p.name}? Dis-le avec tes mots.` }])
+  const live = Boolean(state.session)
+  const [msgs, setMsgs] = useState<Msg[]>([
+    {
+      from: 'pepite',
+      text: live
+        ? `Pose-moi tes questions sur le portefeuille ${p.name}, ou dis-moi ce que tu veux changer. Je peux aussi t’expliquer une notion de finance.`
+        : `Que veux-tu changer dans le portefeuille ${p.name}? Dis-le avec tes mots.`,
+    },
+  ])
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
+  const [activity, setActivity] = useState('')
   const end = useRef<HTMLDivElement>(null)
+  const ctrl = useRef<AbortController | null>(null)
   const mine = state.adjustments.filter((a) => a.portfolio === p.id)
 
   useEffect(() => {
     end.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [msgs])
+  }, [msgs, activity])
+  useEffect(() => () => ctrl.current?.abort(), [])
+
+  async function simulated(t: string) {
+    const proposal = await proposeAdjustment(p, t, riskScore(state.profile), (patch, riskShift) =>
+      state.previewAdjustment({ portfolio: p.id, patch, riskShift }),
+    )
+    setMsgs((m) => [...m, { from: 'pepite', text: proposal.reply, proposal, request: t, status: proposal.changes.length ? 'open' : undefined }])
+  }
+
+  async function withPepite(session: string, t: string) {
+    ctrl.current = new AbortController()
+    let answered = false
+    const ok = await askPepite(session, `[Portefeuille affiché : ${p.name}]\n${t}`, (e) => {
+      if (e.type === 'agent_status') setActivity(e.message)
+      if (e.type === 'pepite' && e.final) {
+        answered = true
+        setMsgs((m) => [...m, { from: 'pepite', text: e.text }])
+      }
+      if (e.type === 'portfolios') {
+        state.setPortfolios(e.portfolios)
+        setMsgs((m) => [...m, { from: 'pepite', text: 'J’ai mis à jour tes portefeuilles : jette un coup d’œil au tableau de bord.' }])
+      }
+      if (e.type === 'error') {
+        answered = true
+        setMsgs((m) => [...m, { from: 'pepite', text: e.message }])
+        if (/expiré/.test(e.message)) state.setSession(null)
+      }
+    }, ctrl.current.signal).catch(() => true)
+    if (!ok) {
+      state.setSession(null) // backend injoignable : on repasse au moteur d'exemple
+      return simulated(t)
+    }
+    if (!answered) setMsgs((m) => [...m, { from: 'pepite', text: 'Je n’ai pas réussi à te répondre. Réessaie dans un instant.' }])
+  }
 
   async function send(text: string) {
     const t = text.trim()
@@ -36,11 +85,14 @@ export function AdjustPanel({ p, onClose }: { p: Portfolio; onClose: () => void 
     setDraft('')
     setMsgs((m) => [...m, { from: 'user', text: t }])
     setBusy(true)
-    const proposal = await proposeAdjustment(p, t, riskScore(state.profile), (patch, riskShift) =>
-      state.previewAdjustment({ portfolio: p.id, patch, riskShift }),
-    )
-    setBusy(false)
-    setMsgs((m) => [...m, { from: 'pepite', text: proposal.reply, proposal, request: t, status: proposal.changes.length ? 'open' : undefined }])
+    setActivity('')
+    try {
+      if (state.session) await withPepite(state.session, t)
+      else await simulated(t)
+    } finally {
+      setBusy(false)
+      setActivity('')
+    }
   }
 
   function decide(i: number, apply: boolean) {
@@ -55,7 +107,7 @@ export function AdjustPanel({ p, onClose }: { p: Portfolio; onClose: () => void 
         <div className="flex items-center gap-3 border-b border-line-soft px-5 py-3">
           <Pepite pose="happy" size={44} />
           <div className="flex-1">
-            <div className="font-semibold text-navy">Ajuster avec Pépite</div>
+            <div className="font-semibold text-navy">{live ? 'Discuter avec Pépite' : 'Ajuster avec Pépite'}</div>
             <div className="text-xs text-ink-soft">Portefeuille {p.name}</div>
           </div>
           <button aria-label="Fermer" onClick={onClose} className="flex h-10 w-10 items-center justify-center rounded-full text-slate hover:bg-mist">
@@ -105,7 +157,7 @@ export function AdjustPanel({ p, onClose }: { p: Portfolio; onClose: () => void 
               )}
             </div>
           ))}
-          {busy && <div className="text-sm text-ink-soft">Pépite réfléchit…</div>}
+          {busy && <div className="fade-in text-sm text-ink-soft">{activity || 'Pépite réfléchit…'}</div>}
           <div ref={end} />
         </div>
 
@@ -127,7 +179,7 @@ export function AdjustPanel({ p, onClose }: { p: Portfolio; onClose: () => void 
 
         <div className="border-t border-line-soft px-5 py-3">
           <div className="mb-2 flex flex-wrap gap-1.5">
-            {SUGGESTIONS.map((s) => (
+            {(live ? LIVE_SUGGESTIONS : SUGGESTIONS).map((s) => (
               <button key={s} onClick={() => send(s)} className="min-h-8 rounded-full bg-mist px-3 text-sm font-medium text-navy hover:bg-sky">
                 {s}
               </button>
@@ -143,7 +195,7 @@ export function AdjustPanel({ p, onClose }: { p: Portfolio; onClose: () => void 
             <label htmlFor="adjust-input" className="sr-only">
               Ta demande
             </label>
-            <input id="adjust-input" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Ex. : plus de tech, pas de pétrole…" className="min-h-11 flex-1 rounded-[var(--radius-card)] border border-line px-3 text-[15px] outline-none" />
+            <input id="adjust-input" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={live ? 'Ex. : pourquoi autant d’obligations?' : 'Ex. : plus de tech, pas de pétrole…'} className="min-h-11 flex-1 rounded-[var(--radius-card)] border border-line px-3 text-[15px] outline-none" />
             <Button type="submit" className="min-w-0 px-5" disabled={!draft.trim() || busy}>
               Envoyer
             </Button>
