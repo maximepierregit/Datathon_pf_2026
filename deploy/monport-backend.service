@@ -9,6 +9,8 @@ Wants=network-online.target
 User=ec2-user
 WorkingDirectory=/opt/monport-backend
 Environment=PORT=8091 AWS_REGION=us-east-1
+# Dataset réel, lu avec le profil d'instance (WSParticipantRole). Publié par data-prep/build_universe.py --upload.
+Environment=DATASET_PATH=s3://monport-datasets-381491955506/universe/universe.parquet
 ExecStart=/opt/monport-backend/.venv/bin/python main.py
 Restart=always
 RestartSec=3

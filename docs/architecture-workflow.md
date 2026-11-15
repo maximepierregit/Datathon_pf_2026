@@ -91,7 +91,7 @@ flowchart TB
 - Retirés: WAF, Cognito, CloudFront, Lambda de validation, EventBridge et ingestion Glue.
 - Le formulaire est déjà structuré et arrive directement à l'agent Profil (étape 4).
 - Une seule Lambda mince reste: le proxy de streaming (étape 2). Un navigateur ne peut pas signer (SigV4) un appel vers AgentCore Runtime sans identifiants AWS. Pour la compétition, Function URL sans authentification, CORS restreint au frontend, à supprimer après l'événement.
-- Le dataset fixe est publié dans S3 (`s3://monport-datasets-381491955506/universe/universe.parquet`, bucket privé, chiffré et versionné) par `data-prep/build_universe.py --upload`. Le runtime le télécharge une fois par démarrage à froid (28 Mo) et le garde en mémoire: l'optimiseur a besoin de toute la matrice de rendements, donc Athena n'apporterait que de la latence. Le rôle d'exécution n'a que `s3:GetObject` sur `universe/*` (politique `MonPortDatasetRead`).
+- Le dataset fixe est publié dans S3 (`s3://monport-datasets-381491955506/universe/universe.parquet`, bucket privé, chiffré et versionné) par `data-prep/build_universe.py --upload`. Le runtime le télécharge une fois par démarrage à froid (38 Mo) et le garde en mémoire: l'optimiseur a besoin de toute la matrice de rendements, donc Athena n'apporterait que de la latence. Le rôle d'exécution n'a que `s3:GetObject` sur `universe/*` (politique `MonPortDatasetRead`).
 
 ## Relance conversationnelle
 
