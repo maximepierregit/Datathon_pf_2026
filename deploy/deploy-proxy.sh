@@ -14,6 +14,7 @@ POLICY=$(cat <<EOF
 {"Version":"2012-10-17","Statement":[
  {"Effect":"Allow","Action":["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],
   "Resource":"arn:aws:logs:$REGION:$ACCOUNT:log-group:/aws/lambda/$FN:*"},
+ {"Effect":"Allow","Action":["xray:PutTraceSegments","xray:PutTelemetryRecords"],"Resource":"*"},
  {"Effect":"Allow","Action":"bedrock-agentcore:InvokeAgentRuntime",
   "Resource":["$RUNTIME_ARN","$RUNTIME_ARN/*"]}
 ]}
@@ -39,6 +40,9 @@ else
     --zip-file "fileb://$BUILD/proxy.zip" --timeout 900 --memory-size 256 --architectures arm64 \
     --environment "$ENV" --tags project=monport >/dev/null
 fi
+aws lambda wait function-updated-v2 --function-name "$FN"
+# Traçage actif : sinon la Lambda propage « Sampled=0 » et AgentCore n'enregistre aucune trace des agents.
+aws lambda update-function-configuration --function-name "$FN" --tracing-config Mode=Active >/dev/null
 aws lambda wait function-updated-v2 --function-name "$FN"
 # Plafond de requêtes simultanées : remplace la limite de débit de nginx et borne la facture Bedrock.
 aws lambda put-function-concurrency --function-name "$FN" --reserved-concurrent-executions 8 >/dev/null
