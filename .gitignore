@@ -26,3 +26,6 @@ node_modules/
 # Éditeurs et système
 .DS_Store
 .idea/
+
+# Données générées par data-prep (parquets, caches yfinance; publiées sur S3)
+data-prep/data/
