@@ -1,4 +1,4 @@
-import type { AssetClass, ConstraintBlock, Holding, Level, Share, Vehicles } from '../types'
+import type { AssetClass, ConstraintBlock, FactorId, Holding, Level, Share, Vehicles } from '../types'
 
 export interface CatalogItem {
   id: string
@@ -89,9 +89,26 @@ export const BLOCKS: Record<ConstraintBlock, { title: string; hint: string; item
       { id: 'qualite', label: 'Qualité', hint: 'Des entreprises rentables, peu endettées.' },
       { id: 'momentum', label: 'Momentum', hint: 'Des titres qui montent depuis plusieurs mois.' },
       { id: 'value', label: 'Value', hint: 'Des titres jugés bon marché par rapport à leurs résultats.' },
+      { id: 'croissance', label: 'Croissance', hint: 'Des entreprises dont les ventes et les profits augmentent vite.' },
     ],
   },
 }
+
+/**
+ * Lecture des facteurs au tableau de bord. `low` décrit une exposition négative : « Value » négatif veut dire des
+ * titres plutôt chers, pas un mauvais portefeuille.
+ */
+export const FACTOR_VIEW: Record<FactorId, { label: string; high: string; low: string; ends: [string, string] }> = {
+  qualite: { label: 'Qualité', high: 'plus rentables, moins endettées', low: 'moins rentables ou plus endettées', ends: ['Fragiles', 'Solides'] },
+  value: { label: 'Value', high: 'plutôt bon marché', low: 'plutôt chères', ends: ['Chères', 'Bon marché'] },
+  momentum: { label: 'Momentum', high: 'en hausse depuis des mois', low: 'en retard sur leur groupe', ends: ['En retard', 'En hausse'] },
+  croissance: { label: 'Croissance', high: 'ventes et profits en forte hausse', low: 'croissance plus lente', ends: ['Lente', 'Rapide'] },
+  taille: { label: 'Petites capitalisations', high: 'plus petites entreprises', low: 'plus grandes entreprises', ends: ['Grandes', 'Petites'] },
+}
+export const FACTOR_IDS = Object.keys(FACTOR_VIEW) as FactorId[]
+
+/** Seuil visé par niveau (mêmes valeurs que FACTOR_LEVELS de backend/src/invest_agents/monport.py). */
+export const FACTOR_TARGETS: Record<Exclude<Level, 0>, number> = { 2: 0.5, 1: 0.2, [-1]: -0.2, [-2]: -0.5 }
 
 /** Somme des pourcentages saisis, et s'il reste un élément neutre (libre) parmi `ids`. */
 export function shareTotal(values: Record<string, Share>, ids: string[]) {
@@ -166,7 +183,8 @@ export const THEME_PRESETS: ThemePreset[] = [
 export interface UniverseLine extends Omit<Holding, 'weight'> {
   region?: string
   theme?: string
-  factor?: string
+  /** Seulement pour une action détenue en direct (les FNB n'ont pas de score). */
+  scores?: Partial<Record<FactorId, number>>
   fee: number
 }
 
@@ -184,10 +202,15 @@ export const UNIVERSE: UniverseLine[] = [
   { ticker: 'THM-FIN', name: 'FNB banques canadiennes', assetClass: 'actions', theme: 'finance', fee: 0.3 },
   { ticker: 'THM-CON', name: 'FNB consommation', assetClass: 'actions', theme: 'consommation', fee: 0.35 },
   { ticker: 'THM-IND', name: 'FNB infrastructures', assetClass: 'actions', theme: 'industrie', fee: 0.4 },
-  { ticker: 'FAC-PC', name: 'FNB petites capitalisations', assetClass: 'actions', factor: 'taille', fee: 0.3 },
-  { ticker: 'FAC-QL', name: 'FNB qualité', assetClass: 'actions', factor: 'qualite', fee: 0.25 },
-  { ticker: 'FAC-MO', name: 'FNB momentum', assetClass: 'actions', factor: 'momentum', fee: 0.28 },
-  { ticker: 'FAC-VA', name: 'FNB value', assetClass: 'actions', factor: 'value', fee: 0.25 },
+  // Actions détenues en direct (fictives), avec leurs scores de facteurs : seules elles en ont, comme dans l'univers réel.
+  { ticker: 'TIT-BNQ', name: 'Banque Laurentides (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: 0.6, value: 0.9, momentum: 0.2, croissance: -0.3, taille: -1.1 } },
+  { ticker: 'TIT-RAI', name: 'Rail Boréal (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: 1.2, value: -0.4, momentum: 0.5, croissance: 0.3, taille: -0.9 } },
+  { ticker: 'TIT-LOG', name: 'Logiciels Nordik (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: 0.9, value: -1.3, momentum: 1.1, croissance: 1.6, taille: -0.4 } },
+  { ticker: 'TIT-EPI', name: 'Épiceries du Fleuve (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: 0.7, value: 0.1, momentum: -0.3, croissance: -0.2, taille: 0.2 } },
+  { ticker: 'TIT-MIN', name: 'Mines Abitibi (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: -0.8, value: 1.4, momentum: -0.6, croissance: 0.4, taille: 0.9 } },
+  { ticker: 'TIT-SAN', name: 'Biotech Saint-Laurent (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: -1.1, value: -0.7, momentum: 0.8, croissance: 1.2, taille: 1.3 } },
+  { ticker: 'TIT-ENE', name: 'Hydro Laurentie (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: 0.4, value: 0.5, momentum: -0.1, croissance: -0.5, taille: -0.2 } },
+  { ticker: 'TIT-DET', name: 'Détail Prairie (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: -0.3, value: 0.8, momentum: -0.9, croissance: -0.6, taille: 1.0 } },
   { ticker: 'OBL-GV', name: 'FNB obligations gouvernementales canadiennes', assetClass: 'obligations', fee: 0.09 },
   { ticker: 'OBL-SO', name: 'FNB obligations de sociétés', assetClass: 'obligations', fee: 0.15 },
   { ticker: 'IMM-CA', name: 'FNB fiducies immobilières (FPI)', assetClass: 'immobilier', fee: 0.3 },

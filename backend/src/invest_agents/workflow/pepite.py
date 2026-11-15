@@ -109,8 +109,11 @@ Règles communes
 - Le code traduit lui-même le questionnaire et l'ajoute aux profils: les exclusions dans les 3, « FNB seulement »
   ({direct}) et « titres individuels seulement » (exclude_instrument_type), et les pourcentages saisis par le client,
   imposés à ± 2 points dans les profils qui suivent ses préférences (min/max_asset_class_weight pour les classes,
-  min/max_country_share et min/max_sector_share pour les régions et les thématiques). Ne les réécris pas: ce que tu
-  écris sur les mêmes cibles est remplacé. Un élément neutre reste libre. Les facteurs n'ont pas d'équivalent.
+  min/max_country_share et min/max_sector_share pour les régions et les thématiques), et les facteurs (taille ->
+  small_cap, qualite -> quality, momentum, value, croissance -> growth: Imposer -> min_factor_exposure 0.5 dur;
+  Plus -> min_factor_exposure 0.2; Moins -> max_factor_exposure -0.2; Exclure -> max_factor_exposure -0.5 dur,
+  dans les 3 profils; aucun avec FNB seulement). Ne les réécris pas: ce que tu écris sur les mêmes cibles est
+  remplacé. Un élément neutre reste libre.
 - Utilise exactement les libellés de cibles du catalogue.
 - Le reste du profil de risque est ajouté par le code: plafond de volatilité, aversion au risque donnée à l'optimiseur,
   part d'obligations des portefeuilles qui suivent le profil. N'écris ni max_volatility ni plancher d'obligations.

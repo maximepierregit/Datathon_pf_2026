@@ -19,6 +19,7 @@ import pandas as pd
 
 from .config import get_capm_benchmark, get_return_method, get_settings
 from .data import OptimizerData, prepare_optimizer_data
+from .factors import available_factors
 from .schemas import PortfolioMetrics
 
 logger = logging.getLogger(__name__)
@@ -202,6 +203,7 @@ class Market:
             "asset_class": sorted(a["asset_class"].dropna().unique().tolist()),
             "instrument_type": sorted(a["instrument_type"].dropna().astype(str).unique().tolist()),
             "symbol": sorted(a.index.tolist()),
+            "factor": available_factors(a.index),
         }
 
     def search(self, query: str, limit: int = 10) -> list[dict]:

@@ -1,7 +1,7 @@
 // Moteur d'exemple côté front : il imite ce que feront les agents Strands et l'optimiseur Python,
 // pour que l'interface fonctionne avant le branchement du backend.
-import { CLASS_ASSUMPTIONS, CLASS_LABELS, BLOCKS, shownClasses, UNIVERSE, type UniverseLine } from '../data/catalog'
-import type { AssetClass, Constraints, Holding, Level, Metrics, Portfolio, PortfolioId, Profile, RiskNote, Share } from '../types'
+import { CLASS_ASSUMPTIONS, CLASS_LABELS, BLOCKS, FACTOR_IDS, shownClasses, UNIVERSE, type UniverseLine } from '../data/catalog'
+import type { AssetClass, Constraints, FactorView, Holding, Level, Metrics, Portfolio, PortfolioId, Profile, RiskNote, ScoredStock, Share } from '../types'
 
 const CLASSES = Object.keys(CLASS_LABELS) as AssetClass[]
 const LINE_CAP = 0.4
@@ -125,16 +125,28 @@ function lineWeights(id: PortfolioId, c: Constraints, cw: Record<AssetClass, num
   }
   const scale = { prudent: 0.5, equilibre: 1, conviction: 1.8 }[id]
 
-  // Actions : les thématiques fixées en % et les facteurs prennent leur part, le reste se répartit par région.
-  // « Ton profil » ignore les pourcentages de thématiques et de régions.
+  // Actions : les thématiques fixées en % prennent leur part, puis les actions détenues en direct, le reste se répartit
+  // par région. « Ton profil » ignore les pourcentages de thématiques et de régions.
   const follows = id !== 'prudent'
   let eqLeft = cw.actions
-  for (const line of UNIVERSE.filter((u) => u.theme || u.factor)) {
-    const wanted = line.theme ? (follows ? shareOf(c.themes[line.theme]) : undefined) : undefined
-    const l = line.factor ? factor(c, line.factor) : 0
-    const share = Math.min(eqLeft, wanted !== undefined ? cw.actions * wanted : l > 0 ? cw.actions * (l === 2 ? 0.16 : 0.08) * scale : 0)
+  for (const line of UNIVERSE.filter((u) => u.theme)) {
+    const wanted = follows ? shareOf(c.themes[line.theme!]) : undefined
+    if (!wanted || c.vehicles === 'titres') continue
+    const share = Math.min(eqLeft, cw.actions * wanted)
     push(line, share)
     eqLeft -= share
+  }
+  // Actions détenues en direct (sauf FNB seulement ; toute la part actions avec des titres seulement) : poids penchés
+  // vers les facteurs demandés, comme l'optimiseur.
+  const stocks = UNIVERSE.filter((u) => u.scores)
+  if (c.vehicles !== 'fnb' && stocks.length) {
+    const tilt = stocks.map((u) =>
+      Math.exp(0.7 * scale * FACTOR_IDS.reduce((s, f) => s + factor(c, f) * (u.scores![f] ?? 0), 0)),
+    )
+    const tiltSum = tilt.reduce((a, b) => a + b, 0)
+    const sleeve = eqLeft * (c.vehicles === 'titres' ? 1 : 0.35)
+    stocks.forEach((u, i) => push(u, (sleeve * tilt[i]) / tiltSum))
+    eqLeft -= sleeve
   }
   const baseRegion: Record<string, number> = { canada: 0.3, usa: 0.4, europe: 0.15, asie: 0.08, emergents: 0.07 }
   const regionValues = follows ? c.regions : Object.fromEntries(Object.entries(c.regions).filter(([, v]) => v === 'exclure'))
@@ -180,6 +192,22 @@ export function allocationOf(holdings: Holding[]): Record<AssetClass, number> {
   const a = Object.fromEntries(CLASSES.map((k) => [k, 0])) as Record<AssetClass, number>
   for (const h of holdings) a[h.assetClass] += h.weight
   return a
+}
+
+/**
+ * Exposition aux facteurs : moyenne des scores des actions notées, pondérée par leur poids.
+ * Mêmes règles que factors.exposures() et to_portfolio() de backend/src/invest_agents/.
+ */
+export function factorsOf(holdings: Holding[]): FactorView {
+  const stocks: ScoredStock[] = holdings.flatMap((h) => {
+    const scores = UNIVERSE.find((u) => u.ticker === h.ticker)?.scores
+    return scores ? [{ ticker: h.ticker, name: h.name, weight: h.weight, scores }] : []
+  })
+  const coverage = stocks.reduce((s, x) => s + x.weight, 0)
+  const exposure: FactorView['exposure'] = {}
+  if (coverage > 0)
+    for (const f of FACTOR_IDS) exposure[f] = stocks.reduce((s, x) => s + x.weight * (x.scores[f] ?? 0), 0) / coverage
+  return { coverage, exposure, stocks: stocks.sort((a, b) => b.weight - a.weight) }
 }
 
 export function metricsOf(holdings: Holding[]): Metrics {
@@ -237,6 +265,7 @@ export function buildPortfolio(id: PortfolioId, score: number, c: Constraints): 
     holdings,
     allocation: allocationOf(holdings),
     metrics: metricsOf(holdings),
+    factors: factorsOf(holdings),
     warnings,
     // Le moteur applique toujours la limite de 40 % : le juge n'a rien à redire.
     agentNotes: [...notes, 'Le juge confirme que ce portefeuille respecte tes limites.'],

@@ -39,6 +39,8 @@ class ConstraintType(str, Enum):
     MAX_SECTOR_SHARE = "max_sector_share"
     MIN_COUNTRY_SHARE = "min_country_share"
     MAX_COUNTRY_SHARE = "max_country_share"
+    MIN_FACTOR_EXPOSURE = "min_factor_exposure"
+    MAX_FACTOR_EXPOSURE = "max_factor_exposure"
 
 
 class Constraint(BaseModel):
@@ -53,7 +55,9 @@ class Constraint(BaseModel):
     value: Optional[float] = Field(
         default=None,
         description="Valeur numérique: fraction entre 0 et 1 pour les poids, la volatilité et le rendement "
-        "(0.10 = 10 %), nombre entier pour les comptes de positions. Null pour les exclusions.",
+        "(0.10 = 10 %), nombre entier pour les comptes de positions, score en écarts-types entre -3 et 3 pour "
+        "l'exposition à un facteur (0.5 = un demi écart-type au-dessus de la moyenne du secteur). "
+        "Null pour les exclusions.",
     )
     hard: bool = Field(
         default=True,
