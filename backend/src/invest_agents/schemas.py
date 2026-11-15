@@ -34,6 +34,11 @@ class ConstraintType(str, Enum):
     MIN_ASSET_CLASS_WEIGHT = "min_asset_class_weight"
     MAX_SYMBOL_WEIGHT = "max_symbol_weight"
     MIN_SYMBOL_WEIGHT = "min_symbol_weight"
+    # Parts de la poche actions (et non du portefeuille entier): seules les actions en direct ont un secteur et un pays.
+    MIN_SECTOR_SHARE = "min_sector_share"
+    MAX_SECTOR_SHARE = "max_sector_share"
+    MIN_COUNTRY_SHARE = "min_country_share"
+    MAX_COUNTRY_SHARE = "max_country_share"
     MIN_FACTOR_EXPOSURE = "min_factor_exposure"
     MAX_FACTOR_EXPOSURE = "max_factor_exposure"
 
@@ -44,7 +49,8 @@ class Constraint(BaseModel):
     type: ConstraintType
     target: Optional[str] = Field(
         default=None,
-        description="Secteur, pays, classe d'actifs ou symbole visé. Null si le type n'a pas de cible.",
+        description="Secteur, pays, classe d'actifs ou symbole visé. Pour les *_share, un ou plusieurs libellés "
+        "séparés par « | » (ex.: \"France|Germany\"). Null si le type n'a pas de cible.",
     )
     value: Optional[float] = Field(
         default=None,
@@ -224,6 +230,11 @@ class RiskIssue(BaseModel):
     detail: str
     severity: Literal["low", "medium", "high"]
     portfolio_id: Optional[str] = Field(default=None, description="Null si l'enjeu concerne le profil en général")
+    sources: list[str] = Field(
+        default_factory=list,
+        description="1 à 3 identifiants de `preuves` qui prouvent ce point (ex.: pire_baisse, crypto, inflation_ca). "
+        "Seulement des identifiants de la liste reçue.",
+    )
 
 
 class RiskReport(BaseModel):
@@ -262,6 +273,11 @@ class PepiteReview(BaseModel):
         description="Questions tutoyées à poser au client pour clarifier une incohérence ou une réponse ambiguë. "
         "Liste vide si le profil est cohérent.",
     )
+    risk_explanation: str = Field(
+        default="",
+        description="2 ou 3 phrases tutoyées, sans formule: quelles réponses ont le plus pesé sur ton niveau de risque, "
+        "et ce que ton aversion au risque change pour les gestionnaires. Seulement les chiffres de compute_risk_profile.",
+    )
 
 
 class PepiteCheck(ProfileAssessment):
@@ -271,6 +287,7 @@ class PepiteCheck(ProfileAssessment):
     coherent: bool
     issues: list[CoherenceIssue] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
+    risk_explanation: str = ""
     risk_position: float = Field(default=0.5, ge=0, le=1, description="0 très prudent … 1 très audacieux")
     risk_aversion: float = Field(default=7.0, ge=1, le=25, description="Coefficient A: 1 très audacieux … 25 très prudent")
 

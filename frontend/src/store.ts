@@ -1,7 +1,8 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
+import { shownClasses } from './data/catalog'
 import { buildAll, emptyConstraints, PORTFOLIO_META, riskScore, WINNER_META } from './lib/engine'
-import type { BackendPortfolio, ChatMsg, Constraints, ConstraintBlock, Contribution, DashboardLevel, Level, Portfolio, PortfolioId, Profile, ProfileCheck, RiskNote, Vehicles } from './types'
+import type { BackendPortfolio, ChatMsg, Constraints, ConstraintBlock, Contribution, DashboardLevel, Level, Portfolio, PortfolioId, Profile, ProfileCheck, RiskNote, Share, ShareBlock, Vehicles } from './types'
 
 export const DEFAULT_PROFILE: Profile = {
   age: 35,
@@ -46,7 +47,13 @@ export interface State {
   disclaimerSeen: boolean
   setProfile: (patch: Partial<Profile>) => void
   setContribution: (patch: Partial<Contribution>) => void
-  setLevel: (block: ConstraintBlock, id: string, level: Level) => void
+  /** `null` : neutre (la clé disparaît). */
+  setShare: (block: ShareBlock, id: string, share: Share | null) => void
+  setShares: (block: ShareBlock, values: Record<string, Share>) => void
+  setFactor: (id: string, level: Level) => void
+  /** Tout un bloc remis à neutre (ses clés disparaissent). */
+  resetBlock: (block: ConstraintBlock) => void
+  /** Retire ce que le nouveau véhicule ne permet pas : classes hors FNB, pourcentages de régions et de thèmes en FNB seulement. */
   setVehicles: (vehicles: Vehicles) => void
   clearConstraints: () => void
   setCheck: (check: ProfileCheck | null) => void
@@ -78,7 +85,7 @@ export function defaultDashboardLevel(comfort: number): DashboardLevel {
 
 function merge(base: Constraints, patch: Partial<Constraints>): Constraints {
   const out = structuredClone(base)
-  for (const k of Object.keys(patch) as ConstraintBlock[]) Object.assign(out[k], patch[k])
+  for (const k of Object.keys(patch).filter((k) => k !== 'vehicles') as ConstraintBlock[]) Object.assign(out[k], patch[k])
   return out
 }
 
@@ -114,9 +121,33 @@ export const useApp = create<State>()(
       disclaimerSeen: false,
       setProfile: (patch) => set((s) => ({ profile: { ...s.profile, ...patch } })),
       setContribution: (patch) => set((s) => ({ contribution: { ...s.contribution, ...patch } })),
-      setLevel: (block, id, level) =>
-        set((s) => ({ constraints: { ...s.constraints, [block]: { ...s.constraints[block], [id]: level } } })),
-      setVehicles: (vehicles) => set((s) => ({ constraints: { ...s.constraints, vehicles } })),
+      setShare: (block, id, share) =>
+        set((s) => {
+          const values = { ...s.constraints[block] }
+          if (share === null) delete values[id]
+          else values[id] = share
+          return { constraints: { ...s.constraints, [block]: values } }
+        }),
+      setShares: (block, values) => set((s) => ({ constraints: { ...s.constraints, [block]: values } })),
+      setFactor: (id, level) => set((s) => ({ constraints: { ...s.constraints, factors: { ...s.constraints.factors, [id]: level } } })),
+      resetBlock: (block) => set((s) => ({ constraints: { ...s.constraints, [block]: {} } })),
+      setVehicles: (vehicles) =>
+        set((s) => {
+          const shown: string[] = shownClasses(vehicles)
+          const keep = (values: Record<string, Share>, ok: (id: string, v: Share) => boolean) =>
+            Object.fromEntries(Object.entries(values).filter(([id, v]) => ok(id, v)))
+          const noPercent = (_: string, v: Share) => vehicles !== 'fnb' || v === 'exclure'
+          const c = s.constraints
+          return {
+            constraints: {
+              ...c,
+              vehicles,
+              classes: keep(c.classes, (id) => shown.includes(id)),
+              regions: keep(c.regions, noPercent),
+              themes: keep(c.themes, noPercent),
+            },
+          }
+        }),
       clearConstraints: () => set({ constraints: emptyConstraints() }),
       setCheck: (check) => set({ check }),
       setSession: (session) => set({ session }),
@@ -165,6 +196,12 @@ export const useApp = create<State>()(
           disclaimerSeen: false,
         }),
     }),
-    { name: 'bas-de-laine', storage: createJSONStorage(() => sessionStorage) },
+    {
+      name: 'bas-de-laine',
+      storage: createJSONStorage(() => sessionStorage),
+      // Version 1 : pourcentages au lieu de l'échelle Exclure … Imposer. Les anciennes préférences repartent de zéro.
+      version: 1,
+      migrate: (persisted, version) => (version < 1 ? { ...(persisted as State), constraints: emptyConstraints() } : persisted) as State,
+    },
   ),
 )

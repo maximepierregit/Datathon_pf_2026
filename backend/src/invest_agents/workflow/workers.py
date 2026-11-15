@@ -15,22 +15,25 @@ from typing import Optional
 from strands import tool
 
 from ..agents.base import AgentError, AgentHandle
-from ..agents.cro import diagnostics
+from ..diagnostics import diagnostics
 from ..agents.portfolio_manager import make_pm_worker, run_pm_worker
 from ..catalog import describe, evaluate, excluded_mask
 from ..mandates import Mandate
+from ..evidence import brief
 from ..monport import (
     BASE_NAMES,
     SLOTS,
     VARIANT_NAMES,
     build_profiles,
     ensure_feasible,
+    evidence_for,
     front,
     guidance_for,
     objective_for,
     pick_winner,
     status,
 )
+from .. import gateway
 from ..tools import MACRO_PROMPT, make_macro_tools
 from ..schemas import (
     ConstraintPlan,
@@ -59,7 +62,9 @@ async def apply_plan(session: Session, plan: Optional[ConstraintPlan]) -> int:
     """Valide les 3 profils de Pépite (catalogue, exclusions, limites du profil). Retourne le nombre de profils que le
     code a dû remplacer. Sans plan, le code écrit lui-même les profils."""
     market = session.market
-    profiles, replaced = build_profiles(plan, session.check, list(session.form.constraints), market.allowed_values())
+    # À la relance du chat, Pépite réécrit elle-même les pourcentages que le client a changés.
+    profiles, replaced = build_profiles(plan, session.check, list(session.form.constraints), market.allowed_values(),
+                                        impose=session.phase != "rebuild")
     notes: dict[str, list[str]] = {s: [] for s in SLOTS}
     for slot in SLOTS:
         constraints, note = await asyncio.to_thread(ensure_feasible, market, profiles[slot][1])
@@ -96,6 +101,12 @@ Les `warnings` s'affichent telles quelles au client, souvent débutant, à côt�
   ni volatilité, ni VaR, ni drawdown, ni Sharpe, ni régime macro, ni symbole boursier sans son nom.
 - Trois mises en garde au plus, les plus importantes d'abord.
 
+TES PREUVES
+`preuves` liste les faits calculés par le code, chacun sous un identifiant (`pire_baisse`, `mauvaise_annee`, `crypto`,
+`secteur`, `inflation_ca`…). Chaque mise en garde cite dans `sources` 1 à 3 identifiants de cette liste, ceux qui la
+prouvent: le client les voit sous ta mise en garde, avec leur source et leurs données. Le chiffre de ton `detail`
+vient d'une preuve citée. Une mise en garde qu'aucune preuve n'appuie ne s'écrit pas.
+
 RÈGLES
 - Chaque point s'appuie sur un fait chiffré tiré du contexte ou des outils. N'invente aucun chiffre.
 - Les rendements et risques sont historiques. Ils ne garantissent pas les résultats futurs. Rappelle-le une fois dans le résumé.
@@ -127,6 +138,7 @@ def _portfolio_payload(session: Session, slot: str, p: Portfolio) -> dict:
         "compromis": p.tradeoffs,
         "ecarts": [f"{c.label}: {c.message}" for c in checks if not c.passed],
         "diagnostics": diagnostics(investor, p),
+        "preuves": {k: brief(e) for k, e in evidence_for(p, session.market, session.form).items()},
     }
 
 
@@ -249,12 +261,9 @@ def _judge_tools(session: Session) -> list:
         p = session.portfolios.get(slot)
         if p is None or p.status != "ok":
             return {"error": f"Aucun portefeuille construit pour « {slot} »."}
-        checks = evaluate(session.market, {x.symbol: x.weight for x in p.positions}, session.investors[slot].constraints)
-        return {
-            "all_hard_respected": all(c.passed for c in checks if c.constraint.hard),
-            "checks": [{"label": c.label, "hard": c.constraint.hard, "passed": c.passed, "actual": c.actual,
-                        "limit": c.limit} for c in checks],
-        }
+        return gateway.run("check_portfolio_constraints", market=session.market,
+                           weights={x.symbol: x.weight for x in p.positions},
+                           constraints=session.investors[slot].constraints)
 
     return [check_portfolio_constraints, *make_macro_tools()]
 

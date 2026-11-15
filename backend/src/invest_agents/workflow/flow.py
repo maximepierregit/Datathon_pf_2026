@@ -49,9 +49,11 @@ from ..monport import (
     to_form,
     to_portfolio,
 )
+from .. import gateway
+from ..guardrail import screen
 from ..schemas import PepiteCheck
 from .pepite import build_turn, chat_turn, check_turn, rebuild_turn
-from .session import SESSIONS, Session, review_of
+from .session import SESSIONS, Session, persist, review_of
 from .workers import apply_plan, build_slots, judge_round, names_for
 
 logger = logging.getLogger(__name__)
@@ -80,6 +82,7 @@ async def _verify(session: Session, bus) -> None:
 
 async def check_questionnaire(payload: dict, bus, translator: Translator) -> None:
     profile, prefs = _questionnaire(payload)
+    gateway.prewarm()  # les outils seront prêts quand les gestionnaires en auront besoin
     market = await asyncio.to_thread(get_market)
     form, skipped = to_form(profile, prefs, market)  # valide le profil avant d'appeler le modèle
     session = SESSIONS.create(profile, prefs, form, skipped, market)
@@ -88,6 +91,7 @@ async def check_questionnaire(payload: dict, bus, translator: Translator) -> Non
         await _verify(session, bus)
         check = session.check
     front(bus, {"type": "check", "check": check.model_dump(mode="json"), "session": session.id})
+    await persist(session)
     front(bus, {"type": "done"})
 
 
@@ -153,7 +157,7 @@ def present(session: Session, bus) -> bool:
         front(bus, status("pepite", "done", "Mélanges 80/20 prêts : profil d’abord, préférences d’abord."))
     front(bus, {"type": "portfolios", "session": session.id, "portfolios": {
         p.id: to_portfolio(p, v, market, {"warnings": _warnings_for(session, p.id, sources)}, check.risk_position,
-                           session.skipped, session.notes.get(p.id, []), name, tagline)
+                           session.skipped, session.notes.get(p.id, []), name, tagline, session.form)
         for p, v, name, tagline, sources in presented
     }})
     session.shown_version = session.version
@@ -170,8 +174,9 @@ def _reset_results(session: Session) -> None:
 
 async def build_portfolios(payload: dict, bus, translator: Translator) -> None:
     profile, prefs = _questionnaire(payload)
+    gateway.prewarm()
     market = await asyncio.to_thread(get_market)
-    session = SESSIONS.get(payload.get("session"))
+    session = await SESSIONS.get_or_restore(payload.get("session"), market)
     if session and (session.profile != profile or session.prefs != prefs):
         session = None  # le client a changé son questionnaire depuis la vérification: nouvelle conversation
     if session is None:  # pas de session (ou perdue): on repart du questionnaire et de la vérification renvoyés
@@ -191,6 +196,10 @@ async def build_portfolios(payload: dict, bus, translator: Translator) -> None:
             _bind(session, bus, translator)
         _reset_results(session)
         adjustment = str(payload.get("adjustment") or "").strip()[:MAX_ADJUSTMENT]
+        refusal = await asyncio.to_thread(screen, adjustment)
+        if refusal:  # l'ajustement est écarté, la construction continue avec le questionnaire seul
+            front(bus, pepite(refusal + " Je construis tes portefeuilles avec ton questionnaire seulement."))
+            adjustment = ""
         session.rebuilds_left = get_runtime_settings().max_pm_retries
 
         front(bus, pepite("C’est parti! J’écris les consignes de tes trois gestionnaires."))
@@ -206,11 +215,13 @@ async def build_portfolios(payload: dict, bus, translator: Translator) -> None:
         if present(session, bus):
             front(bus, pepite(reply or ("Voilà! Ton portefeuille t’attend." if session.coherent
                                         else "Voilà! Trois propositions t’attendent. C’est toi qui choisis.")))
+            await persist(session)
     front(bus, {"type": "done"})
 
 
 async def chat(payload: dict, bus, translator: Translator) -> None:
-    session = SESSIONS.get(payload.get("session"))
+    market = await asyncio.to_thread(get_market)
+    session = await SESSIONS.get_or_restore(payload.get("session"), market)
     message = str(payload.get("message") or "").strip()[:MAX_ADJUSTMENT]
     if session is None or not session.portfolios:
         front(bus, {"type": "error", "message": "Cette conversation a expiré. Relance la construction de tes portefeuilles."})
@@ -220,6 +231,11 @@ async def chat(payload: dict, bus, translator: Translator) -> None:
         return
     if session.lock.locked():
         front(bus, {"type": "error", "message": "Une demande est déjà en cours pour cette conversation."})
+        return
+    refusal = await asyncio.to_thread(screen, message)
+    if refusal:
+        front(bus, {**pepite(refusal), "final": True})
+        front(bus, {"type": "done"})
         return
     async with session.lock:
         _bind(session, bus, translator)
@@ -233,11 +249,13 @@ async def chat(payload: dict, bus, translator: Translator) -> None:
         session.pending_request = request[:MAX_ADJUSTMENT]
         front(bus, status("pepite", "done", "Réponse prête."))
         front(bus, {**pepite(reply), "final": True, **({"ready": True, "request": request} if request else {})})
+        await persist(session)
     front(bus, {"type": "done"})
 
 
 async def rebuild(payload: dict, bus, translator: Translator) -> None:
-    session = SESSIONS.get(payload.get("session"))
+    market = await asyncio.to_thread(get_market)
+    session = await SESSIONS.get_or_restore(payload.get("session"), market)
     if session is None or not session.portfolios:
         front(bus, {"type": "error", "message": "Cette conversation a expiré. Relance la construction de tes portefeuilles."})
         return
@@ -266,6 +284,7 @@ async def rebuild(payload: dict, bus, translator: Translator) -> None:
         front(bus, status("pepite", "done", "Portefeuilles prêts."))
         if present(session, bus):
             front(bus, pepite(reply or "Voilà! Tes portefeuilles tiennent compte de tes changements."))
+            await persist(session)
     front(bus, {"type": "done"})
 
 

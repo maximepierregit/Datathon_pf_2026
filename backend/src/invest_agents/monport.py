@@ -17,10 +17,11 @@ import numpy as np
 from pydantic import ValidationError
 
 from .runtime import get_runtime_settings
-from .catalog import DIMENSION_COLUMN, detect_conflicts, excluded_mask, validate_all
+from .catalog import (DIMENSION_COLUMN, SEP, SHARE_TYPES, describe, detect_conflicts, excluded_mask, share_targets,
+                      validate_all)
 from .market import UNKNOWN, Market
 from .events import EventBus
-from . import factors
+from . import evidence, factors
 from .backtest import backtest, risk_contribution
 from .allocator import optimize
 from .tools import factor_fits
@@ -89,6 +90,9 @@ THEME_SECTORS = {
 # Titres détenus en direct, écartés par « FNB seulement ». Par type d'instrument, pas par classe d'actifs: les FNB
 # d'actions ont la classe « Equity », comme les actions.
 DIRECT_TYPES = ("Stock", "Cryptocurrency")
+FUND_TYPES = ("ETF",)  # écartés par « Titres individuels seulement »
+# Classes proposées au client: jamais les liquidités; seulement actions et crypto pour des titres individuels.
+SHOWN_CLASSES = {"titres": ["actions", "crypto"]}
 BLOCK_LABELS = {"classes": "classe", "regions": "région", "themes": "thématique", "factors": "facteur"}
 # Facteurs: identifiants du frontend (data/catalog.ts) -> facteurs du moteur (factors.py).
 FACTOR_TARGETS = {"taille": "small_cap", "qualite": "quality", "momentum": "momentum", "value": "value",
@@ -98,12 +102,15 @@ FACTOR_LEVELS = {2: 0.5, 1: 0.2, -1: -0.2, -2: -0.5}
 FACTOR_NOTE = "MonPort: factors."
 FRONT_FACTORS = {engine: front for front, engine in FACTOR_TARGETS.items()}
 
-# Poids associés à chaque niveau: (Moins = plafond souple, Plus = plancher souple, Imposer = plancher dur)
-LEVEL_WEIGHTS = {"classes": (0.25, 0.15, 0.10), "regions": (0.10, 0.10, 0.05), "themes": (0.10, 0.10, 0.05)}
+# Classes, régions, thématiques: « exclure », ou un pourcentage saisi (absent = neutre, libre pour l'optimiseur).
+# Classes: % du portefeuille. Régions et thématiques: % de la poche actions, tenu par les actions détenues en direct
+# (les FNB n'ont ni pays ni secteur connu, voir `catalog.SHARE_TYPES`). Imposé à ± SHARE_TOLERANCE.
+EXCLUDE = "exclure"
+SHARE_TOLERANCE = 0.02
 DIMENSION_TYPES = {
     "classes": (T.EXCLUDE_ASSET_CLASS, T.MAX_ASSET_CLASS_WEIGHT, T.MIN_ASSET_CLASS_WEIGHT),
-    "regions": (T.EXCLUDE_COUNTRY, T.MAX_COUNTRY_WEIGHT, T.MIN_COUNTRY_WEIGHT),
-    "themes": (T.EXCLUDE_SECTOR, T.MAX_SECTOR_WEIGHT, T.MIN_SECTOR_WEIGHT),
+    "regions": (T.EXCLUDE_COUNTRY, T.MAX_COUNTRY_SHARE, T.MIN_COUNTRY_SHARE),
+    "themes": (T.EXCLUDE_SECTOR, T.MAX_SECTOR_SHARE, T.MIN_SECTOR_SHARE),
 }
 
 LOSS_BY_REACTION = {0: 10.0, 1: 15.0, 2: 25.0, 3: 35.0}  # baisse de 20 %: je vends tout … j'investis plus
@@ -175,6 +182,23 @@ def direct_types(allowed: dict[str, list[str]]) -> list[str]:
     return [present[t.lower()] for t in DIRECT_TYPES if t.lower() in present]
 
 
+def fund_types(allowed: dict[str, list[str]]) -> list[str]:
+    """Les types d'instrument des FNB présents dans l'univers."""
+    present = {v.lower(): v for v in allowed.get("instrument_type", [])}
+    return [present[t.lower()] for t in FUND_TYPES if t.lower() in present]
+
+
+def share_of(choice: Any) -> Optional[float]:
+    """Le pourcentage saisi, en fraction; None pour « exclure », neutre ou une valeur illisible."""
+    if isinstance(choice, bool) or not isinstance(choice, (int, float)):
+        return None
+    return _clamp(float(choice) / 100)
+
+
+def shown_classes(prefs: dict) -> list[str]:
+    return SHOWN_CLASSES.get(str(prefs.get("vehicles")), [k for k in CLASSES if k != "liquidites"])
+
+
 def factor_constraints(prefs: dict, allowed: dict[str, list[str]]) -> tuple[list[Constraint], list[str]]:
     """Échelle des facteurs -> exposition minimale ou maximale (z-score moyen des actions détenues en direct)."""
     chosen = {f: level for f, level in (prefs.get("factors") or {}).items() if level}
@@ -202,35 +226,42 @@ def is_exclusion(c: Constraint) -> bool:
 
 
 def preference_constraints(prefs: dict, allowed: dict[str, list[str]]) -> tuple[list[Constraint], list[str]]:
-    """Traduit l'échelle Exclure … Imposer en contraintes du catalogue. Retourne aussi ce qui n'a pas pu l'être."""
+    """Traduit les exclusions et les pourcentages saisis en contraintes dures. Retourne aussi ce qui n'a pas pu l'être."""
     out: list[Constraint] = []
     skipped: list[str] = []
     for block, (exclude, cap, floor) in DIMENSION_TYPES.items():
-        moins, plus, impose = LEVEL_WEIGHTS[block]
-        for item, level in (prefs.get(block) or {}).items():
-            if not level:
+        for item, choice in (prefs.get(block) or {}).items():
+            share = share_of(choice)
+            if choice != EXCLUDE and share is None:
+                continue
+            if block == "classes" and item not in shown_classes(prefs):
                 continue
             targets = _targets(block, item, allowed)
-            # Une région de plusieurs pays ne s'exprime qu'en exclusion: les poids sont par pays.
-            if not targets or (level != -2 and len(targets) > 1 and block == "regions"):
+            if not targets:
                 skipped.append(f"{BLOCK_LABELS[block]} « {item} »")
                 continue
-            for t in targets[:1] if level > 0 else targets:
-                note = f"MonPort: {block}.{item} = {level}"
-                if level == -2:
-                    out.append(Constraint(type=exclude, target=t, hard=True, note=note))
-                elif level == -1:
-                    out.append(Constraint(type=cap, target=t, value=moins, hard=False, note=note))
-                else:
-                    out.append(Constraint(type=floor, target=t, value=impose if level == 2 else plus,
-                                          hard=level == 2, note=note))
+            note = f"MonPort: {block}.{item} = {choice}"
+            if choice == EXCLUDE:
+                out += [Constraint(type=exclude, target=t, hard=True, note=note) for t in targets]
+                continue
+            # Une classe vise une seule classe du dataset; une région ou une thématique, tous ses pays ou secteurs.
+            target = targets[0] if block == "classes" else SEP.join(targets)
+            low, high = share - SHARE_TOLERANCE, share + SHARE_TOLERANCE
+            if low > 0:
+                out.append(Constraint(type=floor, target=target, value=round(low, 4), hard=True, note=note))
+            if high < 1:
+                out.append(Constraint(type=cap, target=target, value=round(high, 4), hard=True, note=note))
     factors_out, factors_skipped = factor_constraints(prefs, allowed)
     out += factors_out
     skipped += factors_skipped
 
-    if prefs.get("vehicles") == "fnb":
+    vehicles = prefs.get("vehicles")
+    if vehicles == "fnb":
         out += [Constraint(type=T.EXCLUDE_INSTRUMENT_TYPE, target=t, hard=True, note="MonPort: FNB seulement")
                 for t in direct_types(allowed)]
+    elif vehicles == "titres":
+        out += [Constraint(type=T.EXCLUDE_INSTRUMENT_TYPE, target=t, hard=True, note="MonPort: titres individuels seulement")
+                for t in fund_types(allowed)]
     return _dedupe(out), skipped
 
 
@@ -310,21 +341,96 @@ def front_score(s: float) -> int:
 
 def coherence_facts(profile: dict, prefs: dict) -> list[str]:
     score, classes = risk_score(profile), prefs.get("classes") or {}
-    crypto, actions = classes.get("crypto", 0), classes.get("actions", 0)
+    crypto, actions = share_of(classes.get("crypto")), share_of(classes.get("actions"))
     out = []
-    if score < 40 and crypto >= 1:
-        out.append("Tu cherches plutôt de la stabilité, mais tu demandes plus de crypto-actifs. Les deux se marient mal : "
+    if score < 40 and crypto:
+        out.append("Tu cherches plutôt de la stabilité, mais tu demandes des crypto-actifs. Les deux se marient mal : "
                    "la crypto peut perdre la moitié de sa valeur en quelques mois.")
-    if score < 40 and actions == 2:
-        out.append("Imposer beaucoup d’actions avec un profil prudent peut te faire vivre des baisses difficiles à supporter.")
-    if score > 65 and actions <= -1:
+    if score < 40 and actions is not None and actions >= 0.7:
+        out.append("Mettre autant d’actions avec un profil prudent peut te faire vivre des baisses difficiles à supporter.")
+    if score > 65 and (classes.get("actions") == EXCLUDE or (actions is not None and actions <= 0.3)):
         out.append("Ton profil est dynamique, mais tu limites les actions : le rendement attendu sera plus faible que ce "
                    "que ton horizon permet.")
-    kept = [k for k in CLASSES if classes.get(k, 0) != -2]
+    if score < 77 and prefs.get("vehicles") == "titres":  # sous « agressif », le profil prévoit des obligations
+        out.append("Avec des titres individuels seulement, ton portefeuille n’aura pas d’obligations : ton profil en "
+                   "prévoit pourtant une part pour amortir les baisses.")
+    kept = [k for k in shown_classes(prefs) if classes.get(k) != EXCLUDE and share_of(classes.get(k)) != 0]
     if len(kept) == 1:
         out.append(f"Tu n’as gardé qu’un seul type de placement ({CLASS_LABELS[kept[0]].lower()}) : ton portefeuille sera "
                    "très peu diversifié.")
     return out
+
+
+def _managers(profile: dict, coherent: bool, adjustment: int) -> dict:
+    check = assess(profile, PepiteReview(summary="", coherent=coherent), adjustment)
+    out = {}
+    for slot in SLOTS:
+        aversion = objective_for(slot, check)[1]
+        out[(VARIANT_NAMES if coherent else BASE_NAMES)[slot]] = (
+            {"objectif": "meilleur rendement pour le risque, sans le profil"} if aversion is None
+            else {"position_S": round(slot_position(check, slot), 3), "aversion_A": aversion})
+    return out
+
+
+def choices_breakdown(constraints: list[Constraint], s: float) -> dict:
+    """Comment les choix du client deviennent des contraintes, et ce que l'optimiseur fait du neutre."""
+    label = risk_label(s)
+    return {
+        "contraintes_du_client": [describe(c) for c in constraints] or ["aucune: tout est neutre"],
+        "pourcentages": f"Un pourcentage saisi devient un plancher et un plafond à ± {SHARE_TOLERANCE * 100:g} points, durs. "
+                        "Classes: part du portefeuille. Régions et thématiques: part de la poche actions, tenue par les "
+                        "actions détenues en direct (un FNB n'a ni pays ni secteur).",
+        "exclusions": "0 % dans les 3 portefeuilles; un facteur à Exclure aussi.",
+        "qui_les_respecte": {"profil_coherent": "les 3 gestionnaires",
+                             "profil_incoherent": "Tes contraintes et Tes préférences; Ton profil ne garde que les exclusions"},
+        "neutre": {
+            "regle": "libre: l'optimiseur répartit lui-même en maximisant rendement − A/2 × variance parmi les placements "
+                     "permis, sous les garde-fous ci-dessous",
+            "plancher_obligations": BOND_FLOOR[label],
+            "plancher_obligations_note": "portefeuilles qui suivent le profil (cohérent: les 3, décalés de ±10 points; "
+                                         "incohérent: Ton profil), logé dans la place que les pourcentages laissent libre",
+            "pas_de_crypto": label in NO_CRYPTO,
+            "poids_max_par_ligne": LINE_CAP,
+            "poids_max_par_titre_direct": round(min(_interpolate(s, STOCK_ANCHORS), LINE_CAP), 3),
+            "volatilite_max": round(_interpolate(s, VOL_ANCHORS), 3),
+            "poids_min_par_placement_retenu": 0.01,
+        },
+    }
+
+
+def risk_breakdown(profile: dict, adjustment: int = 0, constraints: Iterable[Constraint] = ()) -> dict:
+    """Le calcul de A pas à pas, ce que deviennent les choix du client et ce que chaque gestionnaire recevra: Pépite
+    l'explique, elle ne le refait pas. Mêmes étapes que le carnet de Pépite (frontend/src/pages/RiskNotebook.tsx)."""
+    c, t = capacity(profile), tolerance(profile)
+    s = risk_position(profile, adjustment)
+    return {
+        "capacite_C": {"valeur": round(c, 3), "formule": "0,6 × horizon + 0,4 × âge, chacun ramené entre 0 et 1",
+                       "horizon_0_a_1": round(_clamp((min(float(profile.get("horizon", 10)), 20) - 1) / 19), 3),
+                       "age_0_a_1": round(_clamp((75 - float(profile.get("age", 35))) / 50), 3)},
+        "tolerance_T": {"valeur": round(t, 3),
+                        "formule": "0,5 × réaction à une baisse + 0,3 × objectif + 0,2 × aisance",
+                        "reaction_0_a_1": round(_clamp(float(profile.get("lossReaction", 2)) / 3), 3),
+                        "objectif_0_a_1": OBJECTIVE_TOLERANCE.get(str(profile.get("objective")), 0.5),
+                        "aisance_0_a_1": round(_clamp((float(profile.get("comfort", 3)) - 1) / 4), 3)},
+        "position_S": {"valeur": round(s, 3), "formule": "min((C + T) / 2, C + 0,125): la capacité limite la tolérance",
+                       "plafonnee_par_la_capacite": (c + t) / 2 > c + CAPACITY_MARGIN,
+                       "ajustement_en_crans": adjustment},
+        "aversion_A": {"valeur": risk_aversion(s), "echelle": "25 très prudent … 1 très audacieux, interpolée en log",
+                       "sens": "l'optimiseur maximise rendement − A/2 × variance: plus A est grand, plus chaque point "
+                               "de risque doit rapporter"},
+        "tes_choix": choices_breakdown(list(constraints), s),
+        "si_profil_coherent": {
+            "gestionnaires": _managers(profile, True, adjustment),
+            "suite": "3 gestionnaires se font concurrence, chacun relu par le responsable des risques; 3 juges "
+                     "vérifient tes limites; le juge final garde le meilleur",
+        },
+        "si_profil_incoherent": {
+            "gestionnaires": _managers(profile, False, adjustment),
+            "suite": "3 gestionnaires construisent Ton profil, Tes contraintes et Tes préférences, chacun relu par le "
+                     "responsable des risques; 3 juges vérifient; le code mélange le capital 80/20 (profil d'abord, "
+                     "préférences d'abord)",
+        },
+    }
 
 
 def computed_profile(profile: dict) -> dict:
@@ -338,7 +444,7 @@ def assess(profile: dict, review: PepiteReview | PepiteCheck, adjustment: int = 
     """Le profil de risque vient du code; Pépite apporte le texte, la cohérence et, au plus, ±2 crans d'ajustement."""
     s = risk_position(profile, adjustment)
     return PepiteCheck(
-        **review.model_dump(include={"summary", "key_points", "flags", "coherent", "issues"}),
+        **review.model_dump(include={"summary", "key_points", "flags", "coherent", "issues", "risk_explanation"}),
         risk_score=max(1, min(10, round(1 + 9 * s))), risk_label=risk_label(s), risk_position=round(s, 3),
         risk_aversion=risk_aversion(s), suggested_max_volatility=round(_interpolate(s, VOL_ANCHORS), 3),
         suggested_max_position_weight=round(_interpolate(s, STOCK_ANCHORS), 3),
@@ -374,15 +480,20 @@ def _limits(vol: float, weight: float) -> list[Constraint]:
 
 
 def follow_profile(constraints: list[Constraint], floor: float, risk_label: str,
-                   allowed: dict[str, list[str]]) -> list[Constraint]:
+                   allowed: dict[str, list[str]], fixed: Iterable[str] = ()) -> list[Constraint]:
     """Impose la répartition du profil: la part d'obligations et, pour un profil prudent, pas de crypto.
     Ces règles remplacent les poids que les préférences visaient sur les mêmes classes; une exclusion des
-    obligations par le client l'emporte sur le plancher."""
+    obligations par le client l'emporte sur le plancher, comme une classe dont il a fixé le pourcentage (`fixed`)."""
     present = {v.lower(): v for v in allowed["asset_class"]}
+    fixed = {t.lower() for t in fixed}
     bonds = next((present[t.lower()] for t in BOND_TARGETS if t.lower() in present), None)
     cryptos = [present[t.lower()] for t in CRYPTO_TARGETS if t.lower() in present] if risk_label in NO_CRYPTO else []
+    cryptos = [t for t in cryptos if t.lower() not in fixed]
     excluded = {(c.target or "").lower() for c in constraints if c.type is T.EXCLUDE_ASSET_CLASS}
-    if bonds and (floor <= 0 or bonds.lower() in excluded):
+    # Le plancher se loge dans la place que les pourcentages du client laissent libre.
+    floor = min(floor, 1 - sum(c.value or 0 for c in constraints if c.type is T.MIN_ASSET_CLASS_WEIGHT and c.hard
+                                and (c.target or "").lower() in fixed))
+    if bonds and (floor <= 0 or bonds.lower() in excluded or bonds.lower() in fixed):
         bonds = None
     managed = {t.lower() for t in [bonds, *cryptos] if t}
     out = [c for c in constraints if not (c.type in (T.MIN_ASSET_CLASS_WEIGHT, T.MAX_ASSET_CLASS_WEIGHT)
@@ -406,6 +517,17 @@ def promote_preferences(constraints: list[Constraint]) -> list[Constraint]:
             if not detect_conflicts(candidate):
                 out = candidate
     return out
+
+
+def _family(c: Constraint) -> str:
+    """« sector_share », « asset_class_weight »…: le plancher et le plafond d'une même cible forment une famille."""
+    return c.type.value.removeprefix("min_").removeprefix("max_")
+
+
+def impose_targets(constraints: list[Constraint], targets: list[Constraint]) -> list[Constraint]:
+    """Les pourcentages saisis par le client remplacent ce que Pépite a écrit sur les mêmes cibles."""
+    keys = {(_family(c), (c.target or "").lower()) for c in targets}
+    return [c for c in constraints if (_family(c), (c.target or "").lower()) not in keys] + targets
 
 
 def fallback_plan(check: PepiteCheck, prefs: list[Constraint]) -> dict[str, tuple[str, list[Constraint]]]:
@@ -480,13 +602,19 @@ def drop_unreachable_floors(market: Market, constraints: list[Constraint]) -> tu
     hard = [c for c in constraints if c.hard]
     eligible = market.assets[~excluded_mask(market, hard)]
     dropped = []
+    stocks = eligible[eligible["instrument_type"].astype(str).str.lower() == "stock"]
     for c in hard:
         column = _floor_column(c)
         if column and not (eligible[column].astype(str).str.lower() == c.target.lower()).any():
             dropped.append(c)
+        elif c.type in SHARE_TYPES and SHARE_TYPES[c.type][1] == "min" and (c.value or 0) > 0:
+            share_column = DIMENSION_COLUMN[SHARE_TYPES[c.type][0]]
+            members = {t.lower() for t in share_targets(c)}
+            if not stocks[share_column].astype(str).str.lower().isin(members).any():
+                dropped.append(c)
     if not dropped:
         return constraints, None
-    names = ", ".join(f"« {c.target} »" for c in dropped)
+    names = ", ".join(f"« {', '.join(share_targets(c))} »" for c in dropped)
     note = f"Avec tes choix, aucun placement ne correspond à {names} : je n’ai pas pu en garantir une part."
     return [c for c in constraints if c not in dropped], note
 
@@ -513,6 +641,11 @@ def _raise_volatility_cap(market: Market, constraints: list[Constraint]) -> tupl
         if column := _floor_column(c):
             group = eligible[eligible[column].astype(str).str.lower() == c.target.lower()]
             picks += group.sort_values("sharpe", ascending=False).index[:3].tolist()
+        elif c.type in SHARE_TYPES and SHARE_TYPES[c.type][1] == "min":
+            members = {t.lower() for t in share_targets(c)}
+            group = eligible[(eligible["instrument_type"].astype(str).str.lower() == "stock")
+                             & eligible[DIMENSION_COLUMN[SHARE_TYPES[c.type][0]]].astype(str).str.lower().isin(members)]
+            picks += group.sort_values("sharpe", ascending=False).index[:3].tolist()
     picks = list(dict.fromkeys(picks))[: get_runtime_settings().max_assets_per_portfolio]
     others = [c for c in constraints if not (c.hard and c.type is T.MAX_VOLATILITY)]
     lowest = optimize(market, picks, "min_volatility", others)
@@ -524,16 +657,24 @@ def _raise_volatility_cap(market: Market, constraints: list[Constraint]) -> tupl
 
 
 def build_profiles(plan: Optional[ConstraintPlan], check: PepiteCheck, prefs: list[Constraint],
-                   allowed: dict[str, list[str]]) -> tuple[dict[str, tuple[str, list[Constraint]]], int]:
-    """Retourne les 3 profils par slot et le nombre de profils remplacés par ceux du code."""
+                   allowed: dict[str, list[str]], impose: bool = True) -> tuple[dict[str, tuple[str, list[Constraint]]], int]:
+    """Retourne les 3 profils par slot et le nombre de profils remplacés par ceux du code.
+
+    `impose`: les pourcentages du questionnaire remplacent ceux de Pépite dans les profils qui suivent les préférences.
+    Faux pour une relance du chat, où Pépite réécrit elle-même ce que le client a changé."""
     fallback = fallback_plan(check, prefs)
     floors = bond_floors(check)
     exclusions = [c for c in prefs if is_exclusion(c)]
+    # Tout le reste du questionnaire: pourcentages et facteurs, imposés tels quels.
+    targets = [c for c in prefs if not is_exclusion(c)]
     proposed = {p.slot: p for p in (plan.profiles if plan else [])}
     out, replaced = {}, 0
     for slot in SLOTS:
         p = proposed.get(slot)
-        constraints = validate_profile(p.constraints, exclusions, allowed) if p else None
+        # « Ton profil » (incohérent) ignore les préférences; partout ailleurs, elles comptent pour de vrai.
+        follows = check.coherent or slot != "prudent"
+        raw = impose_targets(p.constraints, targets) if p and impose and follows else p.constraints if p else None
+        constraints = validate_profile(raw, exclusions, allowed) if raw is not None else None
         rationale = p.rationale if p else ""
         if constraints is None:
             replaced += 1
@@ -543,11 +684,12 @@ def build_profiles(plan: Optional[ConstraintPlan], check: PepiteCheck, prefs: li
         if (check.coherent or slot != "conviction") and not any(c.type is T.MAX_STOCK_WEIGHT for c in constraints):
             cap = min(check.suggested_max_position_weight, LINE_CAP)
             constraints = constraints + [Constraint(type=T.MAX_STOCK_WEIGHT, value=cap, hard=True, note="Limite du profil")]
-        # « Ton profil » (incohérent) ignore les préférences; partout ailleurs, elles comptent pour de vrai.
-        if check.coherent or slot != "prudent":
+        if follows:
             constraints = promote_preferences(constraints)
         if slot in floors:
-            constraints = follow_profile(constraints, floors[slot], check.risk_label, allowed)
+            # Une classe dont le client a fixé le pourcentage garde son pourcentage, plancher d'obligations compris.
+            fixed = [c.target for c in targets if c.target and _family(c) == "asset_class_weight"] if follows else []
+            constraints = follow_profile(constraints, floors[slot], check.risk_label, allowed, fixed)
         # Le plafond de volatilité vient du code, à la position du gestionnaire (filet de sécurité sous A).
         constraints = [c for c in constraints if c.type is not T.MAX_VOLATILITY]
         if (vol := slot_volatility(check, slot)) is not None:
@@ -666,8 +808,22 @@ def holding_meta(symbol: str, row: Any) -> dict:
             "sector": SECTOR_FR.get(group) if group in SECTOR_FR else None, "region": ETF_REGION.get(symbol, "mondial")}
 
 
+def front_allocation(p: Portfolio, market: Market) -> dict[str, float]:
+    """Répartition par classe du frontend (actions, obligations…)."""
+    allocation = {c: 0.0 for c in CLASSES}
+    for pos in p.positions:
+        allocation[front_class(market.assets.loc[pos.symbol] if pos.symbol in market.assets.index else pos.model_dump())] += pos.weight
+    return allocation
+
+
+def evidence_for(p: Portfolio, market: Market, form: InvestorForm) -> dict[str, dict]:
+    """Toutes les preuves que l'agent Risque peut citer pour ce portefeuille: les siennes et le contexte macro."""
+    return {**evidence.portfolio_evidence(market, p, form, front_allocation(p, market)), **evidence.macro_evidence()}
+
+
 def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, risk_report: Optional[dict],
-                 position: float, skipped: list[str], extra: list[str], name: str, tagline: str) -> dict:
+                 position: float, skipped: list[str], extra: list[str], name: str, tagline: str,
+                 form: Optional[InvestorForm] = None) -> dict:
     holdings, allocation, fees = [], {c: 0.0 for c in CLASSES}, 0.0
     classes: dict[str, str] = {}
     for pos in p.positions:
@@ -682,8 +838,11 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
 
     m = p.metrics
     mu, sigma = (m.expected_return, m.volatility) if m else (0.0, 0.0)
+    # Les preuves citées sont recalculées sur le portefeuille présenté: un mélange 80/20 a ses propres chiffres.
+    proofs = evidence_for(p, market, form) if form else {}
     # Mêmes champs que RiskNote dans frontend/src/types.ts.
-    warnings = [{"title": w["title"], "detail": w["detail"], "severity": w["severity"]}
+    warnings = [{"title": w["title"], "detail": w["detail"], "severity": w["severity"],
+                 "sources": evidence.cite(w.get("sources") or [], proofs, f"{w['title']} {w['detail']}")}
                 for w in (risk_report or {}).get("warnings", [])
                 if w.get("portfolio_id") == p.id and w.get("severity") in ("medium", "high")]
     agent_notes = [t for t in (p.summary, p.tradeoffs, verdict.comment if verdict else None) if t] + extra
@@ -691,7 +850,8 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
         agent_notes.append(f"Pas encore pris en compte par les agents : {', '.join(skipped)}.")
     if verdict and not verdict.compliant:
         warnings.insert(0, {"title": "Certaines de tes limites ne sont pas respectées",
-                            "detail": "Lis les détails avant de choisir ce portefeuille.", "severity": "high"})
+                            "detail": "Lis les détails avant de choisir ce portefeuille.", "severity": "high",
+                            "sources": evidence.check_evidence(verdict.checks)[:evidence.MAX_CITED]})
     elif verdict:
         agent_notes.append("Le juge confirme que ce portefeuille respecte tes limites.")
     return {

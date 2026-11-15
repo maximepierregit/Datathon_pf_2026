@@ -1,0 +1,243 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1010" width="1440" height="1010" font-family="'Plus Jakarta Sans', Arial, Helvetica, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#00314d"/>
+    </marker>
+    <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8a96a3"/>
+    </marker>
+    <style>
+      text { fill: #1b2733; }
+      .h1 { font-size: 24px; font-weight: 800; fill: #00314d; }
+      .h2 { font-size: 13px; fill: #41505e; }
+      .t { font-size: 14px; font-weight: 700; }
+      .s { font-size: 11.5px; fill: #41505e; }
+      .xs { font-size: 11px; fill: #41505e; }
+      .grp { font-size: 13px; font-weight: 700; }
+      .badge { font-size: 11px; font-weight: 700; fill: #ffffff; }
+      .box { fill: #ffffff; stroke-width: 2; }
+      .flow { stroke: #00314d; stroke-width: 2; fill: none; }
+      .obs { stroke: #8a96a3; stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; }
+    </style>
+  </defs>
+
+  <rect width="1440" height="1010" fill="#ffffff"/>
+
+  <!-- Titre -->
+  <text x="30" y="42" class="h1">MonPort · Architecture AWS</text>
+  <text x="30" y="64" class="h2">Équipe 20 · Datathon 2026 · région us-east-1 · chemin principal 100 % services gérés (aucun serveur à administrer)</text>
+
+  <!-- Client -->
+  <rect x="30" y="290" width="150" height="90" rx="10" class="box" stroke="#00314d"/>
+  <text x="105" y="322" class="t" text-anchor="middle">Client</text>
+  <text x="105" y="341" class="s" text-anchor="middle">navigateur</text>
+  <text x="105" y="357" class="s" text-anchor="middle">React 19 · flux SSE</text>
+
+  <!-- Nuage AWS -->
+  <rect x="205" y="80" width="1220" height="785" rx="12" fill="none" stroke="#232f3e" stroke-width="2"/>
+  <rect x="205" y="80" width="96" height="26" rx="4" fill="#232f3e"/>
+  <text x="218" y="98" class="grp" style="fill:#ffffff">AWS Cloud</text>
+
+  <!-- Périphérie -->
+  <rect x="225" y="115" width="240" height="430" rx="10" fill="#f6f2ff" stroke="#8c4fff" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="238" y="137" class="grp" style="fill:#5a2fb3">Périphérie (mondiale)</text>
+
+  <rect x="250" y="150" width="190" height="80" rx="8" class="box" stroke="#dd344c"/>
+  <rect x="250" y="150" width="6" height="80" fill="#dd344c"/>
+  <text x="266" y="172" class="t">AWS WAF</text>
+  <text x="266" y="190" class="s">WebACL monport-front</text>
+  <text x="266" y="206" class="s">/api/ : 20 req/min par IP</text>
+  <text x="266" y="222" class="s">règles gérées AWS</text>
+
+  <rect x="250" y="290" width="190" height="90" rx="8" class="box" stroke="#8c4fff"/>
+  <rect x="250" y="290" width="6" height="90" fill="#8c4fff"/>
+  <text x="266" y="312" class="t">Amazon CloudFront</text>
+  <text x="266" y="330" class="s">HTTPS · HTTP/2 et HTTP/3</text>
+  <text x="266" y="346" class="s">en-têtes de sécurité</text>
+  <text x="266" y="362" class="s">/api/* sans cache</text>
+
+  <rect x="250" y="440" width="190" height="85" rx="8" class="box" stroke="#7aa116"/>
+  <rect x="250" y="440" width="6" height="85" fill="#7aa116"/>
+  <text x="266" y="462" class="t">Amazon S3 (front)</text>
+  <text x="266" y="480" class="s">monport-front-&lt;compte&gt;</text>
+  <text x="266" y="496" class="s">privé · lu par OAC seulement</text>
+  <text x="266" y="512" class="s">TLS obligatoire</text>
+
+  <!-- Région -->
+  <rect x="480" y="115" width="930" height="735" rx="10" fill="#f3fbfb" stroke="#00a4a6" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="495" y="137" class="grp" style="fill:#007a7c">Région us-east-1</text>
+
+  <!-- Lambda -->
+  <rect x="500" y="290" width="180" height="90" rx="8" class="box" stroke="#ed7100"/>
+  <rect x="500" y="290" width="6" height="90" fill="#ed7100"/>
+  <text x="516" y="312" class="t">AWS Lambda</text>
+  <text x="516" y="330" class="s">monport-proxy</text>
+  <text x="516" y="346" class="s">Function URL en streaming</text>
+  <text x="516" y="362" class="s">Node.js 22 · 8 en parallèle</text>
+
+  <!-- EC2 de repli -->
+  <rect x="500" y="440" width="150" height="70" rx="8" fill="#f7f8f9" stroke="#8a96a3" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="514" y="461" class="t" style="font-size:13px;fill:#41505e">Amazon EC2</text>
+  <text x="514" y="479" class="xs">front d’origine (repli)</text>
+  <text x="514" y="495" class="xs">appelle la même URL</text>
+
+  <!-- Runtime des agents -->
+  <rect x="735" y="165" width="330" height="350" rx="10" class="box" stroke="#01a88d"/>
+  <rect x="735" y="165" width="330" height="66" rx="10" fill="#e6f6f3"/>
+  <text x="752" y="188" class="t">Amazon Bedrock AgentCore Runtime</text>
+  <text x="752" y="206" class="s">monport_agents · 1 microVM par conversation</text>
+  <text x="752" y="222" class="s">arm64 · Python 3.13 · Strands Agents</text>
+
+  <rect x="755" y="240" width="290" height="44" rx="6" fill="#ffffff" stroke="#01a88d" stroke-width="1.2"/>
+  <text x="767" y="258" class="t" style="font-size:12.5px">Pépite · Claude Sonnet 5.5</text>
+  <text x="767" y="275" class="xs">vérifie, écrit les 3 profils, pilote, répond au chat</text>
+
+  <rect x="755" y="292" width="290" height="44" rx="6" fill="#ffffff" stroke="#01a88d" stroke-width="1.2"/>
+  <text x="767" y="310" class="t" style="font-size:12.5px">3 gestionnaires · Claude Opus 5.5</text>
+  <text x="767" y="327" class="xs">en parallèle, choisissent les titres</text>
+
+  <rect x="755" y="344" width="290" height="44" rx="6" fill="#ffffff" stroke="#01a88d" stroke-width="1.2"/>
+  <text x="767" y="362" class="t" style="font-size:12.5px">3 agents Risque · Claude Opus 5.5</text>
+  <text x="767" y="379" class="xs">relisent chaque portefeuille, citent les preuves</text>
+
+  <rect x="755" y="396" width="290" height="44" rx="6" fill="#ffffff" stroke="#01a88d" stroke-width="1.2"/>
+  <text x="767" y="414" class="t" style="font-size:12.5px">Juge final · Claude Opus 5.5</text>
+  <text x="767" y="431" class="xs">compare, peut exiger une reconstruction</text>
+
+  <rect x="755" y="452" width="290" height="48" rx="6" fill="#f7f8f9" stroke="#8a96a3" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="767" y="471" class="t" style="font-size:12.5px">Code Python déterministe</text>
+  <text x="767" y="488" class="xs">poids, indicateurs, conformité, preuves chiffrées</text>
+
+  <!-- Colonne Bedrock -->
+  <rect x="1110" y="165" width="280" height="80" rx="8" class="box" stroke="#01a88d"/>
+  <rect x="1110" y="165" width="6" height="80" fill="#01a88d"/>
+  <text x="1126" y="187" class="t">Amazon Bedrock</text>
+  <text x="1126" y="205" class="s">Claude Sonnet 5.5 et Claude Opus 5.5</text>
+  <text x="1126" y="221" class="s">profils d’inférence globaux</text>
+  <text x="1126" y="237" class="s">réflexion adaptative, sortie structurée</text>
+
+  <rect x="1110" y="275" width="280" height="80" rx="8" class="box" stroke="#dd344c"/>
+  <rect x="1110" y="275" width="6" height="80" fill="#dd344c"/>
+  <text x="1126" y="297" class="t">Amazon Bedrock Guardrails</text>
+  <text x="1126" y="315" class="s">monport-pepite · palier STANDARD</text>
+  <text x="1126" y="331" class="s">injections, propos haineux, fraude,</text>
+  <text x="1126" y="347" class="s">NAS, carte, mot de passe</text>
+
+  <rect x="1110" y="385" width="280" height="80" rx="8" class="box" stroke="#01a88d"/>
+  <rect x="1110" y="385" width="6" height="80" fill="#01a88d"/>
+  <text x="1126" y="407" class="t">AgentCore Memory</text>
+  <text x="1126" y="425" class="s">monport_conversations · court terme</text>
+  <text x="1126" y="441" class="s">état de la session compressé</text>
+  <text x="1126" y="457" class="s">expiration après 7 jours</text>
+
+  <!-- Gateway et outils -->
+  <rect x="735" y="565" width="195" height="95" rx="8" class="box" stroke="#01a88d"/>
+  <rect x="735" y="565" width="6" height="95" fill="#01a88d"/>
+  <text x="751" y="587" class="t">AgentCore Gateway</text>
+  <text x="751" y="605" class="s">monport-tools</text>
+  <text x="751" y="621" class="s">MCP · entrée IAM (SigV4)</text>
+  <text x="751" y="637" class="s">sessions MCP de 8 h</text>
+
+  <rect x="975" y="565" width="200" height="95" rx="8" class="box" stroke="#01a88d"/>
+  <rect x="975" y="565" width="6" height="95" fill="#01a88d"/>
+  <text x="991" y="587" class="t">AgentCore Runtime</text>
+  <text x="991" y="605" class="s">monport_tools (serveur MCP)</text>
+  <text x="991" y="621" class="s">6 outils : univers, filtre,</text>
+  <text x="991" y="637" class="s">optimiseur, vérificateur, macro</text>
+
+  <!-- S3 datasets -->
+  <rect x="1215" y="565" width="175" height="265" rx="8" class="box" stroke="#7aa116"/>
+  <rect x="1215" y="565" width="6" height="265" fill="#7aa116"/>
+  <text x="1231" y="587" class="t">Amazon S3</text>
+  <text x="1231" y="605" class="xs">monport-datasets-*</text>
+  <text x="1231" y="621" class="xs">privé · versionné</text>
+  <line x1="1231" y1="633" x2="1376" y2="633" stroke="#d5dbe0"/>
+  <text x="1231" y="652" class="xs" style="font-weight:700">universe/</text>
+  <text x="1231" y="667" class="xs">804 actifs, 38 Mo</text>
+  <text x="1231" y="688" class="xs" style="font-weight:700">factors/</text>
+  <text x="1231" y="703" class="xs">scores de 721 actions</text>
+  <text x="1231" y="724" class="xs" style="font-weight:700">macro/</text>
+  <text x="1231" y="739" class="xs">Canada et États-Unis</text>
+  <text x="1231" y="760" class="xs" style="font-weight:700">code/</text>
+  <text x="1231" y="775" class="xs">zips des 2 runtimes</text>
+  <text x="1231" y="796" class="xs" style="font-weight:700">raw/</text>
+  <text x="1231" y="811" class="xs">couches brutes (traçabilité)</text>
+
+  <!-- Observabilité -->
+  <rect x="500" y="690" width="675" height="55" rx="8" class="box" stroke="#e7157b"/>
+  <rect x="500" y="690" width="6" height="55" fill="#e7157b"/>
+  <text x="516" y="711" class="t">Amazon CloudWatch + AWS X-Ray (AgentCore Observability)</text>
+  <text x="516" y="730" class="s">logs, traces OpenTelemetry (ADOT), Transaction Search, tableau GenAI Observability, métriques WAF</text>
+
+  <!-- IAM -->
+  <rect x="500" y="765" width="675" height="65" rx="8" class="box" stroke="#dd344c"/>
+  <rect x="500" y="765" width="6" height="65" fill="#dd344c"/>
+  <text x="516" y="787" class="t">AWS IAM · un rôle par composant, droits minimaux</text>
+  <text x="516" y="806" class="s">monport-proxy-lambda · monport-agents-runtime · monport-gateway · monport-tools-runtime</text>
+  <text x="516" y="822" class="xs">confiance limitée au compte et aux ARN AgentCore (aws:SourceAccount, aws:SourceArn)</text>
+
+  <!-- Hors ligne -->
+  <rect x="205" y="885" width="590" height="100" rx="10" fill="#f7f8f9" stroke="#8a96a3" stroke-width="1.5"/>
+  <text x="222" y="910" class="t">Déploiement</text>
+  <text x="222" y="930" class="s">Scripts AWS CLI idempotents : deploy/deploy-*.sh, un par service</text>
+  <text x="222" y="948" class="s">Identifiants des ressources partagés dans deploy/state/ (versionné)</text>
+  <text x="222" y="966" class="s">Tests de fumée en ligne · teardown.sh supprime tout après l’événement</text>
+
+  <rect x="835" y="885" width="590" height="100" rx="10" fill="#f7f8f9" stroke="#8a96a3" stroke-width="1.5"/>
+  <text x="852" y="910" class="t">Préparation des données (hors ligne)</text>
+  <text x="852" y="930" class="s">build_universe.py, factors_model.ipynb, Macro.ipynb</text>
+  <text x="852" y="948" class="s">Sources : Wikipédia, yfinance, Banque du Canada, FRED</text>
+  <text x="852" y="966" class="s">Publication dans S3 : build_universe.py --upload</text>
+
+  <!-- Flux principaux -->
+  <line x1="180" y1="335" x2="248" y2="335" class="flow" marker-end="url(#a)"/>
+  <line x1="345" y1="380" x2="345" y2="438" class="flow" marker-end="url(#a)"/>
+  <line x1="440" y1="335" x2="498" y2="335" class="flow" marker-end="url(#a)"/>
+  <line x1="680" y1="335" x2="733" y2="335" class="flow" marker-end="url(#a)"/>
+  <line x1="1065" y1="205" x2="1108" y2="205" class="flow" marker-end="url(#a)"/>
+  <line x1="1065" y1="315" x2="1108" y2="315" class="flow" marker-end="url(#a)"/>
+  <line x1="1067" y1="425" x2="1108" y2="425" class="flow" marker-start="url(#a)" marker-end="url(#a)"/>
+  <line x1="832" y1="515" x2="832" y2="563" class="flow" marker-end="url(#a)"/>
+  <line x1="930" y1="612" x2="973" y2="612" class="flow" marker-end="url(#a)"/>
+  <line x1="1175" y1="612" x2="1213" y2="612" class="flow" marker-end="url(#a)"/>
+  <line x1="1300" y1="885" x2="1300" y2="832" class="flow" marker-end="url(#a)"/>
+
+  <!-- WAF associé à CloudFront, EC2 de repli -->
+  <line x1="345" y1="230" x2="345" y2="288" stroke="#dd344c" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#a)"/>
+  <text x="355" y="264" class="xs" style="fill:#dd344c">filtre chaque requête</text>
+  <line x1="575" y1="440" x2="575" y2="382" stroke="#8a96a3" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#g)"/>
+
+  <!-- Traces -->
+  <line x1="665" y1="380" x2="665" y2="688" class="obs" marker-end="url(#g)"/>
+  <line x1="832" y1="660" x2="832" y2="688" class="obs" marker-end="url(#g)"/>
+  <line x1="1075" y1="660" x2="1075" y2="688" class="obs" marker-end="url(#g)"/>
+  <path d="M735,490 L705,490 L705,688" class="obs" marker-end="url(#g)"/>
+
+  <!-- Pastilles numérotées (voir le tableau des flux) -->
+  <g>
+    <circle cx="214" cy="320" r="10" fill="#00314d"/><text x="214" y="324" class="badge" text-anchor="middle">1</text>
+    <circle cx="360" cy="410" r="10" fill="#00314d"/><text x="360" y="414" class="badge" text-anchor="middle">2</text>
+    <circle cx="469" cy="320" r="10" fill="#00314d"/><text x="469" y="324" class="badge" text-anchor="middle">3</text>
+    <circle cx="707" cy="320" r="10" fill="#00314d"/><text x="707" y="324" class="badge" text-anchor="middle">4</text>
+    <circle cx="1087" cy="190" r="10" fill="#00314d"/><text x="1087" y="194" class="badge" text-anchor="middle">5</text>
+    <circle cx="1087" cy="300" r="10" fill="#00314d"/><text x="1087" y="304" class="badge" text-anchor="middle">6</text>
+    <circle cx="1087" cy="410" r="10" fill="#00314d"/><text x="1087" y="414" class="badge" text-anchor="middle">7</text>
+    <circle cx="847" cy="540" r="10" fill="#00314d"/><text x="847" y="544" class="badge" text-anchor="middle">8</text>
+    <circle cx="952" cy="597" r="10" fill="#00314d"/><text x="952" y="601" class="badge" text-anchor="middle">9</text>
+    <circle cx="1195" cy="597" r="10" fill="#00314d"/><text x="1195" y="601" class="badge" text-anchor="middle">10</text>
+    <circle cx="680" cy="560" r="10" fill="#8a96a3"/><text x="680" y="564" class="badge" text-anchor="middle">11</text>
+    <circle cx="1315" cy="858" r="10" fill="#00314d"/><text x="1315" y="862" class="badge" text-anchor="middle">12</text>
+  </g>
+
+  <!-- Légende -->
+  <g transform="translate(30,440)">
+    <text x="0" y="0" class="grp" style="fill:#00314d">Légende</text>
+    <line x1="0" y1="20" x2="40" y2="20" class="flow" marker-end="url(#a)"/>
+    <text x="48" y="24" class="xs">requête</text>
+    <line x1="0" y1="42" x2="40" y2="42" class="obs" marker-end="url(#g)"/>
+    <text x="48" y="46" class="xs">traces, repli</text>
+    <circle cx="10" cy="66" r="9" fill="#00314d"/><text x="10" y="70" class="badge" text-anchor="middle">n</text>
+    <text x="26" y="70" class="xs">voir tableau</text>
+    <text x="26" y="84" class="xs">des flux</text>
+  </g>
+</svg>

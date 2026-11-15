@@ -1,6 +1,7 @@
-import { useId } from 'react'
-import { LEVELS, type CatalogItem } from '../data/catalog'
-import type { Level } from '../types'
+import { useId, useState } from 'react'
+import { LEVELS, shareTotal, type CatalogItem } from '../data/catalog'
+import { share, shareNumber } from '../lib/format'
+import type { Level, Share } from '../types'
 
 export interface Option<T> {
   value: T
@@ -162,6 +163,132 @@ const LEVEL_STYLE: Record<Level, string> = {
   0: 'bg-white text-navy ring-1 ring-line',
   1: 'bg-sky text-navy',
   2: 'bg-navy text-white',
+}
+
+/**
+ * Exclure, Neutre ou un pourcentage, une ligne par élément. Choisir « % » propose la part encore libre, répartie entre
+ * les éléments neutres. `percent` faux : seulement Exclure et Neutre.
+ */
+export function ShareTuner({ items, value, onChange, percent = true }: { items: CatalogItem[]; value: Record<string, Share>; onChange: (id: string, s: Share | null) => void; percent?: boolean }) {
+  const { total, free } = shareTotal(value, items.map((it) => it.id))
+  // Seul le champ ouvert par un clic sur « % » prend le focus : pas ceux qu'un modèle de thématiques fait apparaître.
+  const [opened, setOpened] = useState<string | null>(null)
+  return (
+    <div className="flex flex-col gap-2">
+      {items.map((it) => {
+        const cur = value[it.id]
+        const num = typeof cur === 'number'
+        const seg = (on: boolean, style: string) => `min-h-11 rounded-md px-3.5 text-sm font-semibold transition-colors ${on ? style : 'text-ink-soft hover:text-navy'}`
+        return (
+          <div key={it.id} role="group" aria-label={it.label} className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[var(--radius-card)] border border-line-soft bg-white py-3 pl-5 pr-3">
+            <span className="flex min-w-[150px] flex-1 flex-col">
+              <span className="text-lg font-semibold text-navy">{it.label}</span>
+              {it.hint && <span className="text-[15px] text-ink-soft">{it.hint}</span>}
+            </span>
+            <span className="flex flex-wrap items-center gap-0.5 rounded-[var(--radius-card)] bg-mist p-1">
+              <button aria-pressed={cur === 'exclure'} onClick={() => onChange(it.id, 'exclure')} className={seg(cur === 'exclure', 'bg-red text-white')}>
+                Exclure
+              </button>
+              <button aria-pressed={cur === undefined} onClick={() => onChange(it.id, null)} className={seg(cur === undefined, 'bg-white text-navy ring-1 ring-line')}>
+                Neutre
+              </button>
+              {percent &&
+                (num ? (
+                  <label className="flex min-h-11 items-center gap-1 rounded-md bg-navy px-2.5 text-sm font-semibold text-white">
+                    <ShareInput value={cur} label={it.label} autoFocus={opened === it.id} onChange={(s) => onChange(it.id, s)} />
+                    %
+                  </label>
+                ) : (
+                  <button
+                    aria-pressed={false}
+                    aria-label={`Fixer un pourcentage pour ${it.label}`}
+                    onClick={() => {
+                      setOpened(it.id)
+                      onChange(it.id, Math.max(0, Math.round((100 - total) / Math.max(1, free))))
+                    }}
+                    className={seg(false, '')}
+                  >
+                    %
+                  </button>
+                ))}
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Le texte saisi, nettoyé : chiffres et une virgule, une décimale au plus, sans zéro en tête, 100 au plus. */
+function cleanShare(raw: string): string {
+  const [whole = '', ...rest] = raw.replace(/\./g, ',').replace(/[^\d,]/g, '').split(',')
+  const int = whole.replace(/^0+(?=\d)/, '')
+  const text = rest.length ? `${int || '0'},${rest.join('').slice(0, 1)}` : int
+  return (parseShare(text) ?? 0) > 100 ? '100' : text
+}
+
+/** Le nombre d'un texte nettoyé ; null s'il est vide. */
+function parseShare(text: string): number | null {
+  if (!text || text === ',') return null
+  return Math.round(Number(text.replace(',', '.')) * 10) / 10
+}
+
+/**
+ * Champ de pourcentage : virgule ou point, une décimale. Pendant la saisie, le brouillon garde « 12, » tel quel ; à la
+ * sortie du champ, 0 ou un champ vide devient « Exclure ».
+ */
+function ShareInput({ value, label, autoFocus, onChange }: { value: number; label: string; autoFocus: boolean; onChange: (s: Share) => void }) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const shown = draft ?? shareNumber(value)
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      autoFocus={autoFocus}
+      aria-label={`Pourcentage pour ${label}`}
+      value={shown}
+      onFocus={(e) => {
+        setDraft(shown)
+        e.target.select()
+      }}
+      onChange={(e) => {
+        const text = cleanShare(e.target.value)
+        setDraft(text)
+        const n = parseShare(text)
+        if (n !== null) onChange(n)
+      }}
+      onBlur={() => {
+        const n = draft === null ? value : parseShare(draft)
+        setDraft(null)
+        if (!n) onChange('exclure')
+      }}
+      onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+      className="w-12 bg-transparent text-right text-white outline-none"
+    />
+  )
+}
+
+/** Total des pourcentages d'un bloc : ce qui est fixé, ce qui reste libre, ce qui manque ou dépasse. */
+export function ShareTotal({ value, ids }: { value: Record<string, Share>; ids: string[] }) {
+  const { total, entered, free } = shareTotal(value, ids)
+  if (!entered) return <p className="m-0 text-center text-base text-ink-soft">Aucun pourcentage fixé : les gestionnaires répartissent librement.</p>
+  const over = total > 100
+  const short = !free && total < 100
+  const message = over
+    ? `Tes pourcentages font ${share(total)} : enlève ${shareNumber(total - 100)} points.`
+    : short
+      ? `Tout est fixé, mais il manque ${shareNumber(100 - total)} points pour arriver à ${share(100)}.`
+      : total === 100
+        ? `${share(100)} fixés : tout est réparti.`
+        : `${share(total)} fixés · ${share(100 - total)} laissés libres aux gestionnaires.`
+  return (
+    <div className="flex flex-col gap-2" role="status">
+      <div className="h-2 overflow-hidden rounded-full bg-mist" aria-hidden>
+        <div className={`h-full transition-[width] duration-300 ${over || short ? 'bg-red' : 'bg-navy'}`} style={{ width: `${Math.min(100, total)}%` }} />
+      </div>
+      <p className={`m-0 text-base ${over || short ? 'font-semibold text-red-dark' : 'text-ink-soft'}`}>{message}</p>
+    </div>
+  )
 }
 
 /** Échelle unique Exclure → Imposer, une ligne par élément. */

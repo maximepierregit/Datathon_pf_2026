@@ -1,0 +1,87 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Logs",
+      "Effect": "Allow",
+      "Action": ["logs:CreateLogGroup", "logs:DescribeLogStreams", "logs:CreateLogStream", "logs:PutLogEvents"],
+      "Resource": [
+        "arn:aws:logs:${REGION}:${ACCOUNT}:log-group:/aws/bedrock-agentcore/runtimes/*",
+        "arn:aws:logs:${REGION}:${ACCOUNT}:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*",
+        "arn:aws:logs:${REGION}:${ACCOUNT}:log-group:aws/spans:*"
+      ]
+    },
+    {
+      "Sid": "UnifiedSpans",
+      "Effect": "Allow",
+      "Action": "logs:PutResourcePolicy",
+      "Resource": "arn:aws:logs:${REGION}:${ACCOUNT}:log-group:/aws/bedrock-agentcore/runtimes/monport_*"
+    },
+    { "Sid": "LogGroups", "Effect": "Allow", "Action": "logs:DescribeLogGroups", "Resource": "arn:aws:logs:${REGION}:${ACCOUNT}:log-group:*" },
+    {
+      "Sid": "Traces",
+      "Effect": "Allow",
+      "Action": ["xray:PutTraceSegments", "xray:PutTelemetryRecords", "xray:GetSamplingRules", "xray:GetSamplingTargets"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Metrics",
+      "Effect": "Allow",
+      "Action": "cloudwatch:PutMetricData",
+      "Resource": "*",
+      "Condition": { "StringEquals": { "cloudwatch:namespace": "bedrock-agentcore" } }
+    },
+    {
+      "Sid": "WorkloadIdentity",
+      "Effect": "Allow",
+      "Action": ["bedrock-agentcore:GetWorkloadAccessToken", "bedrock-agentcore:GetWorkloadAccessTokenForJWT"],
+      "Resource": [
+        "arn:aws:bedrock-agentcore:${REGION}:${ACCOUNT}:workload-identity-directory/default",
+        "arn:aws:bedrock-agentcore:${REGION}:${ACCOUNT}:workload-identity-directory/default/workload-identity/monport_*"
+      ]
+    },
+    {
+      "Sid": "BedrockModels",
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/anthropic.*",
+        "arn:aws:bedrock:::foundation-model/anthropic.*",
+        "arn:aws:bedrock:${REGION}:${ACCOUNT}:inference-profile/*anthropic.*"
+      ]
+    },
+    {
+      "Sid": "ToolsGateway",
+      "Effect": "Allow",
+      "Action": "bedrock-agentcore:InvokeGateway",
+      "Resource": "arn:aws:bedrock-agentcore:${REGION}:${ACCOUNT}:gateway/monport-tools-*"
+    },
+    {
+      "Sid": "ConversationMemory",
+      "Effect": "Allow",
+      "Action": ["bedrock-agentcore:CreateEvent", "bedrock-agentcore:ListEvents", "bedrock-agentcore:GetEvent"],
+      "Resource": "arn:aws:bedrock-agentcore:${REGION}:${ACCOUNT}:memory/monport_conversations-*"
+    },
+    {
+      "Sid": "Guardrails",
+      "Effect": "Allow",
+      "Action": "bedrock:ApplyGuardrail",
+      "Resource": [
+        "arn:aws:bedrock:${REGION}:${ACCOUNT}:guardrail/*",
+        "arn:aws:bedrock:*:${ACCOUNT}:guardrail-profile/us.guardrail.v1:0",
+        "arn:aws:bedrock:*::guardrail-profile/us.guardrail.v1:0"
+      ]
+    },
+    {
+      "Sid": "Dataset",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::monport-datasets-${ACCOUNT}/universe/*",
+        "arn:aws:s3:::monport-datasets-${ACCOUNT}/macro/*",
+        "arn:aws:s3:::monport-datasets-${ACCOUNT}/factors/*",
+        "arn:aws:s3:::monport-datasets-${ACCOUNT}/code/*"
+      ]
+    }
+  ]
+}

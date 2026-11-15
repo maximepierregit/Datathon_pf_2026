@@ -7,14 +7,14 @@ pour qu'on puisse l'interroger plus tard, par exemple quand le client demande po
 from __future__ import annotations
 
 import asyncio
-from typing import Literal, Optional, Sequence, TypeVar
+from typing import Optional, Sequence, TypeVar
 
 from pydantic import BaseModel
 from strands import Agent
 from strands.agent.conversation_manager import NullConversationManager
 
 from ..events import AgentStreamHandler, EventBus
-from ..models import build_model
+from ..models import ModelKind, build_model
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -40,7 +40,7 @@ class AgentHandle:
         *,
         label: str,
         step: str,
-        kind: Literal["strong", "fast"] = "strong",
+        kind: ModelKind = "strong",
         system_prompt: str,
         tools: Sequence = (),
         persistent: bool = False,
@@ -49,6 +49,8 @@ class AgentHandle:
         self._lock = asyncio.Lock()
         self._handler = AgentStreamHandler(None, label, step, set())  # type: ignore[arg-type]  # lié à chaque appel
         self.agent = Agent(
+            name=label,  # nom affiché dans les traces CloudWatch (invoke_agent <nom>)
+            trace_attributes={"monport.agent": label, "monport.model_kind": kind},
             model=build_model(kind),
             system_prompt=f"{system_prompt}\n\n{LANGUAGE_RULE}",
             tools=list(tools),
@@ -95,7 +97,7 @@ async def run_agent(
     bus: EventBus,
     label: str,
     step: str,
-    kind: Literal["strong", "fast"],
+    kind: ModelKind,
     system_prompt: str,
     user_prompt: str,
     schema: type[T],

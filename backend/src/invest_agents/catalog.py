@@ -38,6 +38,7 @@ from __future__ import annotations
 import dataclasses
 import difflib
 import logging
+import math
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional
 
@@ -101,6 +102,14 @@ SPECS: dict[T, Spec] = {
     T.MIN_ASSET_CLASS_WEIGHT: Spec("asset_class", "fraction", "min", "Poids minimal d'une classe d'actifs"),
     T.MAX_SYMBOL_WEIGHT: Spec("symbol", "fraction", "max", "Poids maximal d'un titre précis"),
     T.MIN_SYMBOL_WEIGHT: Spec("symbol", "fraction", "min", "Poids minimal d'un titre précis (le détenir)"),
+    T.MIN_SECTOR_SHARE: Spec("sector", "fraction", "min",
+                             "Part minimale de la poche actions dans un ou plusieurs secteurs"),
+    T.MAX_SECTOR_SHARE: Spec("sector", "fraction", "max",
+                             "Part maximale de la poche actions dans un ou plusieurs secteurs"),
+    T.MIN_COUNTRY_SHARE: Spec("country", "fraction", "min",
+                              "Part minimale de la poche actions dans un ou plusieurs pays"),
+    T.MAX_COUNTRY_SHARE: Spec("country", "fraction", "max",
+                              "Part maximale de la poche actions dans un ou plusieurs pays"),
     # Exposition = moyenne des z-scores des actions détenues en direct, pondérée par leur poids (voir factors.py).
     T.MIN_FACTOR_EXPOSURE: Spec("factor", "score", "min",
                                 "Exposition minimale à un facteur, en écarts-types (0.5 = actions en moyenne un "
@@ -116,6 +125,18 @@ FTOL = 0.01  # tolérance sur une exposition à un facteur
 
 ANY = "*"  # cible générique: « chaque secteur » / « chaque pays » (plafonds seulement)
 WILDCARD_TYPES = {T.MAX_SECTOR_WEIGHT, T.MAX_COUNTRY_WEIGHT}
+# Parts de la poche actions (actions détenues en direct + FNB d'actions): 0.45 = 45 % de cette poche. Seules les
+# actions en direct comptent au numérateur: un FNB n'a ni secteur ni pays connu, il compte comme hors du groupe. Il ne
+# peut donc pas servir à contourner la part, contrairement à une base limitée aux actions en direct (mesuré: avec
+# cette base, l'optimiseur gardait 0 action et satisfaisait la part à vide).
+SHARE_TYPES = {
+    T.MIN_SECTOR_SHARE: ("sector", "min"),
+    T.MAX_SECTOR_SHARE: ("sector", "max"),
+    T.MIN_COUNTRY_SHARE: ("country", "min"),
+    T.MAX_COUNTRY_SHARE: ("country", "max"),
+}
+SEP = "|"  # plusieurs cibles pour une part (une région = plusieurs pays)
+EQUITY_CLASSES = {"equity", "equities"}
 
 DIMENSION_COLUMN = {"sector": "sector", "country": "country", "asset_class": "asset_class",
                     "instrument_type": "instrument_type", "symbol": None}
@@ -150,6 +171,9 @@ def catalog_prompt(allowed: dict[str, list[str]]) -> str:
         "",
         "Pour max_sector_weight et max_country_weight, la cible \"*\" signifie « chaque secteur » ou « chaque pays » "
         "(ex.: « pas plus de 25 % par secteur »). Pour un secteur ou un pays précis, utilise son libellé.",
+        "Les *_share se calculent sur la poche actions, actions en direct et FNB d'actions (0.45 = 45 % de cette "
+        "poche); seules les actions en direct du groupe comptent pour la part. Leur cible accepte plusieurs libellés "
+        "séparés par « | ».",
         "",
         "VALEURS ACCEPTÉES POUR LES CIBLES (utiliser exactement ces libellés):",
         f"- sector: {', '.join(allowed['sector'])}",
@@ -190,6 +214,10 @@ def validate_constraint(c: Constraint, allowed: dict[str, list[str]]) -> tuple[O
             return None, f"« {c.type.value} » exige une cible ({DIMENSION_FR[spec.dimension]})."
         if c.type in WILDCARD_TYPES and c.target.strip() == ANY:
             matched, suggestions = ANY, []
+        elif c.type in SHARE_TYPES:  # une région: les pays absents de l'univers sont ignorés
+            found = [_match_target(spec.dimension, t, allowed) for t in share_targets(c)]
+            matched = SEP.join(m for m, _ in found if m) or None
+            suggestions = [s for _, more in found for s in more]
         else:
             matched, suggestions = _match_target(spec.dimension, c.target, allowed)
         if matched is None:
@@ -290,7 +318,15 @@ def detect_conflicts(constraints: list[Constraint]) -> list[str]:
         total = sum((c.value or 0) for c in hard if c.type.value == f"min_{dim}_weight")
         if total > 1 + 1e-9:
             out.append(f"Conflit: la somme des poids minimaux par {DIMENSION_FR[dim]} dépasse 100 % ({total:.0%}).")
+        shares = sum((c.value or 0) for c in hard if c.type.value == f"min_{dim}_share")
+        if shares > 1 + 1e-9:
+            out.append(f"Conflit: la somme des parts minimales par {DIMENSION_FR[dim]} dépasse 100 % ({shares:.0%}).")
     return out
+
+
+def share_targets(c: Constraint) -> list[str]:
+    """Les libellés visés par une part (*_share)."""
+    return [t.strip() for t in (c.target or "").split(SEP) if t.strip()]
 
 
 def describe(c: Constraint) -> str:
@@ -308,6 +344,9 @@ def describe(c: Constraint) -> str:
     }
     if c.type in names:
         label = names[c.type]
+    elif c.type in SHARE_TYPES:
+        sign = "≤" if spec.direction == "max" else "≥"
+        label = f"Part de la poche actions, {DIMENSION_FR[spec.dimension]} {', '.join(share_targets(c))} {sign} {pct}"
     elif c.type in FACTOR_TYPES:
         sign = "≥" if spec.direction == "min" else "≤"
         name = factors.FACTOR_FR.get(c.target or "", c.target)
@@ -328,6 +367,23 @@ def describe(c: Constraint) -> str:
 def is_fund(market: Market, symbol: str) -> bool:
     """Un FNB est diversifié par nature: `max_stock_weight` ne le plafonne pas."""
     return str(market.assets.loc[symbol].get("instrument_type", "")).lower() == "etf"
+
+
+def is_stock(market: Market, symbol: str) -> bool:
+    """Une action détenue en direct (ni FNB, ni crypto)."""
+    return str(market.assets.loc[symbol].get("instrument_type", "")).lower() == "stock"
+
+
+def is_equity(market: Market, symbol: str) -> bool:
+    """La base des parts *_share: actions en direct et FNB d'actions."""
+    return str(market.assets.loc[symbol].get("asset_class", "")).lower() in EQUITY_CLASSES
+
+
+def in_share(market: Market, symbol: str, c: Constraint) -> bool:
+    """Le titre est une action détenue en direct dont le secteur ou le pays fait partie des cibles de la part."""
+    column = DIMENSION_COLUMN[SHARE_TYPES[c.type][0]]
+    targets = {t.lower() for t in share_targets(c)}
+    return is_stock(market, symbol) and str(market.assets.loc[symbol, column]).lower() in targets
 
 
 def engine_universe(market: Market) -> pd.DataFrame:
@@ -539,6 +595,13 @@ def plan_for(
             for s in _targets(market, "symbol", c.target):
                 if s in index:
                     upper[index[s]] = min(upper[index[s]], float(c.value))
+        elif c.type in SHARE_TYPES and c.target and c.value is not None:
+            # Part p de la poche actions, linéaire: poids du groupe − p × poids de la poche ≥ 0 (min) ou ≤ 0 (max).
+            coeff = np.zeros(len(plan.symbols), dtype=float)
+            for s, i in index.items():
+                coeff[i] = float(in_share(market, s, c)) - (float(c.value) if is_equity(market, s) else 0.0)
+            low, high = (0.0, math.inf) if SHARE_TYPES[c.type][1] == "min" else (-math.inf, 0.0)
+            groups.append(GroupConstraint(f"{c.type.value}:{c.target.casefold()}", coeff, low, high))
         elif c.type in GROUP_TYPES and c.target and c.value is not None:
             dimension, direction = GROUP_TYPES[c.type]
             if dimension in ENGINE_DIMENSIONS and c.target != ANY:
@@ -649,6 +712,11 @@ def evaluate(market: Market, weights: dict[str, float], constraints: list[Constr
         elif c.type is T.MIN_EXPECTED_RETURN:
             actual = metrics.expected_return if metrics else 0.0
             passed = actual >= (v or 0) - TOL
+        elif c.type in SHARE_TYPES:  # sans poche actions, la part ne s'applique pas
+            equity = sum(w for s, w in held.items() if is_equity(market, s))
+            if equity > HELD:
+                actual = sum(w for s, w in held.items() if in_share(market, s, c)) / equity
+                passed = actual <= (v or 0) + WTOL if spec.direction == "max" else actual >= (v or 0) - WTOL
         elif c.type in FACTOR_TYPES:
             actual, _ = factors.exposure(held, c.target or "")
             target = v or 0.0
@@ -685,8 +753,8 @@ def evaluate(market: Market, weights: dict[str, float], constraints: list[Constr
 
 
 __all__ = [
-    "ANY", "DIMENSION_COLUMN", "DIMENSION_FR", "HELD", "SPECS", "TOL", "WTOL", "Spec",
+    "ANY", "DIMENSION_COLUMN", "DIMENSION_FR", "HELD", "SEP", "SHARE_TYPES", "SPECS", "TOL", "WTOL", "Spec",
     "agent_request", "audit", "catalog_prompt", "describe", "detect_conflicts", "engine_universe",
-    "evaluate", "excluded_mask", "is_fund", "merge_constraints", "plan_for", "screen",
-    "settings_for", "validate_all", "validate_constraint",
+    "evaluate", "excluded_mask", "in_share", "is_equity", "is_fund", "is_stock", "merge_constraints", "plan_for", "screen",
+    "settings_for", "share_targets", "validate_all", "validate_constraint",
 ]

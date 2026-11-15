@@ -1,5 +1,5 @@
 // Formats québécois : « 5,2 % », « 25 000 $ » (espaces insécables).
-import type { Contribution, ContributionFrequency, Holding } from '../types'
+import type { Contribution, ContributionFrequency, Evidence, Holding } from '../types'
 
 const NBSP = ' '
 
@@ -36,4 +36,31 @@ const INSTRUMENTS: Record<string, string> = { action: 'Action', fnb: 'FNB', cryp
 /** « Action · Technologie », « FNB · Obligations gouvernementales » : type d'instrument et secteur ou catégorie. */
 export function kindOf(h: Holding): string {
   return [INSTRUMENTS[h.instrument ?? ''], h.detail].filter(Boolean).join(' · ')
+}
+
+/** « 8 avr. 2025 », à partir d'une date AAAA-MM-JJ. */
+export function day(iso: string): string {
+  return new Date(`${iso}T12:00:00`).toLocaleDateString('fr-CA', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+/** « avr. 2025 ». */
+export function monthYear(iso: string): string {
+  return new Date(`${iso}T12:00:00`).toLocaleDateString('fr-CA', { month: 'short', year: 'numeric' })
+}
+
+/** Une valeur de preuve dans son unité : « −11,1 % », « 8,4 », « 10 ans ». */
+export function evidenceValue(v: number, unit: Evidence['unit']): string {
+  if (unit === 'pct') return (v < 0 ? '−' : '') + pct(Math.abs(v))
+  if (unit === 'ans') return `${v.toLocaleString('fr-CA')}${NBSP}an${Math.abs(v) >= 2 ? 's' : ''}`
+  return v.toLocaleString('fr-CA', { maximumFractionDigits: 1 })
+}
+
+/** Un nombre de points de pourcentage, une décimale au plus : « 5 », « 12,5 ». */
+export function shareNumber(v: number): string {
+  return v.toLocaleString('fr-CA', { maximumFractionDigits: 1, useGrouping: false })
+}
+
+/** Un pourcentage saisi par le client (0 à 100) : « 5 % », « 12,5 % ». */
+export function share(v: number): string {
+  return shareNumber(v) + NBSP + '%'
 }

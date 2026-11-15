@@ -5,8 +5,34 @@ import { CLASS_LABELS, UNIVERSE } from './data/catalog'
 import { coherenceWarnings, PORTFOLIO_IDS } from './lib/engine'
 import type { AdjustProposal, AgentId, AgentStatus, Constraints, Portfolio, PipelineEvent, Profile, ProfileCheck } from './types'
 
-/** Servi par le proxy Vite en local, par nginx en ligne. */
-const PIPELINE_URL = '/api/invocations'
+/**
+ * VITE_API_URL : la Function URL du proxy Lambda vers AgentCore Runtime (deploy/state/api-url, injectée par deploy.sh).
+ * Vide : même origine, servie par le proxy Vite en local, par nginx sur l'EC2 ou par CloudFront (/api/*).
+ */
+const PIPELINE_URL = import.meta.env.VITE_API_URL || '/api/invocations'
+
+/**
+ * Identifiant de conversation envoyé dans X-Session-Id. AgentCore Runtime route toutes les requêtes d'un même
+ * identifiant vers la même microVM, là où Pépite garde la mémoire de ses agents. Au moins 33 caractères.
+ * Une nouvelle vérification ouvre une nouvelle conversation.
+ */
+const CONVERSATION_KEY = 'monport-conversation'
+function conversationId(fresh = false): string {
+  let id = fresh ? null : sessionStorage.getItem(CONVERSATION_KEY)
+  if (!id) {
+    id = (crypto.randomUUID() + crypto.randomUUID()).replace(/-/g, '')
+    sessionStorage.setItem(CONVERSATION_KEY, id)
+  }
+  return id
+}
+
+/** Mode démonstration : le backend n'a pas répondu, le script d'exemple a pris le relais. Affiché par DemoBanner. */
+export const DEMO_EVENT = 'monport:demo'
+function signalDemo(on: boolean) {
+  sessionStorage.setItem(DEMO_EVENT, on ? '1' : '0')
+  window.dispatchEvent(new CustomEvent(DEMO_EVENT, { detail: on }))
+}
+export const isDemo = () => sessionStorage.getItem(DEMO_EVENT) === '1'
 
 const EVENT_TYPES = new Set<string>(['check', 'agent_status', 'pepite', 'universe', 'rerun', 'warning', 'portfolios', 'error', 'done'])
 
@@ -42,14 +68,21 @@ async function* readEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<unk
 }
 
 /** Ouvre le flux SSE des agents ; null si le backend ne répond pas (le script d'exemple prend alors le relais). */
-async function openStream(body: object, signal: AbortSignal): Promise<ReadableStream<Uint8Array> | null> {
+async function openStream(body: object, signal: AbortSignal, freshConversation = false): Promise<ReadableStream<Uint8Array> | null> {
   try {
-    const res = await fetch(PIPELINE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal })
+    const res = await fetch(PIPELINE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Id': conversationId(freshConversation) },
+      body: JSON.stringify(body),
+      signal,
+    })
     if (!res.ok || !res.body || !res.headers.get('content-type')?.includes('text/event-stream')) throw new Error(`HTTP ${res.status}`)
+    signalDemo(false)
     return res.body
   } catch (err) {
     if (signal.aborted) throw err
     console.warn('Backend indisponible, script d’exemple :', err)
+    signalDemo(true)
     return null
   }
 }
@@ -93,7 +126,7 @@ export async function checkProfile(
 ): Promise<{ check: ProfileCheck; session: string | null }> {
   // Court délai : en mode strict, React monte deux fois la page ; le premier montage est annulé avant l'appel.
   await wait(50, signal)
-  const body = await openStream({ mode: 'monport_check', profile: input.profile, constraints: input.constraints }, signal)
+  const body = await openStream({ mode: 'monport_check', profile: input.profile, constraints: input.constraints }, signal, true)
   if (!body) {
     // Assez long pour qu'on voie Pépite réfléchir.
     for (const text of ['Je calcule ton profil de risque…', 'Je cherche les contradictions dans tes réponses…']) {
@@ -150,8 +183,8 @@ export async function rebuildPipeline(session: string, onEvent: (e: PipelineEven
 }
 
 async function runScript(input: PipelineInput, onEvent: (e: PipelineEvent) => void, signal: AbortSignal) {
-  const excluded = Object.values(input.constraints.themes).filter((l) => l === -2).length
-  const classesOut = Object.values(input.constraints.classes).filter((l) => l === -2).length
+  const excluded = Object.values(input.constraints.themes).filter((v) => v === 'exclure').length
+  const classesOut = Object.values(input.constraints.classes).filter((v) => v === 'exclure').length
   const after = UNIVERSE.length * 7 - excluded * 9 - classesOut * 6
   const coherent = input.check.coherent
 
@@ -207,26 +240,26 @@ const RULES: Rule[] = [
   {
     match: /tech|technolog/i,
     reply: (p) => `<p>D’accord! J’ajoute une part de <strong>FNB technologie</strong> au portefeuille « ${p.name} », prise sur les actions régionales.</p>`,
-    patch: { themes: { tech: 2 } },
+    patch: { themes: { tech: 30 } },
     diff: [{ label: 'FNB technologie', get: tickerWeight('THM-TEC') }],
   },
   {
     match: /pétrole|petrole|fossile|énergie trad/i,
     reply: () => '<p>C’est noté : <strong>j’exclus les énergies fossiles</strong>.</p><astuce>Les FNB concernés sont retirés, et ton niveau de risque bouge à peine.</astuce>',
-    patch: { themes: { fossiles: -2 } },
+    patch: { themes: { fossiles: 'exclure' } },
     diff: [{ label: 'FNB énergie traditionnelle', get: tickerWeight('THM-ENR') }],
   },
   {
     match: /crypto|bitcoin/i,
     reply: (p) => `<p>Je peux augmenter la <strong>crypto</strong> dans le portefeuille « ${p.name} ». Voici ce que ça donnerait.</p>`,
-    patch: { classes: { crypto: 2 } },
+    patch: { classes: { crypto: 10 } },
     warning: (score) => (score < 50 ? 'ça augmente ton risque au-delà de ton profil. Tu peux quand même l’appliquer, c’est ton choix.' : undefined),
     diff: [{ label: CLASS_LABELS.crypto, get: (q) => q.allocation.crypto }],
   },
   {
     match: /moins de risque|prudent|sécur|stable/i,
     reply: () => '<p>Je réduis les placements les plus agités au profit des <strong>obligations</strong>.</p><astuce>Ton portefeuille bougera moins, mais il grandira aussi un peu moins vite.</astuce>',
-    patch: { classes: { crypto: -1, actions: -1, obligations: 1 } },
+    patch: { classes: { crypto: 'exclure' } },
     riskShift: -15,
     diff: [
       { label: CLASS_LABELS.actions, get: (q) => q.allocation.actions },
