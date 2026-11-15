@@ -81,22 +81,6 @@ def make_macro_tools() -> list:
 
 
 # --------------------------------------------------------------------------- #
-# Extraction
-# --------------------------------------------------------------------------- #
-def make_extraction_tools(market: Market) -> list:
-    @tool
-    def search_universe(query: str) -> dict:
-        """Cherche un titre dans l'univers par nom d'entreprise ou par symbole.
-
-        Args:
-            query: Nom de l'entreprise (ex. "Apple") ou début de symbole.
-        """
-        return {"matches": market.search(query, limit=8)}
-
-    return [search_universe]
-
-
-# --------------------------------------------------------------------------- #
 # Gestionnaire de portefeuille
 # --------------------------------------------------------------------------- #
 @dataclass
@@ -211,29 +195,3 @@ def fallback_selection(market: Market, constraints: list[Constraint], objective:
     n = min(15, get_runtime_settings().max_assets_per_portfolio)
     key, asc = ("ann_vol", True) if objective == "min_volatility" else ("sharpe", False)
     return a.sort_values(key, ascending=asc).head(n).index.tolist()
-
-
-# --------------------------------------------------------------------------- #
-# Juge
-# --------------------------------------------------------------------------- #
-def make_judge_tools(market: Market, weights: dict[str, float], constraints: list[Constraint]) -> list:
-    @tool
-    def check_portfolio_constraints() -> dict:
-        """Vérifie le portefeuille évalué contre chaque contrainte de l'utilisateur (dures et préférences).
-        Retourne, pour chacune, si elle est respectée, la valeur observée et la limite."""
-        checks = evaluate(market, weights, constraints)
-        return {
-            "all_hard_respected": all(c.passed for c in checks if c.constraint.hard),
-            "checks": [
-                {
-                    "label": c.label,
-                    "hard": c.constraint.hard,
-                    "passed": c.passed,
-                    "actual": c.actual,
-                    "limit": c.limit,
-                }
-                for c in checks
-            ],
-        }
-
-    return [check_portfolio_constraints, *make_macro_tools()]

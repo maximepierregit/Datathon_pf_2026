@@ -3,9 +3,10 @@
 Le runtime appelle `invoke` avec le JSON envoyé par le client. Comme la fonction est un générateur
 asynchrone, chaque `yield` est relayé au client comme un événement SSE (text/event-stream).
 
-Charges utiles:
-    {"mode": "initial", "form": {...}}
-    {"mode": "refine", "message": "texte libre", "context": {...}}     # `context` vient du dernier `result`
+Charges utiles (voir workflow/flow.py):
+    {"mode": "monport_check", "profile": {...}, "constraints": {...}}
+    {"mode": "monport", "profile": {...}, "constraints": {...}, "check": {...}, "adjustment": "...", "session": id}
+    {"mode": "monport_chat", "session": id, "message": "texte libre"}
 """
 
 import logging
@@ -17,12 +18,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from bedrock_agentcore import BedrockAgentCoreApp  # noqa: E402
 
-from invest_agents.orchestrator import stream_pipeline  # noqa: E402
 from invest_agents.workflow.flow import stream_chat, stream_check, stream_monport  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 app = BedrockAgentCoreApp()
+
+# MonPort, mené par Pépite: vérification, construction, puis questions du client.
+STREAMS = {"monport_check": stream_check, "monport": stream_monport, "monport_chat": stream_chat}
 
 
 @app.entrypoint
@@ -30,10 +33,13 @@ async def invoke(payload: dict):
     if not isinstance(payload, dict):
         yield {"type": "error", "code": "invalid_request", "message": "Le corps de la requête doit être un objet JSON."}
         return
-    # MonPort, mené par Pépite (voir workflow/flow.py): vérification, construction, puis questions du client.
-    streams = {"monport_check": stream_check, "monport": stream_monport, "monport_chat": stream_chat}
-    stream = streams.get(payload.get("mode"), stream_pipeline)(payload)
-    async for event in stream:
+    stream = STREAMS.get(payload.get("mode"))
+    if stream is None:
+        yield {"type": "error", "code": "invalid_request",
+               "message": "Le champ `mode` doit valoir monport_check, monport ou monport_chat."}
+        yield {"type": "done"}
+        return
+    async for event in stream(payload):
         yield event
 
 

@@ -10,8 +10,17 @@ from strands.models import BedrockModel
 from .runtime import get_runtime_settings
 
 
-def build_model(kind: Literal["strong", "fast"] = "strong", *, max_tokens: Optional[int] = None) -> BedrockModel:
-    """Modèle Bedrock d'un agent. `kind` choisit `MODEL_STRONG` ou `MODEL_FAST`; les deux valent Opus 5.5 par défaut.
+ModelKind = Literal["strong", "fast", "pepite"]
+
+
+def model_id_for(kind: ModelKind) -> str:
+    s = get_runtime_settings()
+    return {"strong": s.model_strong, "fast": s.model_fast, "pepite": s.model_pepite}[kind]
+
+
+def build_model(kind: ModelKind = "strong", *, max_tokens: Optional[int] = None) -> BedrockModel:
+    """Modèle Bedrock d'un agent. `kind` choisit `MODEL_STRONG`, `MODEL_FAST` (Opus 5.5 par défaut) ou `MODEL_PEPITE`
+    (Sonnet 5.5 par défaut).
 
     Opus 5.5 réfléchit toujours (réflexion adaptative, impossible à désactiver). `MODEL_EFFORT` règle la profondeur
     (low, medium, high, xhigh, max) dans `output_config.effort`, et non dans `thinking`. ENABLE_THINKING=true
@@ -22,7 +31,7 @@ def build_model(kind: Literal["strong", "fast"] = "strong", *, max_tokens: Optio
     if s.thinking:
         fields["thinking"] = {"type": "adaptive", "display": "summarized"}
     return BedrockModel(
-        model_id=s.model_strong if kind == "strong" else s.model_fast,
+        model_id=model_id_for(kind),
         region_name=s.region,
         max_tokens=max_tokens or s.max_tokens,
         additional_request_fields=fields,

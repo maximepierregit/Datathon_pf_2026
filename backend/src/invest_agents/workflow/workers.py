@@ -15,7 +15,7 @@ from typing import Optional
 from strands import tool
 
 from ..agents.base import AgentError, AgentHandle
-from ..agents.cro import diagnostics
+from ..diagnostics import diagnostics
 from ..agents.portfolio_manager import make_pm_worker, run_pm_worker
 from ..catalog import describe, evaluate, excluded_mask
 from ..mandates import Mandate
