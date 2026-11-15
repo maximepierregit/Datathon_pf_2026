@@ -4,22 +4,23 @@ from types import SimpleNamespace
 
 import pandas as pd
 
+from invest_agents import monport
 from invest_agents.catalog import agent_request, evaluate
-from invest_agents.monport import preference_constraints
-from invest_agents.schemas import ConstraintType as T
+from invest_agents.monport import drop_unreachable_floors, preference_constraints
+from invest_agents.schemas import Constraint, ConstraintType as T
 
 
 def market():
     """Comme l'univers réel: un FNB d'actions a la classe « Equity », comme une action."""
-    rows = [
-        ("AAPL", "Equity", "Stock"),
-        ("RY.TO", "Equity", "Stock"),
-        ("SPY", "Equity", "ETF"),
-        ("XBB.TO", "Fixed Income", "ETF"),
-        ("GLD", "Alternative", "ETF"),
-        ("BTC-CAD", "Alternative", "Cryptocurrency"),
+    rows = [  # un FNB n'a ni secteur ni pays connu
+        ("AAPL", "Equity", "Stock", "Information Technology"),
+        ("RY.TO", "Equity", "Stock", "Financials"),
+        ("SPY", "Equity", "ETF", "Non classé"),
+        ("XBB.TO", "Fixed Income", "ETF", "Non classé"),
+        ("GLD", "Alternative", "ETF", "Non classé"),
+        ("BTC-CAD", "Alternative", "Cryptocurrency", "Non classé"),
     ]
-    assets = pd.DataFrame(rows, columns=["symbol", "asset_class", "instrument_type"]).set_index("symbol")
+    assets = pd.DataFrame(rows, columns=["symbol", "asset_class", "instrument_type", "sector"]).set_index("symbol")
 
     def no_metrics(_weights):
         raise ValueError("pas d'historique dans ce test")
@@ -64,3 +65,23 @@ def test_all_vehicles_excludes_nothing():
     _, allowed = market()
     out, _ = preference_constraints({"vehicles": "tous"}, allowed)
     assert out == []
+
+
+def test_unreachable_floor_is_dropped_with_a_note(monkeypatch):
+    """FNB seulement et plus de techno: aucun FNB n'a de secteur, le plancher techno ferait échouer les gestionnaires."""
+    mk, allowed = market()
+    monkeypatch.setattr(monport, "excluded_mask", lambda m, cs: agent_mask(m, cs))
+    tech = Constraint(type=T.MIN_SECTOR_WEIGHT, target="Information Technology", value=0.10, hard=True)
+    bonds = Constraint(type=T.MIN_ASSET_CLASS_WEIGHT, target="Fixed Income", value=0.20, hard=True)
+    kept, note = drop_unreachable_floors(mk, fnb_only(allowed) + [tech, bonds])
+    assert tech not in kept and bonds in kept
+    assert "Information Technology" in note
+
+    kept, note = drop_unreachable_floors(mk, [tech, bonds])  # FNB et titres: AAPL remplit le plancher
+    assert tech in kept and note is None
+
+
+def agent_mask(mk, constraints):
+    """Ce que le moteur exclurait, d'après la requête que lui envoie le catalogue."""
+    excluded = set(agent_request(mk, constraints)["excluded_symbols"])
+    return mk.assets.index.isin(sorted(excluded))

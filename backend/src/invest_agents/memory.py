@@ -60,6 +60,7 @@ def to_state(s: "Session") -> dict:
         "verdicts": {k: _dump(v) for k, v in s.verdicts.items()},
         "decision": _dump(s.decision), "winner": s.winner, "justification": s.justification,
         "reoptimize": s.reoptimize, "build_round": s.build_round, "judged_round": s.judged_round,
+        "pending_request": getattr(s, "pending_request", ""), "requests": list(getattr(s, "requests", [])),
         "version": s.version,
     }
 
@@ -85,6 +86,7 @@ def from_state(d: dict, market) -> "Session":
     s.winner, s.justification = d.get("winner"), d.get("justification", "")
     s.reoptimize = d.get("reoptimize", {})
     s.build_round, s.judged_round = d.get("build_round", 0), d.get("judged_round", -1)
+    s.pending_request, s.requests = d.get("pending_request", ""), list(d.get("requests", []))
     s.version = s.shown_version = d.get("version", 0)  # le client a déjà vu cette version
     return s
 

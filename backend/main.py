@@ -7,6 +7,7 @@ Charges utiles (voir workflow/flow.py):
     {"mode": "monport_check", "profile": {...}, "constraints": {...}}
     {"mode": "monport", "profile": {...}, "constraints": {...}, "check": {...}, "adjustment": "...", "session": id}
     {"mode": "monport_chat", "session": id, "message": "texte libre"}
+    {"mode": "monport_rebuild", "session": id}       # applique la demande que Pépite a fait confirmer dans le chat
 """
 
 import logging
@@ -18,14 +19,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from bedrock_agentcore import BedrockAgentCoreApp  # noqa: E402
 
-from invest_agents.workflow.flow import stream_chat, stream_check, stream_monport  # noqa: E402
+from invest_agents.workflow.flow import stream_chat, stream_check, stream_monport, stream_rebuild  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 app = BedrockAgentCoreApp()
 
-# MonPort, mené par Pépite: vérification, construction, puis questions du client.
-STREAMS = {"monport_check": stream_check, "monport": stream_monport, "monport_chat": stream_chat}
+# MonPort, mené par Pépite: vérification, construction, questions du client, reconstruction confirmée.
+STREAMS = {"monport_check": stream_check, "monport": stream_monport, "monport_chat": stream_chat,
+           "monport_rebuild": stream_rebuild}
 
 
 @app.entrypoint
@@ -36,7 +38,7 @@ async def invoke(payload: dict):
     stream = STREAMS.get(payload.get("mode"))
     if stream is None:
         yield {"type": "error", "code": "invalid_request",
-               "message": "Le champ `mode` doit valoir monport_check, monport ou monport_chat."}
+               "message": "Le champ `mode` doit valoir monport_check, monport, monport_chat ou monport_rebuild."}
         yield {"type": "done"}
         return
     async for event in stream(payload):

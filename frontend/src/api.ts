@@ -117,21 +117,29 @@ function exampleCheck(score: number, constraints: Constraints): ProfileCheck {
 /**
  * Pépite relit le questionnaire avant tout envoi aux gestionnaires.
  * `session` : la conversation ouverte côté backend (null avec la vérification d'exemple).
+ * `onStep` reçoit ce que Pépite annonce faire (« Je calcule ton profil de risque… »).
  */
 export async function checkProfile(
   input: { score: number; profile: Profile; constraints: Constraints },
   signal: AbortSignal,
+  onStep: (text: string) => void = () => {},
 ): Promise<{ check: ProfileCheck; session: string | null }> {
   // Court délai : en mode strict, React monte deux fois la page ; le premier montage est annulé avant l'appel.
   await wait(50, signal)
   const body = await openStream({ mode: 'monport_check', profile: input.profile, constraints: input.constraints }, signal, true)
   if (!body) {
-    await wait(1200, signal)
+    // Assez long pour qu'on voie Pépite réfléchir.
+    for (const text of ['Je calcule ton profil de risque…', 'Je cherche les contradictions dans tes réponses…']) {
+      await wait(1300, signal)
+      onStep(text)
+    }
+    await wait(1300, signal)
     return { check: exampleCheck(input.score, input.constraints), session: null }
   }
   let check: ProfileCheck | null = null
   let session: string | null = null
   await relay(body, (e) => {
+    if (e.type === 'agent_status' && e.agent === 'pepite') onStep(e.message)
     if (e.type === 'check') {
       check = e.check
       session = e.session ?? null
@@ -156,6 +164,19 @@ export async function runPipeline(input: PipelineInput, onEvent: (e: PipelineEve
  */
 export async function askPepite(session: string, message: string, onEvent: (e: PipelineEvent) => void, signal: AbortSignal): Promise<boolean> {
   const body = await openStream({ mode: 'monport_chat', session, message }, signal)
+  if (!body) return false
+  await relay(body, onEvent, signal)
+  return true
+}
+
+/**
+ * Le client a confirmé les changements convenus dans le chat : Pépite relance toute la construction. Mêmes événements
+ * que runPipeline. Retourne false si le backend ne répond pas.
+ */
+export async function rebuildPipeline(session: string, onEvent: (e: PipelineEvent) => void, signal: AbortSignal): Promise<boolean> {
+  // Même court délai que runPipeline : le backend consomme la demande, le premier montage du mode strict ne doit pas l'envoyer.
+  await wait(50, signal)
+  const body = await openStream({ mode: 'monport_rebuild', session }, signal)
   if (!body) return false
   await relay(body, onEvent, signal)
   return true

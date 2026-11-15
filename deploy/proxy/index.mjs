@@ -3,7 +3,7 @@
 // Le CORS (préflight compris) est géré par la Function URL elle-même.
 import { BedrockAgentCoreClient, InvokeAgentRuntimeCommand } from '@aws-sdk/client-bedrock-agentcore'
 
-export const MODES = new Set(['monport_check', 'monport', 'monport_chat'])
+export const MODES = new Set(['monport_check', 'monport', 'monport_chat', 'monport_rebuild'])
 export const MAX_BODY = 64 * 1024
 export const SESSION_RE = /^[A-Za-z0-9_-]{33,100}$/
 const HEARTBEAT_MS = 15_000

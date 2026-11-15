@@ -85,6 +85,11 @@ class Session:
     build_round: int = 0  # nombre de passes de construction
     judged_round: int = -1  # passe que le juge a vue en dernier
     rebuilds_left: int = 0
+    # Tour en cours: "check", "build", "chat" (aucune construction possible) ou "rebuild".
+    phase: str = "check"
+    # Changements convenus dans le chat, en attente de la confirmation du client, puis ceux déjà appliqués.
+    pending_request: str = ""
+    requests: list[str] = field(default_factory=list)
     version: int = 0  # augmente quand les portefeuilles changent: le frontend en reçoit alors une nouvelle version
     shown_version: int = -1
     bus: Optional[EventBus] = None

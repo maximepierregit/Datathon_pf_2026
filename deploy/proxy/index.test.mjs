@@ -29,6 +29,7 @@ test('refuse un mode inconnu, une session invalide, un GET et un corps trop gros
   assert.equal(parseRequest(event('x'.repeat(70_000))).status, 413)
   assert.equal(parseRequest(event('{pas du json')).status, 400)
   assert.deepEqual(parseRequest(event({ mode: 'monport_chat', message: 'salut' })).session, SESSION)
+  assert.equal(parseRequest(event({ mode: 'monport_rebuild' })).error, undefined)
 })
 
 test('relaie les morceaux du runtime avec la session AgentCore', async () => {

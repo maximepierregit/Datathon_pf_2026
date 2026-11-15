@@ -11,8 +11,12 @@
 
     {"mode": "monport_chat", "session": id, "message": "texte libre"}
         Pépite répond au client. Pour un pourquoi, elle interroge les gestionnaires, les agents Risque et le juge.
-        Elle peut aussi relancer la construction -> {"type": "pepite", "text": ...} puis, si les portefeuilles ont
-        changé, un nouvel événement `portfolios`.
+        Pour un changement, elle pose des questions jusqu'à ce qu'il soit clair, puis le récapitule
+        -> {"type": "pepite", "text": ..., "final": true, "ready": true, "request": "les changements convenus"}
+
+    {"mode": "monport_rebuild", "session": id}
+        Le client a confirmé les changements convenus dans le chat: Pépite réécrit les profils et relance toute la
+        construction -> les mêmes événements que `monport`.
 
 Les événements restent ceux de `PipelineEvent` (frontend/src/types.ts); `session` est un champ ajouté.
 """
@@ -48,7 +52,7 @@ from ..monport import (
 from .. import gateway
 from ..guardrail import screen
 from ..schemas import PepiteCheck
-from .pepite import build_turn, chat_turn, check_turn
+from .pepite import build_turn, chat_turn, check_turn, rebuild_turn
 from .session import SESSIONS, Session, persist, review_of
 from .workers import apply_plan, build_slots, judge_round, names_for
 
@@ -235,19 +239,52 @@ async def chat(payload: dict, bus, translator: Translator) -> None:
         return
     async with session.lock:
         _bind(session, bus, translator)
-        # Une relance pour le juge, plus une pour une demande du client.
-        session.rebuilds_left = get_runtime_settings().max_pm_retries + 1
         try:
-            reply = (await chat_turn(session, bus, message)).message
+            answer = await chat_turn(session, bus, message)
+            reply, request = answer.message, answer.rebuild_request.strip() if answer.ready_to_rebuild else ""
         except AgentError:
             logger.exception("Pépite en échec pendant le chat")
-            reply = "Je n’ai pas réussi à répondre à ta question. Peux-tu la reformuler?"
-        await ensure_pipeline(session)
+            reply, request = "Je n’ai pas réussi à répondre à ta question. Peux-tu la reformuler?", ""
+        # La reconstruction attend la confirmation du client (mode monport_rebuild).
+        session.pending_request = request[:MAX_ADJUSTMENT]
         front(bus, status("pepite", "done", "Réponse prête."))
-        front(bus, {**pepite(reply), "final": True})
-        if session.version != session.shown_version:
-            present(session, bus)
+        front(bus, {**pepite(reply), "final": True, **({"ready": True, "request": request} if request else {})})
         await persist(session)
+    front(bus, {"type": "done"})
+
+
+async def rebuild(payload: dict, bus, translator: Translator) -> None:
+    market = await asyncio.to_thread(get_market)
+    session = await SESSIONS.get_or_restore(payload.get("session"), market)
+    if session is None or not session.portfolios:
+        front(bus, {"type": "error", "message": "Cette conversation a expiré. Relance la construction de tes portefeuilles."})
+        return
+    if not session.pending_request:
+        front(bus, {"type": "error", "message": "Je n’ai aucun changement à appliquer. Dis-moi dans le chat ce que tu veux changer."})
+        return
+    if session.lock.locked():
+        front(bus, {"type": "error", "message": "Une demande est déjà en cours pour cette conversation."})
+        return
+    async with session.lock:
+        request, session.pending_request = session.pending_request, ""
+        _bind(session, bus, translator)
+        _reset_results(session)
+        session.rebuilds_left = get_runtime_settings().max_pm_retries
+
+        front(bus, pepite("C’est parti! Je relance mes agents avec tes changements."))
+        front(bus, status("pepite", "running", "Je réécris les consignes des gestionnaires…"))
+        reply: Optional[str] = None
+        try:
+            reply = (await rebuild_turn(session, bus, request)).message
+        except AgentError:
+            logger.exception("Pépite en échec pendant la reconstruction, le code termine le travail")
+        _bind(session, bus, translator)
+        await ensure_pipeline(session)
+        session.requests.append(request)
+        front(bus, status("pepite", "done", "Portefeuilles prêts."))
+        if present(session, bus):
+            front(bus, pepite(reply or "Voilà! Tes portefeuilles tiennent compte de tes changements."))
+            await persist(session)
     front(bus, {"type": "done"})
 
 
@@ -264,3 +301,8 @@ def stream_monport(payload: dict) -> AsyncIterator[dict]:
 def stream_chat(payload: dict) -> AsyncIterator[dict]:
     translator = Translator()
     return _stream(lambda bus: chat(payload, bus, translator), translator)
+
+
+def stream_rebuild(payload: dict) -> AsyncIterator[dict]:
+    translator = Translator()
+    return _stream(lambda bus: rebuild(payload, bus, translator), translator)

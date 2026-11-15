@@ -320,3 +320,14 @@ class PepiteReply(BaseModel):
     """Ce que Pépite dit au client à la fin d'un tour."""
 
     message: str = Field(description="Ta réponse au client, tutoyée, en français québécois, sans jargon")
+    ready_to_rebuild: bool = Field(
+        default=False,
+        description="Chat seulement: true quand la demande de changement est claire, que tu as récapitulé les changements "
+        "et demandé au client s'il veut relancer tes agents. False sinon.",
+    )
+    rebuild_request: str = Field(
+        default="",
+        description="Chat seulement, avec ready_to_rebuild: les changements convenus, précis et complets (portefeuille "
+        "visé, classes d'actifs, régions, thématiques, exclusions, FNB seulement, niveau de risque), en 1 à 4 phrases "
+        "écrites pour toi. Vide sinon.",
+    )
