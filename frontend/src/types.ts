@@ -69,17 +69,24 @@ export interface Portfolio {
   agentNotes: string[]
 }
 
-export type AgentId = 'eclaireur' | 'compositeur' | 'verificateur'
+/** Portefeuille tel que l'envoie le backend : le nom et l'accroche viennent de PORTFOLIO_META. */
+export type BackendPortfolio = Omit<Portfolio, 'name' | 'tagline'>
+
+/** Une carte par agent du backend : le profil, un gestionnaire et un juge par portefeuille, le responsable des risques. */
+export type AgentId = 'profil' | `gestionnaire-${PortfolioId}` | `juge-${PortfolioId}` | 'risques'
 
 export type AgentStatus = 'pending' | 'running' | 'done'
 
-/** Même forme que les futurs événements SSE du backend Strands. */
+/** Même forme que les événements SSE du backend (`backend/src/invest_agents/monport.py`). */
 export type PipelineEvent =
   | { type: 'agent_status'; agent: AgentId; status: AgentStatus; message: string }
   | { type: 'pepite'; text: string }
   | { type: 'universe'; before: number; after: number }
   | { type: 'rerun'; portfolio: PortfolioId; reason: string }
   | { type: 'warning'; text: string }
+  /** Un portefeuille en échec côté backend est absent : le moteur d'exemple le remplace. */
+  | { type: 'portfolios'; portfolios: Partial<Record<PortfolioId, BackendPortfolio>> }
+  | { type: 'error'; message: string }
   | { type: 'done' }
 
 export interface AdjustChange {

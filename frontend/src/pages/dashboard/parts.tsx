@@ -136,10 +136,9 @@ export function HoldingsTable({ p, amount, detailed = false }: { p: Portfolio; a
 }
 
 export function AgentNotes({ p }: { p: Portfolio }) {
-  const notes = [...p.agentNotes, 'Le Vérificateur confirme que ce portefeuille respecte les limites de sécurité.']
   return (
     <ul className="m-0 flex list-none flex-col gap-2 p-0">
-      {notes.map((n) => (
+      {p.agentNotes.map((n) => (
         <li key={n} className="flex gap-2 text-[15px]">
           <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-red" aria-hidden />
           {n}

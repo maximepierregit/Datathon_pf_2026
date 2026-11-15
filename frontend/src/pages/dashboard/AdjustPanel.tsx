@@ -99,7 +99,7 @@ export function AdjustPanel({ p, onClose }: { p: Portfolio; onClose: () => void 
                       </Button>
                     </div>
                   ) : (
-                    <p className="m-0 mt-2 text-xs font-semibold text-slate">{m.status === 'applied' ? 'Appliqué. Le Vérificateur a recalculé le portefeuille.' : 'Proposition ignorée.'}</p>
+                    <p className="m-0 mt-2 text-xs font-semibold text-slate">{m.status === 'applied' ? 'Appliqué. Le portefeuille a été recalculé.' : 'Proposition ignorée.'}</p>
                   )}
                 </div>
               )}

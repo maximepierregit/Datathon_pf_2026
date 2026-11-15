@@ -35,6 +35,7 @@ Colonnes lues dans le dataset: `date`, `symbol`, `total_return_cad` (obligatoire
 | `data.py` | Chargement du dataset fixe (local ou `s3://`), moments, métriques |
 | `events.py` | Bus d'événements pour le streaming (réflexion, outils, statuts) |
 | `schemas.py` | Contrats Pydantic (formulaire, contraintes, portefeuilles, rapport) |
+| `monport.py` | Pont avec le frontend MonPort: profil et préférences en entrée, événements `PipelineEvent` en sortie |
 
 ## Contrat d'entrée
 
@@ -44,6 +45,10 @@ Colonnes lues dans le dataset: `date`, `symbol`, `total_return_cad` (obligatoire
 
 // Relance: `context` est copié tel quel depuis le dernier événement `result`
 {"mode": "refine", "message": "texte libre", "context": { /* result.data.context */ }}
+
+// Frontend MonPort: Profile et Constraints de frontend/src/types.ts. Les événements renvoyés sont ceux de
+// `PipelineEvent` (agent_status, pepite, universe, warning, portfolios, error, done), pas ceux décrits plus bas.
+{"mode": "monport", "profile": { /* Profile */ }, "constraints": { /* Constraints */ }}
 ```
 
 ## Contrat de sortie (SSE, un JSON par événement)
