@@ -1,0 +1,669 @@
+# Expositions des FNB par secteur et par pays (fractions du capital), produites par data-prep/build_etf_exposures.py.
+symbol,dimension,label,weight,source
+ACWX,sector,Real Estate,0.0123,yfinance
+ACWX,sector,Consumer Discretionary,0.0707,yfinance
+ACWX,sector,Materials,0.0619,yfinance
+ACWX,sector,Consumer Staples,0.0528,yfinance
+ACWX,sector,Information Technology,0.2058,yfinance
+ACWX,sector,Communication Services,0.0477,yfinance
+ACWX,sector,Financials,0.2492,yfinance
+ACWX,sector,Utilities,0.03,yfinance
+ACWX,sector,Industrials,0.1342,yfinance
+ACWX,sector,Energy,0.0542,yfinance
+ACWX,sector,Health Care,0.0765,yfinance
+ACWX,country,Japan,0.14,table
+ACWX,country,United Kingdom,0.09,table
+ACWX,country,China,0.08,table
+ACWX,country,Canada,0.08,table
+ACWX,country,France,0.06,table
+ACWX,country,Taiwan,0.06,table
+ACWX,country,Switzerland,0.06,table
+ACWX,country,Germany,0.06,table
+ACWX,country,India,0.05,table
+ACWX,country,Australia,0.04,table
+ACWX,country,South Korea,0.03,table
+ACWX,country,Netherlands,0.03,table
+AGZ,country,United States,1.0,table
+AIQ,sector,Consumer Discretionary,0.0927,yfinance
+AIQ,sector,Information Technology,0.7064,yfinance
+AIQ,sector,Communication Services,0.1178,yfinance
+AIQ,sector,Financials,0.0015,yfinance
+AIQ,sector,Industrials,0.0743,yfinance
+AIQ,sector,Health Care,0.0065,yfinance
+AIQ,country,United States,0.7,table
+AIQ,country,China,0.07,table
+AIQ,country,Japan,0.04,table
+AIQ,country,Taiwan,0.04,table
+AIQ,country,South Korea,0.03,table
+AOA,sector,Real Estate,0.0175,yfinance
+AOA,sector,Consumer Discretionary,0.0682,yfinance
+AOA,sector,Materials,0.0307,yfinance
+AOA,sector,Consumer Staples,0.0391,yfinance
+AOA,sector,Information Technology,0.2403,yfinance
+AOA,sector,Communication Services,0.0561,yfinance
+AOA,sector,Financials,0.1303,yfinance
+AOA,sector,Utilities,0.0193,yfinance
+AOA,sector,Industrials,0.0863,yfinance
+AOA,sector,Energy,0.036,yfinance
+AOA,sector,Health Care,0.072,yfinance
+AOA,country,United States,0.66,table
+AOA,country,Japan,0.06,table
+AOA,country,United Kingdom,0.04,table
+AOA,country,France,0.03,table
+AOA,country,Germany,0.02,table
+AOA,country,China,0.02,table
+AOA,country,Canada,0.02,table
+AOK,sector,Real Estate,0.0065,yfinance
+AOK,sector,Consumer Discretionary,0.0255,yfinance
+AOK,sector,Materials,0.0115,yfinance
+AOK,sector,Consumer Staples,0.0146,yfinance
+AOK,sector,Information Technology,0.0898,yfinance
+AOK,sector,Communication Services,0.021,yfinance
+AOK,sector,Financials,0.0487,yfinance
+AOK,sector,Utilities,0.0072,yfinance
+AOK,sector,Industrials,0.0322,yfinance
+AOK,sector,Energy,0.0134,yfinance
+AOK,sector,Health Care,0.0269,yfinance
+AOK,country,United States,0.78,table
+AOK,country,Japan,0.03,table
+AOK,country,United Kingdom,0.02,table
+AOK,country,France,0.02,table
+AOK,country,Germany,0.02,table
+AOK,country,Canada,0.02,table
+AOM,sector,Real Estate,0.0087,yfinance
+AOM,sector,Consumer Discretionary,0.034,yfinance
+AOM,sector,Materials,0.0153,yfinance
+AOM,sector,Consumer Staples,0.0195,yfinance
+AOM,sector,Information Technology,0.1198,yfinance
+AOM,sector,Communication Services,0.028,yfinance
+AOM,sector,Financials,0.0649,yfinance
+AOM,sector,Utilities,0.0096,yfinance
+AOM,sector,Industrials,0.043,yfinance
+AOM,sector,Energy,0.0179,yfinance
+AOM,sector,Health Care,0.0359,yfinance
+AOM,country,United States,0.75,table
+AOM,country,Japan,0.04,table
+AOM,country,United Kingdom,0.03,table
+AOM,country,France,0.02,table
+AOM,country,Germany,0.02,table
+AOM,country,Canada,0.02,table
+AOR,sector,Real Estate,0.0131,yfinance
+AOR,sector,Consumer Discretionary,0.0511,yfinance
+AOR,sector,Materials,0.023,yfinance
+AOR,sector,Consumer Staples,0.0293,yfinance
+AOR,sector,Information Technology,0.18,yfinance
+AOR,sector,Communication Services,0.042,yfinance
+AOR,sector,Financials,0.0976,yfinance
+AOR,sector,Utilities,0.0145,yfinance
+AOR,sector,Industrials,0.0646,yfinance
+AOR,sector,Energy,0.0269,yfinance
+AOR,sector,Health Care,0.0539,yfinance
+AOR,country,United States,0.7,table
+AOR,country,Japan,0.05,table
+AOR,country,United Kingdom,0.03,table
+AOR,country,France,0.02,table
+AOR,country,Germany,0.02,table
+AOR,country,Canada,0.02,table
+AOR,country,China,0.02,table
+AQWA,sector,Consumer Discretionary,0.0235,yfinance
+AQWA,sector,Materials,0.0165,yfinance
+AQWA,sector,Consumer Staples,0.0274,yfinance
+AQWA,sector,Information Technology,0.0253,yfinance
+AQWA,sector,Utilities,0.4079,yfinance
+AQWA,sector,Industrials,0.499,yfinance
+AQWA,country,United States,0.6,table
+AQWA,country,United Kingdom,0.15,table
+AQWA,country,Brazil,0.05,table
+AQWA,country,Japan,0.04,table
+BETZ,sector,Consumer Discretionary,0.7209,yfinance
+BETZ,sector,Information Technology,0.0684,yfinance
+BETZ,sector,Communication Services,0.0305,yfinance
+BETZ,country,United States,0.45,table
+BETZ,country,United Kingdom,0.1,table
+BETZ,country,Sweden,0.1,table
+BETZ,country,Australia,0.07,table
+BKF,sector,Real Estate,0.0128,yfinance
+BKF,sector,Consumer Discretionary,0.1688,yfinance
+BKF,sector,Materials,0.0716,yfinance
+BKF,sector,Consumer Staples,0.0369,yfinance
+BKF,sector,Information Technology,0.0874,yfinance
+BKF,sector,Communication Services,0.1201,yfinance
+BKF,sector,Financials,0.2536,yfinance
+BKF,sector,Utilities,0.0359,yfinance
+BKF,sector,Industrials,0.074,yfinance
+BKF,sector,Energy,0.0703,yfinance
+BKF,sector,Health Care,0.0638,yfinance
+BKF,country,China,0.5,table
+BKF,country,India,0.35,table
+BKF,country,Brazil,0.15,table
+BND,country,United States,0.94,table
+BOTZ,sector,Consumer Discretionary,0.0566,yfinance
+BOTZ,sector,Information Technology,0.2868,yfinance
+BOTZ,sector,Communication Services,0.0231,yfinance
+BOTZ,sector,Industrials,0.5033,yfinance
+BOTZ,sector,Health Care,0.1296,yfinance
+BOTZ,country,United States,0.45,table
+BOTZ,country,Japan,0.3,table
+BOTZ,country,Switzerland,0.1,table
+CLF.TO,country,Canada,1.0,table
+CLG.TO,country,Canada,1.0,table
+DAX,sector,Real Estate,0.0067,yfinance
+DAX,sector,Consumer Discretionary,0.0602,yfinance
+DAX,sector,Materials,0.0488,yfinance
+DAX,sector,Consumer Staples,0.011,yfinance
+DAX,sector,Information Technology,0.1572,yfinance
+DAX,sector,Communication Services,0.0544,yfinance
+DAX,sector,Financials,0.2195,yfinance
+DAX,sector,Utilities,0.0468,yfinance
+DAX,sector,Industrials,0.3259,yfinance
+DAX,sector,Health Care,0.0691,yfinance
+DAX,country,Germany,1.0,table
+DIA,sector,Consumer Discretionary,0.0994,yfinance
+DIA,sector,Materials,0.0382,yfinance
+DIA,sector,Consumer Staples,0.0435,yfinance
+DIA,sector,Information Technology,0.1907,yfinance
+DIA,sector,Communication Services,0.0449,yfinance
+DIA,sector,Financials,0.2708,yfinance
+DIA,sector,Industrials,0.1362,yfinance
+DIA,sector,Energy,0.027,yfinance
+DIA,sector,Health Care,0.1487,yfinance
+DIA,country,United States,1.0,table
+DTCR,sector,Real Estate,0.6469,yfinance
+DTCR,sector,Information Technology,0.3285,yfinance
+DTCR,sector,Communication Services,0.0241,yfinance
+DTCR,country,United States,0.8,table
+DTCR,country,Japan,0.04,table
+DTCR,country,Australia,0.03,table
+EDIV,sector,Real Estate,0.0342,yfinance
+EDIV,sector,Consumer Discretionary,0.0737,yfinance
+EDIV,sector,Materials,0.0393,yfinance
+EDIV,sector,Consumer Staples,0.1306,yfinance
+EDIV,sector,Information Technology,0.0727,yfinance
+EDIV,sector,Communication Services,0.1663,yfinance
+EDIV,sector,Financials,0.2803,yfinance
+EDIV,sector,Utilities,0.054,yfinance
+EDIV,sector,Industrials,0.0704,yfinance
+EDIV,sector,Energy,0.055,yfinance
+EDIV,sector,Health Care,0.0181,yfinance
+EDIV,country,Taiwan,0.2,table
+EDIV,country,China,0.15,table
+EDIV,country,Brazil,0.1,table
+EDIV,country,India,0.1,table
+EDIV,country,South Africa,0.06,table
+EDIV,country,Thailand,0.05,table
+EDIV,country,Mexico,0.05,table
+EEM,sector,Real Estate,0.0102,yfinance
+EEM,sector,Consumer Discretionary,0.0776,yfinance
+EEM,sector,Materials,0.0533,yfinance
+EEM,sector,Consumer Staples,0.0265,yfinance
+EEM,sector,Information Technology,0.4183,yfinance
+EEM,sector,Communication Services,0.06,yfinance
+EEM,sector,Financials,0.2077,yfinance
+EEM,sector,Utilities,0.0187,yfinance
+EEM,sector,Industrials,0.0581,yfinance
+EEM,sector,Energy,0.0383,yfinance
+EEM,sector,Health Care,0.0295,yfinance
+EEM,country,China,0.27,table
+EEM,country,Taiwan,0.2,table
+EEM,country,India,0.18,table
+EEM,country,South Korea,0.11,table
+EEM,country,Brazil,0.04,table
+EEM,country,South Africa,0.03,table
+EEM,country,Saudi Arabia,0.03,table
+EEM,country,Mexico,0.02,table
+EFA,sector,Real Estate,0.0157,yfinance
+EFA,sector,Consumer Discretionary,0.0723,yfinance
+EFA,sector,Materials,0.0562,yfinance
+EFA,sector,Consumer Staples,0.0696,yfinance
+EFA,sector,Information Technology,0.1104,yfinance
+EFA,sector,Communication Services,0.0465,yfinance
+EFA,sector,Financials,0.2487,yfinance
+EFA,sector,Utilities,0.0372,yfinance
+EFA,sector,Industrials,0.1802,yfinance
+EFA,sector,Energy,0.0438,yfinance
+EFA,sector,Health Care,0.1121,yfinance
+EFA,country,Japan,0.22,table
+EFA,country,United Kingdom,0.15,table
+EFA,country,France,0.1,table
+EFA,country,Switzerland,0.09,table
+EFA,country,Germany,0.09,table
+EFA,country,Australia,0.07,table
+EFA,country,Netherlands,0.05,table
+EFA,country,Sweden,0.03,table
+EFA,country,Denmark,0.03,table
+EFA,country,Spain,0.03,table
+EFA,country,Italy,0.03,table
+EFA,country,Hong Kong,0.02,table
+ESGU,sector,Real Estate,0.0215,yfinance
+ESGU,sector,Consumer Discretionary,0.0852,yfinance
+ESGU,sector,Materials,0.0191,yfinance
+ESGU,sector,Consumer Staples,0.0439,yfinance
+ESGU,sector,Information Technology,0.3853,yfinance
+ESGU,sector,Communication Services,0.0783,yfinance
+ESGU,sector,Financials,0.121,yfinance
+ESGU,sector,Utilities,0.0186,yfinance
+ESGU,sector,Industrials,0.0754,yfinance
+ESGU,sector,Energy,0.041,yfinance
+ESGU,sector,Health Care,0.1092,yfinance
+ESGU,country,United States,1.0,table
+EWG,sector,Real Estate,0.0069,yfinance
+EWG,sector,Consumer Discretionary,0.0714,yfinance
+EWG,sector,Materials,0.0542,yfinance
+EWG,sector,Consumer Staples,0.0156,yfinance
+EWG,sector,Information Technology,0.1686,yfinance
+EWG,sector,Communication Services,0.0525,yfinance
+EWG,sector,Financials,0.2349,yfinance
+EWG,sector,Utilities,0.0471,yfinance
+EWG,sector,Industrials,0.2713,yfinance
+EWG,sector,Health Care,0.0759,yfinance
+EWG,country,Germany,1.0,table
+EWJ,sector,Real Estate,0.0187,yfinance
+EWJ,sector,Consumer Discretionary,0.1188,yfinance
+EWJ,sector,Materials,0.0284,yfinance
+EWJ,sector,Consumer Staples,0.0371,yfinance
+EWJ,sector,Information Technology,0.2045,yfinance
+EWJ,sector,Communication Services,0.0943,yfinance
+EWJ,sector,Financials,0.189,yfinance
+EWJ,sector,Utilities,0.0098,yfinance
+EWJ,sector,Industrials,0.2226,yfinance
+EWJ,sector,Energy,0.0103,yfinance
+EWJ,sector,Health Care,0.0582,yfinance
+EWJ,country,Japan,1.0,table
+EWQ,sector,Real Estate,0.0127,yfinance
+EWQ,sector,Consumer Discretionary,0.1042,yfinance
+EWQ,sector,Materials,0.0757,yfinance
+EWQ,sector,Consumer Staples,0.0933,yfinance
+EWQ,sector,Information Technology,0.0394,yfinance
+EWQ,sector,Communication Services,0.0279,yfinance
+EWQ,sector,Financials,0.1247,yfinance
+EWQ,sector,Utilities,0.0233,yfinance
+EWQ,sector,Industrials,0.3063,yfinance
+EWQ,sector,Energy,0.0926,yfinance
+EWQ,sector,Health Care,0.0954,yfinance
+EWQ,country,France,1.0,table
+EWU,sector,Real Estate,0.0071,yfinance
+EWU,sector,Consumer Discretionary,0.039,yfinance
+EWU,sector,Materials,0.0745,yfinance
+EWU,sector,Consumer Staples,0.1503,yfinance
+EWU,sector,Information Technology,0.0069,yfinance
+EWU,sector,Communication Services,0.0228,yfinance
+EWU,sector,Financials,0.2281,yfinance
+EWU,sector,Utilities,0.0515,yfinance
+EWU,sector,Industrials,0.1282,yfinance
+EWU,sector,Energy,0.1405,yfinance
+EWU,sector,Health Care,0.1364,yfinance
+EWU,country,United Kingdom,1.0,table
+EWW,sector,Real Estate,0.0818,yfinance
+EWW,sector,Consumer Discretionary,0.0124,yfinance
+EWW,sector,Materials,0.2454,yfinance
+EWW,sector,Consumer Staples,0.2492,yfinance
+EWW,sector,Communication Services,0.0931,yfinance
+EWW,sector,Financials,0.1802,yfinance
+EWW,sector,Industrials,0.1263,yfinance
+EWW,sector,Health Care,0.0045,yfinance
+EWW,country,Mexico,1.0,table
+EWY,sector,Consumer Discretionary,0.0451,yfinance
+EWY,sector,Materials,0.015,yfinance
+EWY,sector,Consumer Staples,0.0245,yfinance
+EWY,sector,Information Technology,0.5202,yfinance
+EWY,sector,Communication Services,0.0313,yfinance
+EWY,sector,Financials,0.1474,yfinance
+EWY,sector,Utilities,0.0035,yfinance
+EWY,sector,Industrials,0.1525,yfinance
+EWY,sector,Energy,0.0132,yfinance
+EWY,sector,Health Care,0.0342,yfinance
+EWY,country,South Korea,1.0,table
+EWZ,sector,Consumer Discretionary,0.0143,yfinance
+EWZ,sector,Materials,0.1283,yfinance
+EWZ,sector,Consumer Staples,0.0442,yfinance
+EWZ,sector,Communication Services,0.0186,yfinance
+EWZ,sector,Financials,0.3122,yfinance
+EWZ,sector,Utilities,0.119,yfinance
+EWZ,sector,Industrials,0.1143,yfinance
+EWZ,sector,Energy,0.2093,yfinance
+EWZ,sector,Health Care,0.0201,yfinance
+EWZ,country,Brazil,1.0,table
+GOVT,country,United States,1.0,table
+HYG,country,United States,0.86,table
+HYG,country,Canada,0.05,table
+HYG,country,United Kingdom,0.02,table
+ICLN,sector,Materials,0.0161,yfinance
+ICLN,sector,Information Technology,0.2858,yfinance
+ICLN,sector,Utilities,0.4931,yfinance
+ICLN,sector,Industrials,0.2011,yfinance
+ICLN,country,United States,0.4,table
+ICLN,country,China,0.08,table
+ICLN,country,Denmark,0.08,table
+ICLN,country,Spain,0.07,table
+ICLN,country,India,0.04,table
+ICLN,country,Brazil,0.04,table
+IEF,country,United States,1.0,table
+ILF,sector,Real Estate,0.0084,yfinance
+ILF,sector,Consumer Discretionary,0.0204,yfinance
+ILF,sector,Materials,0.204,yfinance
+ILF,sector,Consumer Staples,0.0944,yfinance
+ILF,sector,Communication Services,0.0555,yfinance
+ILF,sector,Financials,0.3211,yfinance
+ILF,sector,Utilities,0.0388,yfinance
+ILF,sector,Industrials,0.0915,yfinance
+ILF,sector,Energy,0.1466,yfinance
+ILF,sector,Health Care,0.01,yfinance
+ILF,country,Brazil,0.6,table
+ILF,country,Mexico,0.25,table
+ILF,country,Chile,0.07,table
+ILF,country,Peru,0.05,table
+INDA,sector,Real Estate,0.0138,yfinance
+INDA,sector,Consumer Discretionary,0.1215,yfinance
+INDA,sector,Materials,0.08,yfinance
+INDA,sector,Consumer Staples,0.0498,yfinance
+INDA,sector,Information Technology,0.087,yfinance
+INDA,sector,Communication Services,0.0549,yfinance
+INDA,sector,Financials,0.295,yfinance
+INDA,sector,Utilities,0.0414,yfinance
+INDA,sector,Industrials,0.0986,yfinance
+INDA,sector,Energy,0.0802,yfinance
+INDA,sector,Health Care,0.0755,yfinance
+INDA,country,India,1.0,table
+IOO,sector,Real Estate,0.0022,yfinance
+IOO,sector,Consumer Discretionary,0.076,yfinance
+IOO,sector,Materials,0.0162,yfinance
+IOO,sector,Consumer Staples,0.0619,yfinance
+IOO,sector,Information Technology,0.4665,yfinance
+IOO,sector,Communication Services,0.0829,yfinance
+IOO,sector,Financials,0.0966,yfinance
+IOO,sector,Utilities,0.0044,yfinance
+IOO,sector,Industrials,0.0429,yfinance
+IOO,sector,Energy,0.0462,yfinance
+IOO,sector,Health Care,0.1011,yfinance
+IOO,country,United States,0.8,table
+IOO,country,United Kingdom,0.04,table
+IOO,country,Switzerland,0.03,table
+IOO,country,Japan,0.02,table
+IOO,country,France,0.02,table
+IOO,country,Germany,0.02,table
+IOO,country,Netherlands,0.02,table
+IPAC,sector,Real Estate,0.0465,yfinance
+IPAC,sector,Consumer Discretionary,0.1067,yfinance
+IPAC,sector,Materials,0.0762,yfinance
+IPAC,sector,Consumer Staples,0.0399,yfinance
+IPAC,sector,Information Technology,0.1376,yfinance
+IPAC,sector,Communication Services,0.0648,yfinance
+IPAC,sector,Financials,0.2405,yfinance
+IPAC,sector,Utilities,0.0179,yfinance
+IPAC,sector,Industrials,0.1894,yfinance
+IPAC,sector,Energy,0.0168,yfinance
+IPAC,sector,Health Care,0.0558,yfinance
+IPAC,country,Japan,0.68,table
+IPAC,country,Australia,0.18,table
+IPAC,country,Hong Kong,0.06,table
+IPAC,country,Singapore,0.04,table
+ITA,sector,Industrials,0.9995,yfinance
+ITA,country,United States,1.0,table
+IWM,sector,Real Estate,0.0649,yfinance
+IWM,sector,Consumer Discretionary,0.0906,yfinance
+IWM,sector,Materials,0.041,yfinance
+IWM,sector,Consumer Staples,0.0259,yfinance
+IWM,sector,Information Technology,0.1399,yfinance
+IWM,sector,Communication Services,0.0223,yfinance
+IWM,sector,Financials,0.1815,yfinance
+IWM,sector,Utilities,0.0284,yfinance
+IWM,sector,Industrials,0.1262,yfinance
+IWM,sector,Energy,0.0675,yfinance
+IWM,sector,Health Care,0.2099,yfinance
+IWM,country,United States,1.0,table
+IYY,sector,Real Estate,0.0202,yfinance
+IYY,sector,Consumer Discretionary,0.0915,yfinance
+IYY,sector,Materials,0.0181,yfinance
+IYY,sector,Consumer Staples,0.0473,yfinance
+IYY,sector,Information Technology,0.3711,yfinance
+IYY,sector,Communication Services,0.0805,yfinance
+IYY,sector,Financials,0.1214,yfinance
+IYY,sector,Utilities,0.0209,yfinance
+IYY,sector,Industrials,0.0842,yfinance
+IYY,sector,Energy,0.0398,yfinance
+IYY,sector,Health Care,0.1037,yfinance
+IYY,country,United States,1.0,table
+JPXN,sector,Real Estate,0.0247,yfinance
+JPXN,sector,Consumer Discretionary,0.1268,yfinance
+JPXN,sector,Materials,0.0401,yfinance
+JPXN,sector,Consumer Staples,0.0475,yfinance
+JPXN,sector,Information Technology,0.161,yfinance
+JPXN,sector,Communication Services,0.088,yfinance
+JPXN,sector,Financials,0.1459,yfinance
+JPXN,sector,Utilities,0.0168,yfinance
+JPXN,sector,Industrials,0.2663,yfinance
+JPXN,sector,Energy,0.0139,yfinance
+JPXN,sector,Health Care,0.0608,yfinance
+JPXN,country,Japan,1.0,table
+LQD,country,United States,0.85,table
+LQD,country,United Kingdom,0.04,table
+LQD,country,Canada,0.03,table
+LQD,country,Japan,0.02,table
+MCHI,sector,Real Estate,0.0163,yfinance
+MCHI,sector,Consumer Discretionary,0.2295,yfinance
+MCHI,sector,Materials,0.049,yfinance
+MCHI,sector,Consumer Staples,0.0328,yfinance
+MCHI,sector,Information Technology,0.0984,yfinance
+MCHI,sector,Communication Services,0.1746,yfinance
+MCHI,sector,Financials,0.2243,yfinance
+MCHI,sector,Utilities,0.018,yfinance
+MCHI,sector,Industrials,0.0477,yfinance
+MCHI,sector,Energy,0.0417,yfinance
+MCHI,sector,Health Care,0.0624,yfinance
+MCHI,country,China,1.0,table
+MSOS,sector,Real Estate,0.1391,yfinance
+MSOS,sector,Consumer Discretionary,0.0493,yfinance
+MSOS,sector,Industrials,0.082,yfinance
+MSOS,sector,Health Care,0.0068,yfinance
+MSOS,country,United States,1.0,table
+NREA.TO,sector,Real Estate,0.0023,yfinance
+NREA.TO,sector,Utilities,0.4914,yfinance
+NREA.TO,sector,Industrials,0.2584,yfinance
+NREA.TO,sector,Energy,0.244,yfinance
+NREA.TO,country,United States,0.55,table
+NREA.TO,country,Canada,0.1,table
+NREA.TO,country,United Kingdom,0.07,table
+NREA.TO,country,Japan,0.05,table
+NREA.TO,country,Spain,0.05,table
+NREA.TO,country,Australia,0.05,table
+QQQ,sector,Consumer Discretionary,0.1102,yfinance
+QQQ,sector,Materials,0.0107,yfinance
+QQQ,sector,Consumer Staples,0.0678,yfinance
+QQQ,sector,Information Technology,0.5792,yfinance
+QQQ,sector,Communication Services,0.1107,yfinance
+QQQ,sector,Financials,0.0022,yfinance
+QQQ,sector,Utilities,0.0118,yfinance
+QQQ,sector,Industrials,0.0525,yfinance
+QQQ,sector,Energy,0.0051,yfinance
+QQQ,sector,Health Care,0.0481,yfinance
+QQQ,country,United States,0.97,table
+ROBO,sector,Consumer Discretionary,0.0364,yfinance
+ROBO,sector,Information Technology,0.428,yfinance
+ROBO,sector,Communication Services,0.0088,yfinance
+ROBO,sector,Financials,0.0136,yfinance
+ROBO,sector,Industrials,0.4487,yfinance
+ROBO,sector,Health Care,0.0637,yfinance
+ROBO,country,United States,0.5,table
+ROBO,country,Japan,0.15,table
+ROBO,country,Germany,0.05,table
+ROBO,country,Switzerland,0.04,table
+SHLD,sector,Information Technology,0.1541,yfinance
+SHLD,sector,Industrials,0.8451,yfinance
+SHLD,country,United States,1.0,table
+SMH,sector,Information Technology,0.9993,yfinance
+SMH,country,United States,0.75,table
+SMH,country,Taiwan,0.12,table
+SMH,country,Netherlands,0.07,table
+SPY,sector,Real Estate,0.018,yfinance
+SPY,sector,Consumer Discretionary,0.0919,yfinance
+SPY,sector,Materials,0.0158,yfinance
+SPY,sector,Consumer Staples,0.0488,yfinance
+SPY,sector,Information Technology,0.3821,yfinance
+SPY,sector,Communication Services,0.0842,yfinance
+SPY,sector,Financials,0.1202,yfinance
+SPY,sector,Utilities,0.0209,yfinance
+SPY,sector,Industrials,0.0761,yfinance
+SPY,sector,Energy,0.0391,yfinance
+SPY,sector,Health Care,0.1024,yfinance
+SPY,country,United States,1.0,table
+TAN,sector,Information Technology,0.5947,yfinance
+TAN,sector,Financials,0.0542,yfinance
+TAN,sector,Utilities,0.3181,yfinance
+TAN,sector,Industrials,0.0318,yfinance
+TAN,country,United States,0.45,table
+TAN,country,China,0.15,table
+TAN,country,Spain,0.07,table
+TAN,country,Germany,0.04,table
+VDY.TO,sector,Consumer Discretionary,0.0273,yfinance
+VDY.TO,sector,Materials,0.0205,yfinance
+VDY.TO,sector,Consumer Staples,0.0032,yfinance
+VDY.TO,sector,Information Technology,0.0038,yfinance
+VDY.TO,sector,Communication Services,0.0229,yfinance
+VDY.TO,sector,Financials,0.6,yfinance
+VDY.TO,sector,Utilities,0.0352,yfinance
+VDY.TO,sector,Industrials,0.0028,yfinance
+VDY.TO,sector,Energy,0.2834,yfinance
+VDY.TO,sector,Health Care,0.0009,yfinance
+VDY.TO,country,Canada,1.0,table
+VGK,sector,Real Estate,0.0139,yfinance
+VGK,sector,Consumer Discretionary,0.0654,yfinance
+VGK,sector,Materials,0.0537,yfinance
+VGK,sector,Consumer Staples,0.0739,yfinance
+VGK,sector,Information Technology,0.0934,yfinance
+VGK,sector,Communication Services,0.0276,yfinance
+VGK,sector,Financials,0.251,yfinance
+VGK,sector,Utilities,0.0437,yfinance
+VGK,sector,Industrials,0.1932,yfinance
+VGK,sector,Energy,0.055,yfinance
+VGK,sector,Health Care,0.1195,yfinance
+VGK,country,United Kingdom,0.23,table
+VGK,country,France,0.15,table
+VGK,country,Switzerland,0.14,table
+VGK,country,Germany,0.14,table
+VGK,country,Netherlands,0.07,table
+VGK,country,Spain,0.05,table
+VGK,country,Italy,0.05,table
+VGK,country,Sweden,0.05,table
+VGK,country,Denmark,0.04,table
+VGT,sector,Consumer Discretionary,0.0006,yfinance
+VGT,sector,Information Technology,0.9904,yfinance
+VGT,sector,Financials,0.0033,yfinance
+VGT,sector,Industrials,0.0029,yfinance
+VGT,country,United States,1.0,table
+VGV.TO,country,Canada,1.0,table
+XAW.TO,sector,Real Estate,0.0226,yfinance
+XAW.TO,sector,Consumer Discretionary,0.0874,yfinance
+XAW.TO,sector,Materials,0.0333,yfinance
+XAW.TO,sector,Consumer Staples,0.0485,yfinance
+XAW.TO,sector,Information Technology,0.3139,yfinance
+XAW.TO,sector,Communication Services,0.0723,yfinance
+XAW.TO,sector,Financials,0.1534,yfinance
+XAW.TO,sector,Utilities,0.0237,yfinance
+XAW.TO,sector,Industrials,0.1065,yfinance
+XAW.TO,sector,Energy,0.04,yfinance
+XAW.TO,sector,Health Care,0.0927,yfinance
+XAW.TO,country,United States,0.66,table
+XAW.TO,country,Japan,0.05,table
+XAW.TO,country,United Kingdom,0.03,table
+XAW.TO,country,China,0.03,table
+XAW.TO,country,France,0.02,table
+XAW.TO,country,Taiwan,0.02,table
+XAW.TO,country,Switzerland,0.02,table
+XAW.TO,country,Germany,0.02,table
+XAW.TO,country,India,0.02,table
+XBB.TO,country,Canada,1.0,table
+XCB.TO,country,Canada,1.0,table
+XEG.TO,sector,Energy,0.9996,yfinance
+XEG.TO,country,Canada,1.0,table
+XESG.TO,sector,Real Estate,0.007,yfinance
+XESG.TO,sector,Consumer Discretionary,0.0332,yfinance
+XESG.TO,sector,Materials,0.1896,yfinance
+XESG.TO,sector,Consumer Staples,0.0104,yfinance
+XESG.TO,sector,Information Technology,0.0337,yfinance
+XESG.TO,sector,Communication Services,0.0025,yfinance
+XESG.TO,sector,Financials,0.3709,yfinance
+XESG.TO,sector,Utilities,0.0263,yfinance
+XESG.TO,sector,Industrials,0.093,yfinance
+XESG.TO,sector,Energy,0.2316,yfinance
+XESG.TO,sector,Health Care,0.0008,yfinance
+XESG.TO,country,Canada,1.0,table
+XFN.TO,sector,Financials,0.9975,yfinance
+XFN.TO,country,Canada,1.0,table
+XIC.TO,sector,Real Estate,0.0134,yfinance
+XIC.TO,sector,Consumer Discretionary,0.0352,yfinance
+XIC.TO,sector,Materials,0.1549,yfinance
+XIC.TO,sector,Consumer Staples,0.0307,yfinance
+XIC.TO,sector,Information Technology,0.0865,yfinance
+XIC.TO,sector,Communication Services,0.0148,yfinance
+XIC.TO,sector,Financials,0.3506,yfinance
+XIC.TO,sector,Utilities,0.0303,yfinance
+XIC.TO,sector,Industrials,0.1016,yfinance
+XIC.TO,sector,Energy,0.178,yfinance
+XIC.TO,sector,Health Care,0.0019,yfinance
+XIC.TO,country,Canada,1.0,table
+XIT.TO,sector,Information Technology,0.9973,yfinance
+XIT.TO,sector,Industrials,0.0027,yfinance
+XIT.TO,country,Canada,1.0,table
+XIU.TO,sector,Real Estate,0.002,yfinance
+XIU.TO,sector,Consumer Discretionary,0.0367,yfinance
+XIU.TO,sector,Materials,0.1159,yfinance
+XIU.TO,sector,Consumer Staples,0.0338,yfinance
+XIU.TO,sector,Information Technology,0.1003,yfinance
+XIU.TO,sector,Communication Services,0.0154,yfinance
+XIU.TO,sector,Financials,0.4092,yfinance
+XIU.TO,sector,Utilities,0.0253,yfinance
+XIU.TO,sector,Industrials,0.0792,yfinance
+XIU.TO,sector,Energy,0.1796,yfinance
+XIU.TO,country,Canada,1.0,table
+XLB,sector,Consumer Discretionary,0.177,yfinance
+XLB,sector,Materials,0.8212,yfinance
+XLB,country,United States,1.0,table
+XLC,sector,Communication Services,0.9981,yfinance
+XLC,country,United States,1.0,table
+XLE,sector,Energy,0.9983,yfinance
+XLE,country,United States,1.0,table
+XLF,sector,Information Technology,0.0158,yfinance
+XLF,sector,Financials,0.9807,yfinance
+XLF,sector,Industrials,0.0027,yfinance
+XLF,country,United States,1.0,table
+XLI,sector,Consumer Discretionary,0.0019,yfinance
+XLI,sector,Materials,0.0036,yfinance
+XLI,sector,Information Technology,0.0647,yfinance
+XLI,sector,Industrials,0.9294,yfinance
+XLI,country,United States,1.0,table
+XLK,sector,Information Technology,0.9995,yfinance
+XLK,country,United States,1.0,table
+XLP,sector,Consumer Discretionary,0.0147,yfinance
+XLP,sector,Consumer Staples,0.9694,yfinance
+XLP,sector,Financials,0.015,yfinance
+XLP,country,United States,1.0,table
+XLRE,sector,Real Estate,0.999,yfinance
+XLRE,country,United States,1.0,table
+XLU,sector,Utilities,0.9986,yfinance
+XLU,country,United States,1.0,table
+XLV,sector,Health Care,0.9982,yfinance
+XLV,country,United States,1.0,table
+XLY,sector,Consumer Discretionary,0.9873,yfinance
+XLY,sector,Information Technology,0.0119,yfinance
+XLY,country,United States,1.0,table
+XMA.TO,sector,Consumer Discretionary,0.0172,yfinance
+XMA.TO,sector,Materials,0.9818,yfinance
+XMA.TO,country,Canada,1.0,table
+XRB.TO,country,Canada,1.0,table
+XRE.TO,sector,Real Estate,0.9957,yfinance
+XRE.TO,country,Canada,1.0,table
+XT,sector,Consumer Discretionary,0.0765,yfinance
+XT,sector,Materials,0.0132,yfinance
+XT,sector,Information Technology,0.4278,yfinance
+XT,sector,Communication Services,0.0351,yfinance
+XT,sector,Financials,0.0345,yfinance
+XT,sector,Utilities,0.0411,yfinance
+XT,sector,Industrials,0.0863,yfinance
+XT,sector,Health Care,0.2822,yfinance
+XT,country,United States,0.65,table
+XT,country,Japan,0.06,table
+XT,country,China,0.04,table
+XT,country,Taiwan,0.03,table
+XUT.TO,sector,Utilities,0.8974,yfinance
+XUT.TO,sector,Energy,0.1009,yfinance
+XUT.TO,country,Canada,1.0,table

@@ -16,6 +16,10 @@ from .schemas import Constraint, ConstraintCheck, ConstraintRef, ConstraintType 
 TOL = 1e-3  # tolérance numérique sur la volatilité et le rendement
 WTOL = 2e-4  # tolérance sur les poids (les poids sont arrondis à 4 décimales)
 HELD = 5e-4  # poids à partir duquel une position est considérée comme détenue
+# Exclure un secteur ou un pays écarte aussi tout FNB qui y place plus de 10 % de son capital (VDY.TO: 28 % d'énergie).
+# Un FNB large reste admis (SPY: 4 % d'énergie): l'exposition résiduelle du portefeuille reste donc sous ce seuil.
+EXCLUSION_THRESHOLD = 0.10
+EXPOSED = ("sector", "country")  # dimensions comptées au prorata du contenu des FNB (Market.exposures)
 
 
 @dataclass(frozen=True)
@@ -206,9 +210,9 @@ def excluded_mask(market: Market, constraints: list[Constraint], hard_only: bool
         if hard_only and not c.hard:
             continue
         if c.type is T.EXCLUDE_SECTOR:
-            mask |= a["sector"].str.lower().eq((c.target or "").lower())
+            mask |= market.exposure_to("sector", c.target or "").reindex(a.index, fill_value=0.0) > EXCLUSION_THRESHOLD
         elif c.type is T.EXCLUDE_COUNTRY:
-            mask |= a["country"].str.lower().eq((c.target or "").lower())
+            mask |= market.exposure_to("country", c.target or "").reindex(a.index, fill_value=0.0) > EXCLUSION_THRESHOLD
         elif c.type is T.EXCLUDE_ASSET_CLASS:
             mask |= a["asset_class"].str.lower().eq((c.target or "").lower())
         elif c.type is T.EXCLUDE_SYMBOL:
@@ -252,15 +256,20 @@ def evaluate(market: Market, weights: dict[str, float], constraints: list[Constr
         t = target.lower()
         if dimension == "symbol":
             return sum(w for s, w in held.items() if s.lower() == t)
+        if dimension in EXPOSED:  # un FNB compte au prorata de son contenu
+            share = market.exposure_to(dimension, target)
+            return sum(w * float(share[s]) for s, w in held.items())
         col = DIMENSION_COLUMN[dimension]
         return sum(w for s, w in held.items() if str(a.loc[s, col]).lower() == t)
 
     def max_group_weight(dimension: str) -> float:
+        if dimension in EXPOSED:
+            return max(market.group_weights(dimension, held).values(), default=0.0) if held else 0.0
         col = DIMENSION_COLUMN[dimension]
         sums: dict[str, float] = {}
         for s, w in held.items():
             key = str(a.loc[s, col])
-            if key != UNKNOWN:  # les ETF et cryptos sans secteur ne forment pas un « secteur »
+            if key != UNKNOWN:
                 sums[key] = sums.get(key, 0.0) + w
         return max(sums.values(), default=0.0)
 
@@ -289,8 +298,11 @@ def evaluate(market: Market, weights: dict[str, float], constraints: list[Constr
             actual = metrics.expected_return if metrics else 0.0
             passed = actual >= (v or 0) - TOL
         elif spec.kind == "none":
+            # Valeur observée: l'exposition du portefeuille (les FNB au prorata). Respectée si aucune position
+            # n'est exclue par la contrainte (même règle que excluded_mask, seuil compris).
             actual = group_weight(spec.dimension or "symbol", c.target or "")
-            passed = actual <= HELD
+            banned = excluded_mask(market, [c], hard_only=False)
+            passed = not any(bool(banned.get(s, False)) for s in held)
         elif c.target == ANY:
             actual = max_group_weight(spec.dimension or "sector")
             passed = actual <= (v or 0) + WTOL

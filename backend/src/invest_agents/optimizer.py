@@ -13,7 +13,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from .config import get_settings
-from .constraints import ANY, DIMENSION_COLUMN, SPECS, evaluate, excluded_mask, is_fund
+from .constraints import ANY, DIMENSION_COLUMN, EXPOSED, SPECS, evaluate, excluded_mask, is_fund
 from .data import UNKNOWN
 from .data import Market
 from .schemas import Constraint, ConstraintCheck, ConstraintType as T, PortfolioMetrics
@@ -39,6 +39,8 @@ def _group_vector(market: Market, symbols: list[str], dimension: str, target: st
     t = target.lower()
     if dimension == "symbol":
         return np.array([1.0 if s.lower() == t else 0.0 for s in symbols])
+    if dimension in EXPOSED:  # part du capital de chaque titre dans ce secteur ou ce pays (FNB au prorata)
+        return market.exposure_to(dimension, target).loc[symbols].to_numpy(dtype=float)
     col = DIMENSION_COLUMN[dimension]
     values = market.assets.loc[symbols, col].str.lower()
     return (values == t).to_numpy(dtype=float)
@@ -127,8 +129,12 @@ def optimize(
     for c in hard:
         spec = SPECS[c.type]
         if spec.dimension and spec.kind == "fraction" and c.target == ANY:
-            col = DIMENSION_COLUMN[spec.dimension]
-            for group in sorted(set(market.assets.loc[syms, col]) - {UNKNOWN}):
+            if spec.dimension in EXPOSED:
+                e = market.exposures[spec.dimension].loc[syms]
+                groups = sorted(e.columns[e.sum() > 0])
+            else:
+                groups = sorted(set(market.assets.loc[syms, DIMENSION_COLUMN[spec.dimension]]) - {UNKNOWN})
+            for group in groups:
                 vec = _group_vector(market, syms, spec.dimension, group)
                 cons.append({"type": "ineq", "fun": lambda w, a=vec, v=float(c.value or 0): v - a @ w, "jac": lambda w, a=vec: -a})
             continue

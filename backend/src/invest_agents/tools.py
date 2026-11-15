@@ -17,7 +17,7 @@ from strands import tool
 
 from .config import get_settings
 from .constraints import evaluate, excluded_mask
-from .data import Market
+from .data import FUND_MAJORITY, Market
 from .optimizer import Objective, OptimizationResult, optimize
 from .schemas import Constraint
 
@@ -56,6 +56,11 @@ def make_pm_tools(market: Market, state: PMState) -> list:
     hard = [c for c in state.constraints if c.hard]
     eligible = market.assets[~excluded_mask(market, hard)]
 
+    def majority_counts(dimension: str, symbols) -> dict[str, int]:
+        """Nombre d'actifs par secteur ou pays; un FNB compte là où il place au moins la moitié de son capital."""
+        counts = (market.exposures[dimension].loc[symbols] >= FUND_MAJORITY).sum()
+        return {str(k): int(v) for k, v in counts[counts > 0].sort_values(ascending=False).items()}
+
     @tool
     def describe_universe() -> dict:
         """Résume l'univers d'investissement admissible (après exclusions imposées): nombre d'actifs par classe,
@@ -64,8 +69,8 @@ def make_pm_tools(market: Market, state: PMState) -> list:
         return {
             "n_assets": int(len(a)),
             "by_asset_class": a["asset_class"].value_counts().to_dict(),
-            "by_sector": a["sector"].value_counts().to_dict(),
-            "by_country": a["country"].value_counts().to_dict(),
+            "by_sector": majority_counts("sector", a.index),
+            "by_country": majority_counts("country", a.index),
             "ann_vol_range": [round(float(a["ann_vol"].min()), 3), round(float(a["ann_vol"].max()), 3)],
             "ann_return_range": [round(float(a["ann_return"].min()), 3), round(float(a["ann_return"].max()), 3)],
         }
@@ -83,8 +88,8 @@ def make_pm_tools(market: Market, state: PMState) -> list:
         """Filtre l'univers admissible et retourne les meilleurs actifs selon un critère.
 
         Args:
-            sector: Secteur exact à conserver (optionnel).
-            country: Pays exact à conserver (optionnel).
+            sector: Secteur exact à conserver (optionnel). Un FNB est retenu s'il y place au moins la moitié de son capital.
+            country: Pays exact à conserver (optionnel). Même règle pour les FNB.
             asset_class: Classe d'actifs exacte (ex. Equity, Fixed Income, Crypto) (optionnel).
             max_volatility: Volatilité annualisée maximale d'un actif, en fraction (0.25 = 25 %).
             min_sharpe: Ratio de Sharpe historique minimal.
@@ -93,9 +98,9 @@ def make_pm_tools(market: Market, state: PMState) -> list:
         """
         a = eligible
         if sector:
-            a = a[a["sector"].str.lower() == sector.lower()]
+            a = a[market.exposure_to("sector", sector).loc[a.index] >= FUND_MAJORITY]
         if country:
-            a = a[a["country"].str.lower() == country.lower()]
+            a = a[market.exposure_to("country", country).loc[a.index] >= FUND_MAJORITY]
         if asset_class:
             a = a[a["asset_class"].str.lower() == asset_class.lower()]
         if max_volatility is not None:

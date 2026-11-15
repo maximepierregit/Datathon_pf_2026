@@ -6,9 +6,10 @@ import difflib
 import logging
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -25,6 +26,10 @@ UNKNOWN = "Non classé"
 # Colonnes produites par `create_opt_inputs` dans Universe_Cleaned.ipynb
 REQUIRED_COLUMNS = {"date", "symbol", "total_return_cad"}
 META_COLUMNS = ["name", "sector", "industry", "country", "currency", "asset_class", "instrument_type", "market"]
+# Contenu des FNB par secteur et par pays (data-prep/build_etf_exposures.py): le dataset ne les classe pas.
+EXPOSURES_CSV = Path(__file__).with_name("etf_exposures.csv")
+EXPOSURE_DIMENSIONS = ("sector", "country")
+FUND_MAJORITY = 0.5  # un FNB « appartient » à un secteur ou un pays s'il y place au moins la moitié de son capital
 
 
 def _resolve_path(path: str) -> str:
@@ -57,15 +62,50 @@ def _resolve_path(path: str) -> str:
 class Market:
     assets: pd.DataFrame  # index = symbol
     returns: pd.DataFrame  # date x symbol, rendements quotidiens en CAD
+    # dimension (sector | country) -> symbole x libellé, part du capital: 1 pour une action, le contenu pour un FNB
+    exposures: dict[str, pd.DataFrame] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.exposures:
+            self.exposures = build_exposures(self.assets, None)
+
+    # ------------------------------------------------------------------ #
+    # Expositions
+    # ------------------------------------------------------------------ #
+    def exposure_to(self, dimension: str, target: str) -> pd.Series:
+        """Part du capital de chaque actif dans un secteur ou un pays (index = symbole)."""
+        e = self.exposures[dimension]
+        cols = [c for c in e.columns if c.lower() == target.strip().lower()]
+        return e[cols].sum(axis=1) if cols else pd.Series(0.0, index=e.index)
+
+    def group_weights(self, dimension: str, weights: dict[str, float]) -> dict[str, float]:
+        """Poids d'un portefeuille par secteur ou par pays, chaque FNB au prorata de son contenu. La part sans
+        secteur (obligations, liquidités, crypto) ou sans pays attribué n'est pas listée."""
+        symbols = list(weights)
+        g = self.exposures[dimension].loc[symbols].T @ np.array([weights[s] for s in symbols], dtype=float)
+        g = g[g > 5e-4].sort_values(ascending=False)
+        return {str(k): round(float(v), 4) for k, v in g.items()}
+
+    def _label(self, symbol: str, dimension: str) -> str:
+        """Libellé d'un actif: son secteur ou pays, ou pour un FNB les 3 plus gros (« Financials 60 %, … »)."""
+        value = str(self.assets.loc[symbol, dimension])
+        row = self.exposures[dimension].loc[symbol]
+        if value != UNKNOWN or not row.any():
+            return value
+        top = row[row > 0].sort_values(ascending=False).head(3)
+        return ", ".join(f"{k} {v:.0%}".replace("%", " %") for k, v in top.items())
 
     # ------------------------------------------------------------------ #
     # Catalogue
     # ------------------------------------------------------------------ #
     def allowed_values(self) -> dict[str, list[str]]:
         a = self.assets
+        def labels(dimension: str) -> list[str]:
+            return sorted(set(a[dimension].dropna()) | set(self.exposures[dimension].columns))
+
         return {
-            "sector": sorted(a["sector"].dropna().unique().tolist()),
-            "country": sorted(a["country"].dropna().unique().tolist()),
+            "sector": labels("sector"),
+            "country": labels("country"),
             "asset_class": sorted(a["asset_class"].dropna().unique().tolist()),
             "symbol": sorted(a.index.tolist()),
         }
@@ -92,8 +132,8 @@ class Market:
                 {
                     "symbol": symbol,
                     "name": r["name"],
-                    "sector": r["sector"],
-                    "country": r["country"],
+                    "sector": self._label(symbol, "sector"),
+                    "country": self._label(symbol, "country"),
                     "asset_class": r["asset_class"],
                     "ann_return": round(float(r["ann_return"]), 4),
                     "ann_vol": round(float(r["ann_vol"]), 4),
@@ -144,10 +184,37 @@ class Market:
             n_positions=len(symbols),
             hhi=round(hhi, 4),
             effective_n=round(1 / hhi, 1),
-            sector_weights=group("sector"),
-            country_weights=group("country"),
+            sector_weights=self.group_weights("sector", dict(zip(symbols, w))),
+            country_weights=self.group_weights("country", dict(zip(symbols, w))),
             asset_class_weights=group("asset_class"),
         )
+
+
+def load_exposures(path: Path = EXPOSURES_CSV) -> Optional[pd.DataFrame]:
+    """Table symbol, dimension, label, weight des FNB (None si le fichier manque)."""
+    if not path.exists():
+        logger.warning("Expositions des FNB introuvables (%s): un FNB ne compte dans aucun secteur ni pays", path)
+        return None
+    return pd.read_csv(path, comment="#")
+
+
+def build_exposures(assets: pd.DataFrame, table: Optional[pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """Matrices symbole x libellé. Une action pèse 1 dans son secteur et son pays; un FNB de la table compte au
+    prorata de son contenu (rien pour la part en obligations, liquidités…); un actif « Non classé » absent de
+    la table (crypto, FNB inconnu) ne compte nulle part."""
+    out = {}
+    for dimension in EXPOSURE_DIMENSIONS:
+        known = assets[dimension].where(assets[dimension] != UNKNOWN).dropna()
+        e = pd.crosstab(known.index, known).astype(float)
+        e = e.reindex(index=assets.index, fill_value=0.0)
+        if table is not None:
+            rows = table[(table["dimension"] == dimension) & table["symbol"].isin(assets.index)]
+            funds = rows.pivot_table(index="symbol", columns="label", values="weight", aggfunc="sum")
+            e = e.reindex(columns=e.columns.union(funds.columns), fill_value=0.0)
+            e.loc[funds.index] = funds.reindex(columns=e.columns).fillna(0.0).to_numpy()
+        e.index.name, e.columns.name = "symbol", None
+        out[dimension] = e
+    return out
 
 
 def build_market(df: pd.DataFrame) -> Market:
@@ -190,7 +257,7 @@ def build_market(df: pd.DataFrame) -> Market:
     ).fillna(0.0)
     assets = meta.join(stats)
     logger.info("Dataset chargé: %d actifs, %d dates", len(assets), len(returns))
-    return Market(assets=assets, returns=returns)
+    return Market(assets=assets, returns=returns, exposures=build_exposures(assets, load_exposures()))
 
 
 @lru_cache(maxsize=1)
