@@ -88,6 +88,7 @@ Une ambiguïté (extraction) ou un conflit (fusion, ou contraintes du formulaire
 - Valeurs en **fractions** (0.10 = 10 %), comptes en entiers.
 - `hard=True`: imposée par l'optimiseur. `hard=False`: préférence, évaluée seulement.
 - `source`: `form`, `chat` ou `profile`. Les défauts du profil (`MAX_VOLATILITY`, `MAX_POSITION_WEIGHT`) sont des préférences; `promote_profile_defaults()` les rend dures pour les PM tant qu'elles ne créent pas de conflit.
+- Parts de la poche actions (`min/max_sector_share`, `min/max_country_share`, `catalog.SHARE_TYPES`): 0.45 = 45 % des actions en direct et FNB d'actions; seules les actions en direct du groupe comptent au numérateur (un FNB n'a ni secteur ni pays). Contrainte linéaire `poids du groupe − p × poids de la poche`. Cible: un ou plusieurs libellés séparés par `|` (une région = plusieurs pays). Une base limitée aux actions en direct a été écartée: l'optimiseur gardait 0 action et satisfaisait la part à vide.
 - Cible `*` (`constraints.ANY`): « chaque secteur » ou « chaque pays », pour `max_sector_weight` et `max_country_weight` seulement. Le groupe `Non classé` (ETF, crypto) est ignoré par ce plafond.
 - Fusion (`merge_constraints`): clé `(type, target)`; la nouvelle valeur remplace l'ancienne; `removals` retire.
 - Tolérances: `WTOL = 2e-4` sur les poids (arrondis à 4 décimales), `TOL = 1e-3` sur volatilité et rendement.

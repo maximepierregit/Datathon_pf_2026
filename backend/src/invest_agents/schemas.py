@@ -34,6 +34,11 @@ class ConstraintType(str, Enum):
     MIN_ASSET_CLASS_WEIGHT = "min_asset_class_weight"
     MAX_SYMBOL_WEIGHT = "max_symbol_weight"
     MIN_SYMBOL_WEIGHT = "min_symbol_weight"
+    # Parts de la poche actions (et non du portefeuille entier): seules les actions en direct ont un secteur et un pays.
+    MIN_SECTOR_SHARE = "min_sector_share"
+    MAX_SECTOR_SHARE = "max_sector_share"
+    MIN_COUNTRY_SHARE = "min_country_share"
+    MAX_COUNTRY_SHARE = "max_country_share"
     MIN_FACTOR_EXPOSURE = "min_factor_exposure"
     MAX_FACTOR_EXPOSURE = "max_factor_exposure"
 
@@ -44,7 +49,8 @@ class Constraint(BaseModel):
     type: ConstraintType
     target: Optional[str] = Field(
         default=None,
-        description="Secteur, pays, classe d'actifs ou symbole visé. Null si le type n'a pas de cible.",
+        description="Secteur, pays, classe d'actifs ou symbole visé. Pour les *_share, un ou plusieurs libellés "
+        "séparés par « | » (ex.: \"France|Germany\"). Null si le type n'a pas de cible.",
     )
     value: Optional[float] = Field(
         default=None,

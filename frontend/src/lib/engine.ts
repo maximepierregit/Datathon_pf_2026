@@ -1,7 +1,7 @@
 // Moteur d'exemple côté front : il imite ce que feront les agents Strands et l'optimiseur Python,
 // pour que l'interface fonctionne avant le branchement du backend.
-import { CLASS_ASSUMPTIONS, CLASS_LABELS, BLOCKS, FACTOR_IDS, UNIVERSE, type UniverseLine } from '../data/catalog'
-import type { AssetClass, ConstraintBlock, Constraints, FactorView, Holding, Level, Metrics, Portfolio, PortfolioId, Profile, RiskNote, ScoredStock } from '../types'
+import { CLASS_ASSUMPTIONS, CLASS_LABELS, BLOCKS, FACTOR_IDS, shownClasses, UNIVERSE, type UniverseLine } from '../data/catalog'
+import type { AssetClass, Constraints, FactorView, Holding, Level, Metrics, Portfolio, PortfolioId, Profile, RiskNote, ScoredStock, Share } from '../types'
 
 const CLASSES = Object.keys(CLASS_LABELS) as AssetClass[]
 const LINE_CAP = 0.4
@@ -58,7 +58,30 @@ export function riskLabel(score: number): string {
   return RISK_LABELS[Math.min(4, Math.floor(clamp((score - 5) / 90, 0, 1) / 0.2))]
 }
 
-const level = (c: Constraints, block: ConstraintBlock, id: string): Level => c[block][id] ?? 0
+const factor = (c: Constraints, id: string): Level => c.factors[id] ?? 0
+
+/** Le pourcentage saisi, en fraction ; undefined pour neutre ou « exclure ». */
+const shareOf = (v: Share | undefined): number | undefined => (typeof v === 'number' ? v / 100 : undefined)
+
+/**
+ * Répartit `total` : un élément exclu reçoit 0, un pourcentage saisi sa part de `total`, et les neutres se partagent
+ * le reste au prorata de `base`.
+ */
+function fill(base: Record<string, number>, values: Record<string, Share>, total: number): Record<string, number> {
+  const out: Record<string, number> = {}
+  let fixed = 0
+  for (const k of Object.keys(base)) {
+    const s = shareOf(values[k])
+    if (s !== undefined) {
+      out[k] = s * total
+      fixed += out[k]
+    } else if (values[k] === 'exclure') out[k] = 0
+  }
+  const free = Object.keys(base).filter((k) => !(k in out))
+  const freeBase = free.reduce((a, k) => a + base[k], 0)
+  for (const k of free) out[k] = freeBase > 0 ? (Math.max(0, total - fixed) * base[k]) / freeBase : 0
+  return out
+}
 
 function classWeights(id: PortfolioId, score: number, c: Constraints, notes: string[]) {
   const s = clamp(score + (id === 'prudent' ? -20 : id === 'conviction' ? 10 : 0), 0, 100)
@@ -73,21 +96,19 @@ function classWeights(id: PortfolioId, score: number, c: Constraints, notes: str
   }
   w.obligations = Math.max(0, 1 - eq - w.immobilier - w.or - w.liquidites)
 
-  const risky: AssetClass[] = ['actions', 'immobilier', 'or', 'crypto']
-  const plus = { prudent: 0.05, equilibre: 0.05, conviction: 0.12 }[id]
-  const impose = { prudent: 0.1, equilibre: 0.1, conviction: 0.25 }[id]
-  for (const k of CLASSES) {
-    const l = level(c, 'classes', k)
-    if (l === 0) continue
-    if (l === -2) w[k] = 0
-    else if (l === -1) w[k] *= id === 'conviction' ? 0.4 : 0.6
-    else if (id === 'prudent' && risky.includes(k)) {
-      notes.push(`Ta préférence pour « ${CLASS_LABELS[k]} » a été mise de côté : ton profil demande de la stabilité.`)
-    } else {
-      const bump = k === 'crypto' ? (id === 'conviction' ? (l === 2 ? 0.3 : 0.1) : 0.03) : l === 2 ? 0 : plus
-      w[k] = l === 2 ? Math.max(w[k] + bump, k === 'crypto' && id !== 'conviction' ? 0.05 : impose) : w[k] + bump
-    }
+  // Hors FNB, il ne reste que les actions et la crypto.
+  const shown: AssetClass[] = shownClasses(c.vehicles)
+  if (c.vehicles === 'titres') for (const k of CLASSES) if (!shown.includes(k)) w[k] = 0
+  // « Ton profil » ne garde que les exclusions : les pourcentages du client sont mis de côté.
+  const values: Record<string, Share> = {}
+  for (const k of shown) {
+    const v = c.classes[k]
+    if (v === undefined) continue
+    if (id === 'prudent' && v !== 'exclure') {
+      notes.push(`Ton pourcentage pour « ${CLASS_LABELS[k]} » a été mis de côté : ce portefeuille suit ton profil.`)
+    } else values[k] = v
   }
+  Object.assign(w, fill(w, values, 1))
   const total = CLASSES.reduce((a, k) => a + w[k], 0)
   if (total <= 0) {
     w.liquidites = 1
@@ -104,32 +125,34 @@ function lineWeights(id: PortfolioId, c: Constraints, cw: Record<AssetClass, num
   }
   const scale = { prudent: 0.5, equilibre: 1, conviction: 1.8 }[id]
 
-  // Actions : les thèmes prennent une part, puis les actions détenues en direct, le reste se répartit par région.
+  // Actions : les thématiques fixées en % prennent leur part, puis les actions détenues en direct, le reste se répartit
+  // par région. « Ton profil » ignore les pourcentages de thématiques et de régions.
+  const follows = id !== 'prudent'
   let eqLeft = cw.actions
   for (const line of UNIVERSE.filter((u) => u.theme)) {
-    const l = level(c, 'themes', line.theme!)
-    if (l <= 0) continue
-    const share = Math.min(eqLeft, cw.actions * (l === 2 ? 0.16 : 0.08) * scale)
+    const wanted = follows ? shareOf(c.themes[line.theme!]) : undefined
+    if (!wanted || c.vehicles === 'titres') continue
+    const share = Math.min(eqLeft, cw.actions * wanted)
     push(line, share)
     eqLeft -= share
   }
-  // Actions détenues en direct (sauf FNB seulement) : poids penchés vers les facteurs demandés, comme l'optimiseur.
+  // Actions détenues en direct (sauf FNB seulement ; toute la part actions avec des titres seulement) : poids penchés
+  // vers les facteurs demandés, comme l'optimiseur.
   const stocks = UNIVERSE.filter((u) => u.scores)
   if (c.vehicles !== 'fnb' && stocks.length) {
     const tilt = stocks.map((u) =>
-      Math.exp(0.7 * scale * FACTOR_IDS.reduce((s, f) => s + level(c, 'factors', f) * (u.scores![f] ?? 0), 0)),
+      Math.exp(0.7 * scale * FACTOR_IDS.reduce((s, f) => s + factor(c, f) * (u.scores![f] ?? 0), 0)),
     )
     const tiltSum = tilt.reduce((a, b) => a + b, 0)
-    const sleeve = eqLeft * 0.35
+    const sleeve = eqLeft * (c.vehicles === 'titres' ? 1 : 0.35)
     stocks.forEach((u, i) => push(u, (sleeve * tilt[i]) / tiltSum))
     eqLeft -= sleeve
   }
   const baseRegion: Record<string, number> = { canada: 0.3, usa: 0.4, europe: 0.15, asie: 0.08, emergents: 0.07 }
-  const mult: Record<Level, number> = { [-2]: 0, [-1]: 0.5, 0: 1, 1: 1.6, 2: 2.2 }
-  const regions = UNIVERSE.filter((u) => u.region)
-  const raw = regions.map((u) => baseRegion[u.region!] * mult[level(c, 'regions', u.region!)])
-  const rawSum = raw.reduce((a, b) => a + b, 0) || 1
-  regions.forEach((u, i) => push(u, (eqLeft * raw[i]) / rawSum))
+  const regionValues = follows ? c.regions : Object.fromEntries(Object.entries(c.regions).filter(([, v]) => v === 'exclure'))
+  const byRegion = fill(baseRegion, regionValues, 1)
+  const regionSum = Object.values(byRegion).reduce((a, b) => a + b, 0) || 1
+  for (const u of UNIVERSE.filter((u) => u.region)) push(u, (eqLeft * byRegion[u.region!]) / regionSum)
 
   const split: Partial<Record<AssetClass, Record<string, number>>> = {
     obligations: { 'OBL-GV': 0.6, 'OBL-SO': 0.4 },
@@ -141,10 +164,11 @@ function lineWeights(id: PortfolioId, c: Constraints, cw: Record<AssetClass, num
     }
   }
 
-  const excluded = BLOCKS.themes.items.filter((t) => level(c, 'themes', t.id) === -2).map((t) => t.label.toLowerCase())
+  const excluded = BLOCKS.themes.items.filter((t) => c.themes[t.id] === 'exclure').map((t) => t.label.toLowerCase())
   if (excluded.length) notes.push(`Filtre appliqué aux FNB : ${excluded.join(', ')} exclus.`)
   // L'univers d'exemple ne contient que des FNB : rien à retirer ici, l'univers réel écartera les titres individuels.
   if (c.vehicles === 'fnb') notes.push('FNB seulement : aucun titre individuel, chaque classe passe par un FNB.')
+  if (c.vehicles === 'titres') notes.push('Titres individuels seulement : seules les actions et la crypto sont gardées.')
 
   // Limite réglementaire dure : aucune ligne au-delà de 40 %.
   let excess = 0
@@ -212,15 +236,18 @@ export function metricsOf(holdings: Holding[]): Metrics {
 /** Alertes de cohérence profil ↔ contraintes (le backend les confie au responsable des risques). */
 export function coherenceWarnings(score: number, c: Constraints): RiskNote[] {
   const w: RiskNote[] = []
-  const crypto = level(c, 'classes', 'crypto')
-  const actions = level(c, 'classes', 'actions')
-  if (score < 40 && crypto >= 1)
-    w.push({ title: 'Crypto et prudence font mauvais ménage', detail: 'Tu cherches de la stabilité, mais tu veux plus de crypto. La crypto peut perdre la moitié de sa valeur en quelques mois.', severity: 'high' })
-  if (score < 40 && actions === 2)
+  const crypto = shareOf(c.classes.crypto)
+  const actions = shareOf(c.classes.actions)
+  if (score < 40 && crypto)
+    w.push({ title: 'Crypto et prudence font mauvais ménage', detail: 'Tu cherches de la stabilité, mais tu veux de la crypto. La crypto peut perdre la moitié de sa valeur en quelques mois.', severity: 'high' })
+  if (score < 40 && actions !== undefined && actions >= 0.7)
     w.push({ title: 'Beaucoup d’actions pour un profil prudent', detail: 'Avec autant d’actions, tu pourrais vivre des baisses difficiles à supporter.', severity: 'medium' })
-  if (score > 65 && actions <= -1)
+  if (score > 65 && (c.classes.actions === 'exclure' || (actions !== undefined && actions <= 0.3)))
     w.push({ title: 'Peu d’actions pour ton horizon', detail: 'Ton profil est dynamique, mais tu limites les actions : ton argent risque de moins grandir.', severity: 'medium' })
-  const kept = CLASSES.filter((k) => level(c, 'classes', k) !== -2)
+  // Sous « Très audacieux », le profil prévoit une part d'obligations, qui n'existent ici qu'en FNB.
+  if (score < 77 && c.vehicles === 'titres')
+    w.push({ title: 'Pas d’obligations sans FNB', detail: 'Avec des titres individuels seulement, ton portefeuille n’aura pas d’obligations : ton profil en prévoit pourtant une part pour amortir les baisses.', severity: 'medium' })
+  const kept = shownClasses(c.vehicles).filter((k) => c.classes[k] !== 'exclure' && c.classes[k] !== 0)
   if (kept.length === 1)
     w.push({ title: 'Un seul type de placement', detail: `Tu n’as gardé que les ${CLASS_LABELS[kept[0]].toLowerCase()} : ton portefeuille sera très peu diversifié.`, severity: 'medium' })
   return w

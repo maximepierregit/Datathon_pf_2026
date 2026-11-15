@@ -1,4 +1,4 @@
-import type { AssetClass, ConstraintBlock, FactorId, Holding, Level } from '../types'
+import type { AssetClass, ConstraintBlock, FactorId, Holding, Level, Share, Vehicles } from '../types'
 
 export interface CatalogItem {
   id: string
@@ -42,15 +42,20 @@ export const CLASS_EXPLAINERS: Record<AssetClass, string> = {
   liquidites: 'À l’abri et disponible en tout temps. Ton coussin pour les passages difficiles.',
 }
 
+/** Classes proposées au client : jamais les liquidités ; hors FNB, il ne reste que les actions et la crypto. */
+export function shownClasses(vehicles: Vehicles): AssetClass[] {
+  return vehicles === 'titres' ? ['actions', 'crypto'] : ['actions', 'obligations', 'immobilier', 'or', 'crypto']
+}
+
 export const BLOCKS: Record<ConstraintBlock, { title: string; hint: string; items: CatalogItem[] }> = {
   classes: {
     title: 'Quels types de placements veux-tu dans ton portefeuille?',
-    hint: 'Laisse « Neutre » si tu n’as pas d’avis : les agents choisiront pour toi.',
-    items: (Object.keys(CLASS_LABELS) as AssetClass[]).map((id) => ({ id, label: CLASS_LABELS[id] })),
+    hint: 'Exclus ce que tu ne veux pas, fixe un pourcentage du portefeuille, ou laisse « Neutre » : les agents choisiront pour toi.',
+    items: shownClasses('tous').map((id) => ({ id, label: CLASS_LABELS[id] })),
   },
   regions: {
     title: 'Des régions du monde à privilégier ou à éviter?',
-    hint: 'Par défaut, ton portefeuille est diversifié dans le monde entier.',
+    hint: 'Les pourcentages visent la part actions de ton portefeuille. Ce que tu laisses « Neutre » reste libre.',
     items: [
       { id: 'canada', label: 'Canada' },
       { id: 'usa', label: 'États-Unis' },
@@ -61,7 +66,7 @@ export const BLOCKS: Record<ConstraintBlock, { title: string; hint: string; item
   },
   themes: {
     title: 'Des thématiques qui te tiennent à cœur… ou pas?',
-    hint: 'Mets « Exclure » sur ce que tu ne veux pas financer.',
+    hint: 'Pars d’un modèle, puis ajuste. Les pourcentages visent la part actions de ton portefeuille.',
     items: [
       { id: 'tech', label: 'Technologie' },
       { id: 'ia', label: 'Intelligence artificielle' },
@@ -104,6 +109,75 @@ export const FACTOR_IDS = Object.keys(FACTOR_VIEW) as FactorId[]
 
 /** Seuil visé par niveau (mêmes valeurs que FACTOR_LEVELS de backend/src/invest_agents/monport.py). */
 export const FACTOR_TARGETS: Record<Exclude<Level, 0>, number> = { 2: 0.5, 1: 0.2, [-1]: -0.2, [-2]: -0.5 }
+
+/** Somme des pourcentages saisis, et s'il reste un élément neutre (libre) parmi `ids`. */
+export function shareTotal(values: Record<string, Share>, ids: string[]) {
+  const entered = ids.map((id) => values[id]).filter((v): v is number => typeof v === 'number')
+  return { total: entered.reduce((a, b) => a + b, 0), entered: entered.length, free: ids.filter((id) => values[id] === undefined).length }
+}
+
+/** Les pourcentages d'un bloc font au plus 100 %, et exactement 100 % quand plus rien n'est libre. */
+export function sharesValid(values: Record<string, Share>, ids: string[]): boolean {
+  const { total, entered, free } = shareTotal(values, ids)
+  return total <= 100 && (free > 0 || entered === 0 || total === 100)
+}
+
+/** Parts égales et entières qui font 100 : les premiers reçoivent le reste de la division. */
+function equalShares(ids: string[]): Record<string, number> {
+  const base = Math.floor(100 / ids.length)
+  return Object.fromEntries(ids.map((id, i) => [id, base + (i < 100 - base * ids.length ? 1 : 0)]))
+}
+
+export interface ThemePreset {
+  id: string
+  label: string
+  desc: string
+  /** Les thématiques après le choix du modèle ; les exclusions déjà faites sont gardées. */
+  apply: (current: Record<string, Share>) => Record<string, Share>
+}
+
+const exclusions = (current: Record<string, Share>) => Object.fromEntries(Object.entries(current).filter(([, v]) => v === 'exclure'))
+
+const keep = (current: Record<string, Share>, values: Record<string, Share>) => ({
+  ...Object.fromEntries(Object.entries(exclusions(current)).filter(([id]) => !(id in values))),
+  ...values,
+})
+
+export const THEME_PRESETS: ThemePreset[] = [
+  {
+    id: 'neutre',
+    label: 'Neutre',
+    desc: 'Toutes les thématiques que tu n’exclus pas, à parts égales.',
+    apply: (current) => {
+      const ids = BLOCKS.themes.items.map((t) => t.id).filter((id) => current[id] !== 'exclure')
+      return { ...exclusions(current), ...(ids.length ? equalShares(ids) : {}) }
+    },
+  },
+  {
+    id: 'tech',
+    label: 'Techno d’abord',
+    desc: '45 % en technologie, le reste libre.',
+    apply: (current) => keep(current, { tech: 45 }),
+  },
+  {
+    id: 'esg',
+    label: 'Responsable (ESG)',
+    desc: 'Sans énergies fossiles, armement ni alcool et tabac.',
+    apply: (current) => keep(current, { fossiles: 'exclure', armement: 'exclure', 'alcool-tabac': 'exclure' }),
+  },
+  {
+    id: 'defensif',
+    label: 'Défensif',
+    desc: 'Santé et consommation, 25 % chacune : des secteurs qui résistent mieux aux crises.',
+    apply: (current) => keep(current, { sante: 25, consommation: 25 }),
+  },
+  {
+    id: 'revenus',
+    label: 'Revenus',
+    desc: 'Banques et assurances 30 %, immobilier 15 % : des entreprises qui versent souvent des dividendes.',
+    apply: (current) => keep(current, { finance: 30, immobilier: 15 }),
+  },
+]
 
 /** Univers d'exemple : à remplacer par l'univers réel de l'équipe. */
 export interface UniverseLine extends Omit<Holding, 'weight'> {

@@ -59,7 +59,9 @@ async def apply_plan(session: Session, plan: Optional[ConstraintPlan]) -> int:
     """Valide les 3 profils de Pépite (catalogue, exclusions, limites du profil). Retourne le nombre de profils que le
     code a dû remplacer. Sans plan, le code écrit lui-même les profils."""
     market = session.market
-    profiles, replaced = build_profiles(plan, session.check, list(session.form.constraints), market.allowed_values())
+    # À la relance du chat, Pépite réécrit elle-même les pourcentages que le client a changés.
+    profiles, replaced = build_profiles(plan, session.check, list(session.form.constraints), market.allowed_values(),
+                                        impose=session.phase != "rebuild")
     notes: dict[str, list[str]] = {s: [] for s in SLOTS}
     for slot in SLOTS:
         constraints, note = await asyncio.to_thread(ensure_feasible, market, profiles[slot][1])

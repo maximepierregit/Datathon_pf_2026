@@ -20,15 +20,24 @@ export interface Contribution {
   amount: number
 }
 
-/** Échelle unique des contraintes : Exclure (−2) … Imposer (+2). */
+/** Échelle des facteurs : Exclure (−2) … Imposer (+2). */
 export type Level = -2 | -1 | 0 | 1 | 2
 
-export type ConstraintBlock = 'classes' | 'regions' | 'themes' | 'factors'
+/**
+ * Classes, régions, thématiques : « exclure » ou un pourcentage imposé (0 à 100, à ± 2 points). Une clé absente vaut
+ * neutre : libre pour les gestionnaires. Classes : % du portefeuille. Régions et thématiques : % de la part actions.
+ */
+export type Share = 'exclure' | number
 
-/** « fnb » : FNB seulement. « tous » : FNB et titres individuels. */
-export type Vehicles = 'fnb' | 'tous'
+export type ShareBlock = 'classes' | 'regions' | 'themes'
 
-export type Constraints = Record<ConstraintBlock, Record<string, Level>> & {
+export type ConstraintBlock = ShareBlock | 'factors'
+
+/** « fnb » : FNB seulement. « titres » : titres individuels seulement (actions et crypto). « tous » : les deux. */
+export type Vehicles = 'fnb' | 'titres' | 'tous'
+
+export type Constraints = Record<ShareBlock, Record<string, Share>> & {
+  factors: Record<string, Level>
   /** Indépendant des classes : un FNB peut détenir des actions, des obligations, de l'or… */
   vehicles: Vehicles
 }
