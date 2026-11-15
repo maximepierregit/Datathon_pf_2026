@@ -24,8 +24,13 @@ fi
 SSH_OPTS="-i $KEY_PATH -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$HOME/.ssh/bas-de-laine-front.known_hosts -o ConnectTimeout=10"
 remote() { ssh $SSH_OPTS "ec2-user@$HOST" "$@"; }
 
-# L'univers d'exemple n'est pas dans le dépôt : on envoie celui de ce poste, ou on le génère.
-[ -f "$ROOT/backend/data/universe.parquet" ] || "$ROOT/backend/.venv/bin/python" "$ROOT/backend/scripts/make_sample_dataset.py"
+# Le dataset est lu depuis S3 (DATASET_PATH dans monport-backend.service) : rien à envoyer, on vérifie seulement
+# qu'il est publié. Pour le mettre à jour : python data-prep/build_universe.py --upload s3://monport-datasets-381491955506
+DATASET_URI=$(sed -n 's/^Environment=DATASET_PATH=//p' "$ROOT/deploy/monport-backend.service")
+if ! aws s3api head-object --bucket "$(cut -d/ -f3 <<<"$DATASET_URI")" --key "$(cut -d/ -f4- <<<"$DATASET_URI")" >/dev/null; then
+  echo "Dataset introuvable ou illisible : $DATASET_URI" >&2
+  exit 1
+fi
 
 echo "› préparation du serveur" >&2
 remote "set -e
@@ -40,6 +45,7 @@ remote "set -e
 
 echo "› envoi du backend" >&2
 rsync -az --delete --exclude .venv --exclude build --exclude __pycache__ --exclude '*.egg-info' --exclude .env \
+  --exclude /data/ \
   -e "ssh $SSH_OPTS" "$ROOT/backend/" "ec2-user@$HOST:$APP/"
 
 echo "› installation des dépendances (quelques minutes la première fois)" >&2

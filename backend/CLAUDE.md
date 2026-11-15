@@ -14,7 +14,9 @@ Schéma de référence: `../architecture-workflow.md`. Les numéros d'étape (`s
 # Installation (Python 3.12 en local; le runtime AgentCore utilise 3.13)
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .
 
-# Dataset synthétique (le vrai dataset n'est pas dans le repo)
+# Dataset réel depuis S3 (pas dans le repo):
+export DATASET_PATH=s3://monport-datasets-381491955506/universe/universe.parquet
+# ou synthétique, sans AWS:
 .venv/bin/python scripts/make_sample_dataset.py
 
 # Pipeline complet en local (appelle Bedrock, ~1 min)
@@ -128,7 +130,7 @@ Changer le format d'un événement casse le frontend: mettre à jour le README e
 - Format long issu de `create_opt_inputs` (`../Universe_Cleaned.ipynb`). Obligatoires: `date`, `symbol`, `total_return_cad`. Optionnelles: `name`, `sector`, `industry`, `country`, `currency`, `asset_class`, `instrument_type`, `market`, `is_included_universe`.
 - Actifs avec moins de 120 observations écartés. Secteur, pays et classe manquants deviennent `Non classé`.
 - `get_market()` est en cache (`lru_cache`); appelé via `asyncio.to_thread` dans l'orchestrateur.
-- **Le dataset actuel est synthétique** (`make_sample_dataset.py`, symboles `SYN*`, `SETF*`, `SCRY*`). Aucun chiffre n'a de valeur réelle. Le vrai dataset reste à exporter du notebook.
+- Le dataset réel (S3, 1,2 M lignes) est lu par `_read_dataset`: seulement les colonnes utiles, métadonnées texte en catégories. Pic mémoire ~440 Mo au lieu de ~850 Mo avec `pd.read_parquet`, nécessaire sur l'EC2 t3.micro (1 Go). Le jeu synthétique (`make_sample_dataset.py`, symboles `SYN*`, `SETF*`, `SCRY*`) reste pour le développement sans AWS; ses chiffres n'ont aucune valeur réelle.
 - Comme dans l'univers réel, l'`asset_class` d'un FNB reprend sa catégorie (`Equities`, `Fixed Income`, `Money Market`, `Commodities`, `Real Estate`); les actions sont `Equity`, les cryptos `Crypto`. Le jeu synthétique compte 6 FNB d'obligations: un profil prudent doit tenir sous la limite de 40 % par ligne.
 
 ## Déploiement AgentCore

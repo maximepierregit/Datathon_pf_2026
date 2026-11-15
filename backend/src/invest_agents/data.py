@@ -166,6 +166,9 @@ def build_market(df: pd.DataFrame) -> Market:
 
     meta_cols = [c for c in META_COLUMNS if c in df.columns]
     meta = df.drop_duplicates("symbol").set_index("symbol")[meta_cols]
+    # get_market lit les métadonnées en catégories (mémoire); une ligne par symbole suffit pour revenir au texte.
+    meta = meta.astype({c: meta[c].cat.categories.dtype for c in meta_cols
+                        if isinstance(meta[c].dtype, pd.CategoricalDtype)})
     for col in META_COLUMNS:
         if col not in meta.columns:
             meta[col] = np.nan
@@ -198,4 +201,19 @@ def get_market() -> Market:
             f"Dataset introuvable: {path}. Exportez le DataFrame de `create_opt_inputs` en Parquet "
             "ou générez un jeu de test avec scripts/make_sample_dataset.py."
         )
-    return build_market(pd.read_parquet(path))
+    return build_market(_read_dataset(path))
+
+
+def _read_dataset(path: str) -> pd.DataFrame:
+    """Lit seulement les colonnes utiles. Les métadonnées texte, répétées sur chaque date, sont lues en
+    dictionnaire (catégories): sur le dataset réel (1,2 M lignes), le pic mémoire passe d'environ 850 Mo à
+    une fraction, ce qui compte sur l'EC2 t3.micro (1 Go)."""
+    import pyarrow.parquet as pq
+
+    schema = pq.read_schema(path)
+    wanted = REQUIRED_COLUMNS | set(META_COLUMNS) | {"is_included_universe"}
+    columns = [name for name in schema.names if name in wanted]
+    text = [name for name in columns
+            if name in META_COLUMNS and str(schema.field(name).type) in ("string", "large_string")]
+    table = pq.read_table(path, columns=columns, read_dictionary=text)
+    return table.to_pandas(self_destruct=True, split_blocks=True)  # libère les tampons Arrow au fil de la conversion
