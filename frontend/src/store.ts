@@ -31,6 +31,8 @@ export interface State {
   constraints: Constraints
   /** Verdict de Pépite sur le questionnaire, renvoyé au backend avec la construction. */
   check: ProfileCheck | null
+  /** Conversation avec Pépite côté backend (null : backend indisponible, moteur d'exemple). */
+  session: string | null
   /** Ajustement écrit avant l'envoi aux gestionnaires (profil cohérent seulement). */
   adjustment: string
   /** Portefeuilles tels que construits, avant les ajustements du chat. */
@@ -44,6 +46,7 @@ export interface State {
   setVehicles: (vehicles: Vehicles) => void
   clearConstraints: () => void
   setCheck: (check: ProfileCheck | null) => void
+  setSession: (session: string | null) => void
   setAdjustment: (text: string) => void
   acceptDisclaimer: () => void
   /** Portefeuilles du moteur d'exemple, quand le backend n'en a pas fourni. */
@@ -88,6 +91,7 @@ export const useApp = create<State>()(
       contribution: DEFAULT_CONTRIBUTION,
       constraints: emptyConstraints(),
       check: null,
+      session: null,
       adjustment: '',
       base: null,
       portfolios: null,
@@ -100,6 +104,7 @@ export const useApp = create<State>()(
       setVehicles: (vehicles) => set((s) => ({ constraints: { ...s.constraints, vehicles } })),
       clearConstraints: () => set({ constraints: emptyConstraints() }),
       setCheck: (check) => set({ check }),
+      setSession: (session) => set({ session }),
       setAdjustment: (adjustment) => set({ adjustment }),
       acceptDisclaimer: () => set({ disclaimerSeen: true }),
       build: () =>
@@ -132,6 +137,7 @@ export const useApp = create<State>()(
           contribution: DEFAULT_CONTRIBUTION,
           constraints: emptyConstraints(),
           check: null,
+          session: null,
           adjustment: '',
           base: null,
           portfolios: null,

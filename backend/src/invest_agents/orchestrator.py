@@ -23,9 +23,9 @@ from .agents.extraction import run_extraction_agent
 from .agents.judge import run_judge
 from .agents.portfolio_manager import run_portfolio_manager
 from .agents.profile import assemble_profile, run_profile_agent
-from .config import get_settings
-from .constraints import describe, detect_conflicts, evaluate, merge_constraints, validate_all
-from .data import Market, get_market
+from .runtime import get_runtime_settings
+from .catalog import describe, detect_conflicts, evaluate, merge_constraints, validate_all
+from .market import Market, get_market
 from .events import EventBus
 from .mandates import MANDATES, Mandate
 from .schemas import Constraint, InvestorForm, InvestorProfile, JudgeVerdict, Portfolio, RiskReport
@@ -193,7 +193,7 @@ def _feedback(portfolios: list[Portfolio], verdicts: dict[str, JudgeVerdict]) ->
 
 
 async def run_pipeline(payload: dict, bus: EventBus) -> None:
-    settings = get_settings()
+    settings = get_runtime_settings()
     market = await asyncio.to_thread(get_market)
 
     resolved = await _resolve_constraints(payload, bus, market)

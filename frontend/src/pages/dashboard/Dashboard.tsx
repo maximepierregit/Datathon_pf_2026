@@ -20,6 +20,7 @@ export default function Dashboard() {
   const profile = useApp((s) => s.profile)
   const disclaimerSeen = useApp((s) => s.disclaimerSeen)
   const acceptDisclaimer = useApp((s) => s.acceptDisclaimer)
+  const session = useApp((s) => s.session)
   const [params, setParams] = useSearchParams()
   const [chat, setChat] = useState(false)
   // Profil cohérent : un seul portefeuille, le gagnant. Profil incohérent : les trois.
@@ -46,7 +47,7 @@ export default function Dashboard() {
               <Separator />
               <p className="m-0 max-w-[560px] text-ink-soft">{p.tagline}</p>
             </div>
-            <Button onClick={() => setChat(true)}>Ajuster avec Pépite</Button>
+            <Button onClick={() => setChat(true)}>{session ? 'Discuter avec Pépite' : 'Ajuster avec Pépite'}</Button>
           </div>
 
           {!single && (

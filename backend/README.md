@@ -11,7 +11,7 @@ cp .env.example .env            # puis exporter les variables (ou laisser les va
 
 # Dataset, au choix:
 # a) réel, depuis S3 (exige des identifiants AWS avec s3:GetObject, ex. WSParticipantRole):
-#   export DATASET_PATH=s3://monport-datasets-381491955506/universe/universe.parquet
+#   export MONPORT_UNIVERSE_PARQUET_URI=s3://monport-datasets-381491955506/universe/universe.parquet
 # b) réel, reconstruit en local depuis la racine du dépôt (Wikipedia + yfinance, cache dans backend/data/raw/):
 #   pip install -r data-prep/requirements.txt && python data-prep/build_universe.py
 
@@ -34,7 +34,10 @@ Colonnes lues dans le dataset: `date`, `symbol`, `total_return_cad` (obligatoire
 | `constraints.py` | Catalogue de contraintes, validation, fusion, conflits, vérification (code pur) |
 | `optimizer.py` | Optimisation moyenne-variance sous contraintes (SLSQP) |
 | `tools.py` | Outils Strands liés au contexte de chaque agent |
-| `data.py` | Chargement du dataset fixe (local ou `s3://`), moments, métriques |
+| `data.py` | Chargement, validation et matrices de rendements du Parquet (local ou `s3://`), sans estimation |
+| `market.py` | `Market`: catalogue d'actifs, rendements espérés et covariance (méthodes de `config.py`), métriques de portefeuille |
+| `config.py` | Réglages financiers (source du Parquet, méthodes de rendement, covariance, contraintes, profils base/agent) |
+| `runtime.py` | Réglages d'exécution (Bedrock, modèles, relances) lus dans l'environnement |
 | `events.py` | Bus d'événements pour le streaming (réflexion, outils, statuts) |
 | `schemas.py` | Contrats Pydantic (formulaire, contraintes, portefeuilles, rapport) |
 | `monport.py` | Parcours du frontend MonPort: vérification par Pépite, profils de contraintes, gestionnaires, juges, mélanges 80/20 ou juge final |
@@ -82,7 +85,7 @@ Tous les événements ont `type`, `step` et `agent`.
 Puis créer le runtime (console, CLI `agentcore` ou `create_agent_runtime`, voir la
 [documentation](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-get-started-code-deploy-python.html)).
 Point d'entrée `main.py`, runtime `PYTHON_3_13`, réseau `PUBLIC`. Variables d'environnement: `MODEL_STRONG`, `MODEL_FAST`,
-`DATASET_PATH=s3://monport-datasets-381491955506/universe/universe.parquet`. Le zip n'inclut le dataset qu'avec
+`MONPORT_UNIVERSE_PARQUET_URI=s3://monport-datasets-381491955506/universe/universe.parquet`. Le zip n'inclut le dataset qu'avec
 `EMBED_DATASET=1 ./scripts/build_package.sh`.
 
 Le rôle d'exécution doit autoriser `bedrock:InvokeModel` et `bedrock:InvokeModelWithResponseStream` sur les profils
@@ -96,7 +99,7 @@ Bucket `monport-datasets-381491955506` (us-east-1): privé (Block Public Access)
 versionné (versions remplacées expirées après 30 jours, 3 gardées). Un dossier par table:
 
 ```text
-universe/universe.parquet                                 lu par le backend (DATASET_PATH)
+universe/universe.parquet                                 lu par le backend (MONPORT_UNIVERSE_PARQUET_URI)
 raw/{catalog,prices,fx,prices_missing}/<table>.parquet    couches brutes de data-prep, pour la traçabilité
 ```
 

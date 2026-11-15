@@ -77,6 +77,8 @@ export interface ProfileCheck {
   coherent: boolean
   summary: string
   issues: { title: string; detail: string }[]
+  /** Questions de Pépite quand le profil est incohérent : les réponses du client lui reviennent à la construction. */
+  questions?: string[]
   [field: string]: unknown
 }
 
@@ -85,16 +87,20 @@ export type AgentId = 'pepite' | `gestionnaire-${PortfolioId}` | `juge-${Portfol
 
 export type AgentStatus = 'pending' | 'running' | 'done'
 
-/** Même forme que les événements SSE du backend (`backend/src/invest_agents/monport.py`). */
+/**
+ * Même forme que les événements SSE du backend (`backend/src/invest_agents/workflow/flow.py`).
+ * `session` identifie la conversation avec Pépite : elle garde la mémoire de ses agents pour répondre ensuite.
+ */
 export type PipelineEvent =
-  | { type: 'check'; check: ProfileCheck }
+  | { type: 'check'; check: ProfileCheck; session?: string }
   | { type: 'agent_status'; agent: AgentId; status: AgentStatus; message: string }
-  | { type: 'pepite'; text: string }
+  /** `final` : la réponse de Pépite à un message du chat. */
+  | { type: 'pepite'; text: string; final?: boolean }
   | { type: 'universe'; before: number; after: number }
   | { type: 'rerun'; portfolio: PortfolioId; reason: string }
   | { type: 'warning'; text: string }
   /** Profil cohérent : un seul portefeuille, le gagnant. Profil incohérent : les trois. */
-  | { type: 'portfolios'; portfolios: Partial<Record<PortfolioId, BackendPortfolio>> }
+  | { type: 'portfolios'; portfolios: Partial<Record<PortfolioId, BackendPortfolio>>; session?: string }
   | { type: 'error'; message: string }
   | { type: 'done' }
 

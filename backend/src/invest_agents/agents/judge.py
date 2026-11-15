@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import json
 
-from ..constraints import describe, evaluate
-from ..data import Market
+from ..catalog import describe, evaluate
+from ..market import Market
 from ..events import EventBus
 from ..schemas import Constraint, InvestorProfile, JudgeOpinion, JudgeVerdict, Portfolio
-from ..tools import make_judge_tools
+from ..tools import MACRO_PROMPT, make_judge_tools
 from .base import run_agent
 
 SYSTEM = """Tu es l'agent Juge. Tu évalues UN portefeuille par rapport au profil et aux contraintes d'un investisseur.
@@ -20,7 +20,10 @@ SYSTEM = """Tu es l'agent Juge. Tu évalues UN portefeuille par rapport au profi
 2. Évalue l'adéquation globale au profil (score de 0 à 10): niveau de risque, diversification, cohérence avec l'objectif
    et l'horizon.
 3. Si des contraintes ne sont pas respectées, propose des corrections concrètes dans `suggested_fixes`
-   (ex.: « réduire le secteur Technologie à 25 % »). Sinon, laisse la liste vide."""
+   (ex.: « réduire le secteur Technologie à 25 % »). Sinon, laisse la liste vide.
+4. Situe le portefeuille dans le régime macro actuel (`get_latest_macro_snapshot`) et mentionne-le dans ton commentaire.
+
+""" + MACRO_PROMPT
 
 
 async def run_judge(

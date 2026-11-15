@@ -14,8 +14,8 @@ Schéma de référence: `../architecture-workflow.md`. Les numéros d'étape (`s
 # Installation (Python 3.12 en local; le runtime AgentCore utilise 3.13)
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .
 
-# Dataset réel depuis S3 (pas dans le repo), ou une copie locale dans data/universe.parquet:
-export DATASET_PATH=s3://monport-datasets-381491955506/universe/universe.parquet
+# Dataset réel depuis S3 (pas dans le repo), ou une copie locale (config.DEFAULT_PARQUET_PATH):
+export MONPORT_UNIVERSE_PARQUET_URI=s3://monport-datasets-381491955506/universe/universe.parquet
 
 # Pipeline complet en local (appelle Bedrock, ~1 min)
 .venv/bin/python scripts/run_local.py
@@ -48,11 +48,14 @@ src/invest_agents/
   constraints.py            Catalogue, validation, fusion, conflits, evaluate() (code pur)
   optimizer.py              Moyenne-variance sous contraintes (scipy SLSQP)
   tools.py                  Outils Strands, liés par closure au contexte de chaque agent
-  data.py                   Chargement Parquet (local ou s3://), moments, métriques
+  data.py                   Chargement, validation et matrices de rendements du Parquet (local ou s3://)
+  market.py                 Market: catalogue d'actifs, mu et Sigma selon config.py, métriques de portefeuille
+  macro.py                  Table macro US/CA (taux, écart 10-2, taux directeur, inflation, chômage, z-scores), code pur
   events.py                 EventBus (asyncio.Queue) + callback handler Strands
   models.py                 Fabrique BedrockModel (strong/fast, réflexion adaptive)
   schemas.py                Tous les contrats Pydantic
-  config.py                 Variables d'environnement (voir .env.example)
+  config.py                 Réglages financiers (source Parquet, méthodes mu/Sigma, contraintes)
+  runtime.py                Variables d'environnement Bedrock/pipeline (voir .env.example)
 ```
 
 ### Flux
@@ -124,11 +127,12 @@ Changer le format d'un événement casse le frontend: mettre à jour le README e
 
 ## Données
 
-- `DATASET_PATH`: défaut `data/universe.parquet`; accepte `s3://bucket/key` (téléchargé une fois dans /tmp, sous un nom qui inclut le VersionId S3). Dataset réel (801 actifs chargés, jours ouvrables depuis 2021): `s3://monport-datasets-381491955506/universe/universe.parquet`, produit et publié par `../data-prep/build_universe.py --upload s3://monport-datasets-381491955506 [--upload-only]`.
+- `MONPORT_UNIVERSE_PARQUET_URI`: défaut le chemin de `config.DEFAULT_PARQUET_PATH`; accepte `s3://bucket/key` (lu en mémoire via boto3, sans cache disque). Dataset réel (801 actifs chargés, jours ouvrables depuis 2021): `s3://monport-datasets-381491955506/universe/universe.parquet`, produit et publié par `../data-prep/build_universe.py --upload s3://monport-datasets-381491955506 [--upload-only]`.
 - Format long issu de `create_opt_inputs` (`../Universe_Cleaned.ipynb`). Obligatoires: `date`, `symbol`, `total_return_cad`. Optionnelles: `name`, `sector`, `industry`, `country`, `currency`, `asset_class`, `instrument_type`, `market`, `is_included_universe`.
 - Actifs avec moins de 120 observations écartés. Secteur, pays et classe manquants deviennent `Non classé`.
 - `get_market()` est en cache (`lru_cache`); appelé via `asyncio.to_thread` dans l'orchestrateur.
 - Le dataset réel (S3, 1,2 M lignes) est lu par `_read_dataset`: seulement les colonnes utiles, métadonnées texte en catégories. Pic mémoire ~440 Mo au lieu de ~850 Mo avec `pd.read_parquet`, utile sur l'EC2 (t3.small, 2 Go).
+- Table macro: `MONPORT_MACRO_PARQUET_URI` (défaut `data/macro_long_z.parquet`; référence `s3://monport-datasets-381491955506/macro/macro_long_z.parquet`), issue de `../../macro_long_z.csv`. Format long: `date`, `country` (US, CA), `metric` (`yield_10y`, `yield_2y`, `spread_10y_2y`, `policy_rate`, `inflation_yoy`, `unemployment_rate`, en %), `metric_value`, `z_5y`, `z_full`, `history_start_date`, `ref_period`. Chargée au premier appel puis gardée en mémoire (`macro.get_macro`). Exposée par `tools.make_macro_tools()` (`get_latest_macro_snapshot`, `get_macro_history`) aux gestionnaires, aux agents Risque/CRO et aux juges, avec la consigne `tools.MACRO_PROMPT`. Une source indisponible donne `{"error": ...}`: l'agent continue sans contexte macro.
 - `asset_class` est normalisée par `build_universe.normalize_asset_class`: `Equity`, `Fixed Income`, `Multi-Asset`, `Real Estate`, `Commodities`, `Alternative` (crypto et BITW). Le détail d'un FNB reste dans `category_group` / `category`.
 
 ## Déploiement AgentCore

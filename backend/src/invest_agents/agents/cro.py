@@ -6,6 +6,7 @@ import json
 
 from ..events import EventBus
 from ..schemas import InvestorProfile, JudgeVerdict, Portfolio, RiskReport
+from ..tools import MACRO_PROMPT, make_macro_tools
 from .base import run_agent
 
 SYSTEM = """Tu es le Chief Risk Officer (CRO) d'un service de conseil en placement canadien. Tu relis le travail de l'équipe
@@ -15,7 +16,8 @@ avant sa présentation à l'investisseur. Tu cherches ce qui pourrait lui nuire 
    très faible; horizon court avec objectif de croissance agressive; contraintes qui se contredisent en pratique).
 2. `warnings`: mises en garde sur les portefeuilles, avec `portfolio_id`. Appuie-toi sur les indicateurs fournis et sur
    les `diagnostics` calculés par le système (concentration, perte maximale historique comparée à la perte acceptée,
-   volatilité, préférences non respectées).
+   volatilité, préférences non respectées). Appelle `get_latest_macro_snapshot`: signale une exposition que le
+   régime macro rend plus risquée (sensibilité aux taux, inflation, ralentissement de l'emploi).
 3. `summary`: synthèse courte et directe.
 
 RÈGLES
@@ -24,7 +26,9 @@ RÈGLES
 - Les rendements et risques sont historiques. Ils ne garantissent pas les résultats futurs. Rappelle-le une fois dans le résumé.
 - Sois sobre: pas d'alarmisme, pas de recommandation d'achat. Gravité `high` seulement si le problème peut conduire
   l'investisseur à une perte supérieure à ce qu'il accepte ou à un portefeuille inadapté à son horizon.
-- S'il n'y a rien à signaler, retourne des listes vides."""
+- S'il n'y a rien à signaler, retourne des listes vides.
+
+""" + MACRO_PROMPT
 
 
 def diagnostics(profile: InvestorProfile, portfolio: Portfolio) -> list[str]:
@@ -86,5 +90,6 @@ async def run_cro(
     return await run_agent(
         bus=bus, label="CRO", step="9", kind="strong", system_prompt=SYSTEM,
         user_prompt="Produis ton rapport de risque.\n\n" + json.dumps(payload, ensure_ascii=False, indent=2),
-        schema=RiskReport, start_text="Revue des risques et des incohérences du profil", done_text="Rapport de risque prêt",
+        schema=RiskReport, tools=make_macro_tools(),
+        start_text="Revue des risques et des incohérences du profil", done_text="Rapport de risque prêt",
     )
