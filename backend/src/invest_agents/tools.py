@@ -46,6 +46,7 @@ class PMState:
     constraints: list[Constraint]
     objective: Objective
     vol_cap: Optional[float]
+    risk_aversion: Optional[float] = None  # coefficient A, pour l'objectif mean_variance
     best: Optional[OptimizationResult] = None
     attempts: int = 0
     log: list[str] = field(default_factory=list)
@@ -114,7 +115,8 @@ def make_pm_tools(market: Market, state: PMState) -> list:
             symbols: Liste de symboles (ex. ["AAPL", "RY.TO"]). Chaque titre pèse au moins 1 %.
         """
         state.attempts += 1
-        result = optimize(market, symbols, state.objective, state.constraints, vol_cap=state.vol_cap)
+        result = optimize(market, symbols, state.objective, state.constraints, vol_cap=state.vol_cap,
+                          risk_aversion=state.risk_aversion)
         state.log.append(f"essai {state.attempts}: {result.status}")
         if result.ok:
             state.best = result

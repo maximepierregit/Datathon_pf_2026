@@ -37,12 +37,14 @@ et les compromis. N'écris aucun poids ni indicateur qui ne vient pas de l'outil
 MAX_ATTEMPTS = 6
 
 
-def _prompt(profile: InvestorProfile, constraints: list[Constraint], feedback: Optional[str]) -> str:
+def _prompt(profile: InvestorProfile, constraints: list[Constraint], feedback: Optional[str],
+            risk_aversion: Optional[float] = None) -> str:
     payload = {
         "profil": {
             "resume": profile.assessment.summary,
             "score_risque": profile.assessment.risk_score,
             "libelle": profile.assessment.risk_label,
+            "aversion_au_risque": risk_aversion,
             "horizon_annees": profile.form.horizon_years,
             "montant_cad": profile.form.investment_amount_cad,
             "objectif": profile.form.objective,
@@ -86,6 +88,7 @@ async def run_portfolio_manager(
         constraints=pm_constraints,
         objective=mandate.objective,
         vol_cap=vol_cap_for(mandate, profile.assessment.suggested_max_volatility),
+        risk_aversion=mandate.risk_aversion,
     )
     min_n = max([int(c.value) for c in pm_constraints if c.hard and c.type.value == "min_positions" and c.value] + [8])
     max_n = min([20] + [int(c.value) for c in pm_constraints if c.hard and c.type.value == "max_positions" and c.value])
@@ -97,7 +100,7 @@ async def run_portfolio_manager(
     try:
         narrative = await run_agent(
             bus=bus, label=label, step="5", kind="strong", system_prompt=system,
-            user_prompt=_prompt(profile, pm_constraints, feedback), schema=PMNarrative,
+            user_prompt=_prompt(profile, pm_constraints, feedback, mandate.risk_aversion), schema=PMNarrative,
             tools=make_pm_tools(market, state), start_text=f"Construction du portefeuille « {mandate.name} »",
             done_text="Portefeuille construit",
         )
@@ -107,7 +110,8 @@ async def run_portfolio_manager(
 
     if state.best is None:  # filet de sécurité: le pipeline continue même si le PM n'a pas abouti
         selection = fallback_selection(market, pm_constraints, mandate.objective)
-        result = optimize(market, selection, mandate.objective, pm_constraints, vol_cap=state.vol_cap)
+        result = optimize(market, selection, mandate.objective, pm_constraints, vol_cap=state.vol_cap,
+                          risk_aversion=mandate.risk_aversion)
         if result.ok:
             state.best = result
             bus.emit("status", step="5", agent=label, state="warning", text="Portefeuille obtenu par sélection de repli")
