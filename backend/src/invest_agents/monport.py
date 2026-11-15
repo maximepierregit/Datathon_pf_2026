@@ -115,6 +115,7 @@ OBJECTIVES = {"securiser": "preservation", "fructifier": "balanced", "viser-haut
 EXPERIENCE = {1: "none", 2: "basic", 3: "intermediate", 4: "advanced", 5: "advanced"}
 FEES = {"ETF": 0.002}  # faute de donnée: 0,20 % par FNB, rien pour un titre détenu en direct
 LINE_CAP = 0.40  # limite de sécurité: aucune ligne au-delà de 40 %
+STOCK_CAP = 0.05  # aucun titre détenu en direct au-delà de 5 % (un FNB n'est plafonné qu'à 40 %)
 MAX_ADJUSTMENT = 1000
 
 # Répartition stratégique du profil (portefeuilles modèles 20/80 … 100/0): plancher d'obligations, fixé par le code
@@ -135,7 +136,6 @@ ADJUSTMENT_STEP = 0.05  # un cran d'ajustement de Pépite (au plus 2 crans, une 
 # Une catégorie par tranche de 0,2 de S, bornes de A du tableau des profils (interpolation logarithmique).
 AVERSION_ANCHORS = [(0.0, 25.0), (0.2, 14.0), (0.4, 7.0), (0.6, 3.5), (0.8, 1.5), (1.0, 1.0)]
 VOL_ANCHORS = [(0.0, 0.06), (0.2, 0.08), (0.4, 0.11), (0.6, 0.14), (0.8, 0.18), (1.0, 0.25)]  # filet de sécurité
-STOCK_ANCHORS = [(0.0, 0.07), (0.2, 0.09), (0.4, 0.11), (0.6, 0.13), (0.8, 0.17), (1.0, 0.22)]
 RISK_LABELS = ["conservateur", "modere", "equilibre", "dynamique", "agressif"]  # très prudent … très audacieux
 # Cohérent: trois variantes du même profil, à une demi-catégorie l'une de l'autre. Incohérent: « Ton profil » et
 # « Tes contraintes » suivent le profil; « Tes préférences » l'ignore (meilleur rendement pour le risque).
@@ -312,7 +312,7 @@ def assess(profile: dict, review: PepiteReview | PepiteCheck, adjustment: int = 
         **review.model_dump(include={"summary", "key_points", "flags", "coherent", "issues"}),
         risk_score=max(1, min(10, round(1 + 9 * s))), risk_label=risk_label(s), risk_position=round(s, 3),
         risk_aversion=risk_aversion(s), suggested_max_volatility=round(_interpolate(s, VOL_ANCHORS), 3),
-        suggested_max_position_weight=round(_interpolate(s, STOCK_ANCHORS), 3),
+        suggested_max_position_weight=STOCK_CAP,
     )
 
 
@@ -340,7 +340,7 @@ def slot_volatility(check: PepiteCheck, slot: str) -> Optional[float]:
 def _limits(vol: float, weight: float) -> list[Constraint]:
     """Limites du profil: volatilité, et poids par titre détenu en direct (un FNB n'est plafonné qu'à 40 %)."""
     return [Constraint(type=T.MAX_VOLATILITY, value=round(vol, 3), hard=True, note="Limite du profil"),
-            Constraint(type=T.MAX_STOCK_WEIGHT, value=round(min(weight, LINE_CAP), 3), hard=True, note="Limite du profil"),
+            Constraint(type=T.MAX_STOCK_WEIGHT, value=round(min(weight, STOCK_CAP), 3), hard=True, note="Limite du profil"),
             Constraint(type=T.MAX_POSITION_WEIGHT, value=LINE_CAP, hard=True, note="Limite de sécurité")]
 
 
@@ -422,7 +422,8 @@ def bond_floors(check: PepiteCheck) -> dict[str, float]:
 
 def validate_profile(constraints: list[Constraint], exclusions: list[Constraint],
                      allowed: dict[str, list[str]]) -> Optional[list[Constraint]]:
-    """Catalogue, exclusions du client et limite de 40 % garanties par le code. None si le profil reste contradictoire."""
+    """Catalogue, exclusions du client, limite de 40 % par ligne et de 5 % par titre garanties par le code.
+    None si le profil reste contradictoire."""
     valid, errors = validate_all(constraints, allowed)
     if errors:
         logger.info("Contraintes de Pépite écartées: %s", errors)
@@ -430,8 +431,7 @@ def validate_profile(constraints: list[Constraint], exclusions: list[Constraint]
     caps = [c.value for c in valid if c.type in (T.MAX_POSITION_WEIGHT, T.MAX_STOCK_WEIGHT) and c.hard and c.value]
     valid = [c for c in valid if c.type not in (T.MAX_POSITION_WEIGHT, T.MAX_STOCK_WEIGHT)]
     valid.append(Constraint(type=T.MAX_POSITION_WEIGHT, value=LINE_CAP, hard=True, note="Limite de sécurité"))
-    if caps and min(caps) < LINE_CAP:
-        valid.append(Constraint(type=T.MAX_STOCK_WEIGHT, value=min(caps), hard=True, note="Limite du profil"))
+    valid.append(Constraint(type=T.MAX_STOCK_WEIGHT, value=min(caps + [STOCK_CAP]), hard=True, note="Limite par titre"))
     valid = _dedupe(valid + exclusions)
     if detect_conflicts(valid):  # on retire d'abord les poids minimaux, cause habituelle des conflits
         valid = [c for c in valid if not c.type.value.startswith("min_")]
@@ -478,10 +478,6 @@ def build_profiles(plan: Optional[ConstraintPlan], check: PepiteCheck, prefs: li
             replaced += 1
             rationale, raw = fallback[slot]
             constraints = validate_profile(raw, exclusions, allowed) or _limits(check.suggested_max_volatility, LINE_CAP)
-        # Le plafond par titre du profil, si Pépite l'a oublié (sauf « Tes préférences », qui ignore le profil).
-        if (check.coherent or slot != "conviction") and not any(c.type is T.MAX_STOCK_WEIGHT for c in constraints):
-            cap = min(check.suggested_max_position_weight, LINE_CAP)
-            constraints = constraints + [Constraint(type=T.MAX_STOCK_WEIGHT, value=cap, hard=True, note="Limite du profil")]
         # « Ton profil » (incohérent) ignore les préférences; partout ailleurs, elles comptent pour de vrai.
         if check.coherent or slot != "prudent":
             constraints = promote_preferences(constraints)

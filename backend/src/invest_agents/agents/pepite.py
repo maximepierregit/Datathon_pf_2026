@@ -63,17 +63,16 @@ contredisent pas, sauf dans « Ton profil ».
 
 RÈGLES COMMUNES AUX 3 PROFILS
 - max_position_weight vaut toujours 0.40 (limite de sécurité: aucune ligne au-delà de 40 %, FNB compris).
-- Le poids maximal par titre du profil passe par max_stock_weight: il ne vise que les titres détenus en direct.
+- max_stock_weight vaut au plus 0.05 (aucun titre détenu en direct au-delà de 5 %, imposé par le code).
   Un FNB est déjà diversifié; un FNB d'obligations peut peser jusqu'à 40 %.
 - Les exclusions du client (niveau -2) s'appliquent aux 3 profils.
 - FNB seulement: exclure dans les 3 profils les classes d'actifs des titres détenus en direct ({direct}).
 - Traduction de l'échelle: Imposer -> min_*_weight dur (0.05 à 0.15); Plus -> min_*_weight préférence (hard=false);
   Moins -> max_*_weight préférence; Exclure -> exclude_*. Utilise exactement les libellés de cibles du catalogue.
   Une préférence sans équivalent dans le catalogue (ex.: facteurs, IA) est ignorée.
-- Le poids maximal par titre du profil passe par max_stock_weight. Le reste du profil de risque est ajouté par le
-  code: le plafond de volatilité, l'aversion au risque donnée à l'optimiseur et la part d'obligations des
-  portefeuilles qui suivent le profil (prudent quand le profil est incohérent, les 3 variantes sinon). N'écris ni
-  max_volatility ni plancher d'obligations.
+- Le reste du profil de risque est ajouté par le code: le plafond de volatilité, l'aversion au risque donnée à
+  l'optimiseur et la part d'obligations des portefeuilles qui suivent le profil (prudent quand le profil est
+  incohérent, les 3 variantes sinon). N'écris ni max_volatility ni plancher d'obligations.
 - Valeurs en fractions (0.10 = 10 %). `source` vaut "form".
 
 SI LE PROFIL EST INCOHÉRENT (coherent = false)

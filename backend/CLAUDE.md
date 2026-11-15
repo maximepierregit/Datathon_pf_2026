@@ -80,7 +80,7 @@ Une ambiguïté (extraction) ou un conflit (fusion, ou contraintes du formulaire
 
 ## Contraintes
 
-- `max_stock_weight` plafonne seulement les titres détenus en direct (`instrument_type` différent de `ETF`, voir `constraints.is_fund`): un FNB est diversifié par nature. MonPort s'en sert pour le poids par titre du profil et garde `max_position_weight` à 0,40.
+- `max_stock_weight` plafonne seulement les titres détenus en direct (`instrument_type` différent de `ETF`, voir `constraints.is_fund`): un FNB est diversifié par nature. MonPort le fixe à 5 % au plus dans les 3 profils (`STOCK_CAP`) et garde `max_position_weight` à 0,40.
 - Types dans `schemas.ConstraintType`; métadonnées dans `constraints.SPECS` (`dimension`, `kind`, `direction`). Ajouter un type = l'ajouter aux deux, puis gérer son cas dans `evaluate()`, `optimize()` et `describe()`.
 - Valeurs en **fractions** (0.10 = 10 %), comptes en entiers.
 - `hard=True`: imposée par l'optimiseur. `hard=False`: préférence, évaluée seulement.
