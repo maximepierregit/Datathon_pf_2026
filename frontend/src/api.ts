@@ -77,7 +77,7 @@ function exampleCheck(score: number, constraints: Constraints): ProfileCheck {
   return {
     coherent: warnings.length === 0,
     summary: warnings.length ? 'Quelques-unes de tes réponses tirent dans des directions opposées.' : 'Tes réponses se tiennent : ton profil et tes préférences vont dans le même sens.',
-    issues: warnings.map((detail) => ({ title: 'À vérifier', detail })),
+    issues: warnings.map(({ title, detail }) => ({ title, detail })),
   }
 }
 
@@ -185,26 +185,26 @@ const tickerWeight = (ticker: string) => (q: Portfolio) => q.holdings.find((h) =
 const RULES: Rule[] = [
   {
     match: /tech|technolog/i,
-    reply: (p) => `D’accord! J’ajoute une part de FNB technologie au portefeuille « ${p.name} », prise sur les actions régionales.`,
+    reply: (p) => `<p>D’accord! J’ajoute une part de <strong>FNB technologie</strong> au portefeuille « ${p.name} », prise sur les actions régionales.</p>`,
     patch: { themes: { tech: 2 } },
     diff: [{ label: 'FNB technologie', get: tickerWeight('THM-TEC') }],
   },
   {
     match: /pétrole|petrole|fossile|énergie trad/i,
-    reply: () => 'C’est noté : j’exclus les énergies fossiles. Les FNB concernés sont filtrés, le risque bouge à peine.',
+    reply: () => '<p>C’est noté : <strong>j’exclus les énergies fossiles</strong>.</p><astuce>Les FNB concernés sont retirés, et ton niveau de risque bouge à peine.</astuce>',
     patch: { themes: { fossiles: -2 } },
     diff: [{ label: 'FNB énergie traditionnelle', get: tickerWeight('THM-ENR') }],
   },
   {
     match: /crypto|bitcoin/i,
-    reply: (p) => `Je peux augmenter la crypto dans le portefeuille « ${p.name} ». Voici ce que ça donnerait.`,
+    reply: (p) => `<p>Je peux augmenter la <strong>crypto</strong> dans le portefeuille « ${p.name} ». Voici ce que ça donnerait.</p>`,
     patch: { classes: { crypto: 2 } },
     warning: (score) => (score < 50 ? 'ça augmente ton risque au-delà de ton profil. Tu peux quand même l’appliquer, c’est ton choix.' : undefined),
     diff: [{ label: CLASS_LABELS.crypto, get: (q) => q.allocation.crypto }],
   },
   {
     match: /moins de risque|prudent|sécur|stable/i,
-    reply: () => 'Je réduis les placements les plus volatils au profit des obligations pour adoucir les variations.',
+    reply: () => '<p>Je réduis les placements les plus agités au profit des <strong>obligations</strong>.</p><astuce>Ton portefeuille bougera moins, mais il grandira aussi un peu moins vite.</astuce>',
     patch: { classes: { crypto: -1, actions: -1, obligations: 1 } },
     riskShift: -15,
     diff: [
@@ -220,7 +220,7 @@ export async function proposeAdjustment(p: Portfolio, message: string, score: nu
   const rule = RULES.find((r) => r.match.test(message))
   if (!rule) {
     return {
-      reply: `Je ne comprends pas encore bien ta demande. Essaie par exemple « plus de tech », « pas de pétrole » ou « moins de risque » pour le portefeuille « ${p.name} ».`,
+      reply: `<p>Je ne comprends pas encore bien ta demande pour le portefeuille « ${p.name} ». Essaie par exemple :</p><ul><li>plus de tech</li><li>pas de pétrole</li><li>moins de risque</li></ul>`,
       changes: [],
     }
   }
@@ -228,6 +228,6 @@ export async function proposeAdjustment(p: Portfolio, message: string, score: nu
   const changes = rule.diff
     .map((d) => ({ label: d.label, before: d.get(p), after: d.get(next) }))
     .filter((c) => Math.abs(c.after - c.before) >= 0.001)
-  if (!changes.length) return { reply: `C’est déjà le cas dans le portefeuille « ${p.name} » : rien à changer.`, changes: [] }
+  if (!changes.length) return { reply: `<p>C’est déjà le cas dans le portefeuille « ${p.name} » : <strong>rien à changer</strong>.</p>`, changes: [] }
   return { reply: rule.reply(p), changes, warning: rule.warning?.(score), patch: rule.patch, riskShift: rule.riskShift }
 }

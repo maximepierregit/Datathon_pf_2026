@@ -8,6 +8,12 @@
       "port": 5173
     },
     {
+      "name": "frontend-en-ligne",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["MONPORT_API=http://44.199.217.243", "npm", "--prefix", "frontend", "run", "dev", "--", "--port", "5174", "--strictPort"],
+      "port": 5174
+    },
+    {
       "name": "backend",
       "runtimeExecutable": "env",
       "runtimeArgs": ["PORT=8091", "backend/.venv/bin/python", "backend/main.py"],

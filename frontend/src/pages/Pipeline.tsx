@@ -17,7 +17,7 @@ interface Agent {
 const VARIANTS: Record<PortfolioId, string> = { prudent: 'Variante prudente', equilibre: 'Variante fidèle', conviction: 'Variante audacieuse' }
 const BASES: Record<PortfolioId, string> = { prudent: 'Ton profil', equilibre: 'Tes contraintes', conviction: 'Tes préférences' }
 
-/** Les agents dans l'ordre du pipeline. Profil cohérent : concurrence et juge final. Incohérent : trois bases, puis les mélanges 80/20. */
+/** Les agents, regroupés pour l'affichage (l'ordre réel du pipeline ne change pas). Profil cohérent : concurrence et juge final. Incohérent : trois bases, puis les mélanges 80/20. */
 function stepsFor(coherent: boolean): { title: string; role: string; agents: Agent[] }[] {
   const names = coherent ? VARIANTS : BASES
   return [
@@ -34,19 +34,21 @@ function stepsFor(coherent: boolean): { title: string; role: string; agents: Age
       agents: PORTFOLIO_IDS.map((id) => ({ id: `gestionnaire-${id}`, name: names[id], pose: 'laptop' })),
     },
     {
-      title: 'Agents Risque',
-      role: 'Chaque gestionnaire a son agent Risque : il relit le portefeuille et envoie son rapport au juge.',
-      agents: [{ id: 'risques', name: 'Agents Risque', pose: 'flag' }],
+      title: 'Vérification des limites',
+      role: 'Pour chaque portefeuille, le juge vérifie que tes limites sont respectées.',
+      agents: PORTFOLIO_IDS.map((id) => ({ id: `juge-${id}` as const, name: `Limites · ${names[id]}`, pose: 'thinking' as const })),
     },
     {
       title: 'Juge',
       role: coherent
-        ? 'Vérifie tes limites, lit les rapports de risque, demande une réoptimisation au besoin et garde le meilleur portefeuille.'
-        : 'Vérifie tes limites, lit les rapports de risque et demande une réoptimisation au besoin.',
-      agents: [
-        { id: 'juge-final', name: 'Juge', pose: 'cool' },
-        ...PORTFOLIO_IDS.map((id) => ({ id: `juge-${id}` as const, name: `Limites · ${names[id]}`, pose: 'thinking' as const })),
-      ],
+        ? 'Lit les rapports de risque, demande une réoptimisation au besoin et garde le meilleur portefeuille.'
+        : 'Lit les rapports de risque et demande une réoptimisation au besoin.',
+      agents: [{ id: 'juge-final', name: 'Juge', pose: 'cool' }],
+    },
+    {
+      title: 'Agents Risque',
+      role: 'Chaque gestionnaire a son agent Risque : il relit le portefeuille et envoie son rapport au juge.',
+      agents: [{ id: 'risques', name: 'Agents Risque', pose: 'flag' }],
     },
   ]
 }

@@ -550,13 +550,16 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
 
     m = p.metrics
     mu, sigma = (m.expected_return, m.volatility) if m else (0.0, 0.0)
-    warnings = [f"{w['title']}. {w['detail']}" for w in (risk_report or {}).get("warnings", [])
+    # Mêmes champs que RiskNote dans frontend/src/types.ts.
+    warnings = [{"title": w["title"], "detail": w["detail"], "severity": w["severity"]}
+                for w in (risk_report or {}).get("warnings", [])
                 if w.get("portfolio_id") == p.id and w.get("severity") in ("medium", "high")]
     agent_notes = [t for t in (p.summary, p.tradeoffs, verdict.comment if verdict else None) if t] + extra
     if skipped:
         agent_notes.append(f"Pas encore pris en compte par les agents : {', '.join(skipped)}.")
     if verdict and not verdict.compliant:
-        warnings.insert(0, "Ce portefeuille ne respecte pas toutes tes limites. Lis les détails avant de le choisir.")
+        warnings.insert(0, {"title": "Certaines de tes limites ne sont pas respectées",
+                            "detail": "Lis les détails avant de choisir ce portefeuille.", "severity": "high"})
     elif verdict:
         agent_notes.append("Le juge confirme que ce portefeuille respecte tes limites.")
     return {

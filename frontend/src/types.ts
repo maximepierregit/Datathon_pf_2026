@@ -57,6 +57,13 @@ export interface Metrics {
   es95: number
 }
 
+/** Mise en garde du responsable des risques : un titre court, une ou deux phrases simples. */
+export interface RiskNote {
+  title: string
+  detail: string
+  severity: 'medium' | 'high'
+}
+
 export interface Portfolio {
   id: PortfolioId
   name: string
@@ -65,12 +72,16 @@ export interface Portfolio {
   holdings: Holding[]
   allocation: Record<AssetClass, number>
   metrics: Metrics
-  warnings: string[]
+  warnings: RiskNote[]
   agentNotes: string[]
 }
 
 /** Portefeuille tel que l'envoie le backend ; sans nom ni accroche, on prend ceux de PORTFOLIO_META. */
-export type BackendPortfolio = Omit<Portfolio, 'name' | 'tagline'> & Partial<Pick<Portfolio, 'name' | 'tagline'>>
+export type BackendPortfolio = Omit<Portfolio, 'name' | 'tagline' | 'warnings'> &
+  Partial<Pick<Portfolio, 'name' | 'tagline'>> & {
+    /** Un ancien backend envoie encore des chaînes « Titre. Détail ». */
+    warnings: (RiskNote | string)[]
+  }
 
 /** Vérification du questionnaire par Pépite (`PepiteCheck` du backend), renvoyée telle quelle à la construction. */
 export interface ProfileCheck {
@@ -111,6 +122,7 @@ export interface AdjustChange {
 }
 
 export interface AdjustProposal {
+  /** HTML simple, rendu par RichText. */
   reply: string
   changes: AdjustChange[]
   warning?: string
