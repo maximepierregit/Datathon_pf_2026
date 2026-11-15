@@ -1,13 +1,14 @@
-// Seul point de contact avec le backend. runPipeline lit le flux SSE du pipeline Strands
-// et rejoue le script d'exemple si le backend ne répond pas ; proposeAdjustment reste simulé.
+// Seul point de contact avec le backend. checkProfile et runPipeline lisent le flux SSE des agents
+// (backend/src/invest_agents/monport.py) et rejouent un script d'exemple si le backend ne répond pas ;
+// proposeAdjustment reste simulé.
 import { CLASS_LABELS, UNIVERSE } from './data/catalog'
-import { coherenceWarnings, PORTFOLIO_IDS, PORTFOLIO_META } from './lib/engine'
-import type { AdjustProposal, AgentId, AgentStatus, Constraints, Portfolio, PipelineEvent, Profile } from './types'
+import { coherenceWarnings, PORTFOLIO_IDS } from './lib/engine'
+import type { AdjustProposal, AgentId, AgentStatus, Constraints, Portfolio, PipelineEvent, Profile, ProfileCheck } from './types'
 
 /** Servi par le proxy Vite en local, par nginx en ligne. */
 const PIPELINE_URL = '/api/invocations'
 
-const EVENT_TYPES = new Set<string>(['agent_status', 'pepite', 'universe', 'rerun', 'warning', 'portfolios', 'error', 'done'])
+const EVENT_TYPES = new Set<string>(['check', 'agent_status', 'pepite', 'universe', 'rerun', 'warning', 'portfolios', 'error', 'done'])
 
 const wait = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
@@ -40,27 +41,21 @@ async function* readEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<unk
   }
 }
 
-type PipelineInput = { score: number; profile: Profile; constraints: Constraints }
-
-export async function runPipeline(input: PipelineInput, onEvent: (e: PipelineEvent) => void, signal: AbortSignal) {
-  // Court délai : en mode strict, React monte deux fois la page ; le premier montage est annulé avant l'appel.
-  await wait(50, signal)
-  let body: ReadableStream<Uint8Array>
+/** Ouvre le flux SSE des agents ; null si le backend ne répond pas (le script d'exemple prend alors le relais). */
+async function openStream(body: object, signal: AbortSignal): Promise<ReadableStream<Uint8Array> | null> {
   try {
-    const res = await fetch(PIPELINE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'monport', profile: input.profile, constraints: input.constraints }),
-      signal,
-    })
+    const res = await fetch(PIPELINE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal })
     if (!res.ok || !res.body || !res.headers.get('content-type')?.includes('text/event-stream')) throw new Error(`HTTP ${res.status}`)
-    body = res.body
+    return res.body
   } catch (err) {
     if (signal.aborted) throw err
-    console.warn('Backend indisponible, pipeline d’exemple :', err)
-    return runScript(input, onEvent, signal)
+    console.warn('Backend indisponible, script d’exemple :', err)
+    return null
   }
+}
 
+/** Relaie les événements connus ; émet `error` si le flux casse et `done` s'il s'arrête sans. */
+async function relay(body: ReadableStream<Uint8Array>, onEvent: (e: PipelineEvent) => void, signal: AbortSignal) {
   let finished = false
   try {
     for await (const e of readEvents(body)) {
@@ -70,41 +65,78 @@ export async function runPipeline(input: PipelineInput, onEvent: (e: PipelineEve
     }
   } catch (err) {
     if (signal.aborted) throw err
-    console.warn('Flux du pipeline interrompu :', err)
+    console.warn('Flux des agents interrompu :', err)
     onEvent({ type: 'error', message: 'La connexion avec mes agents s’est interrompue.' })
   }
   if (!finished) onEvent({ type: 'done' })
+}
+
+/** Vérification d'exemple : les règles de coherenceWarnings() tiennent lieu de Pépite. */
+function exampleCheck(score: number, constraints: Constraints): ProfileCheck {
+  const warnings = coherenceWarnings(score, constraints)
+  return {
+    coherent: warnings.length === 0,
+    summary: warnings.length ? 'Quelques-unes de tes réponses tirent dans des directions opposées.' : 'Tes réponses se tiennent : ton profil et tes préférences vont dans le même sens.',
+    issues: warnings.map((detail) => ({ title: 'À vérifier', detail })),
+  }
+}
+
+/** Pépite relit le questionnaire avant tout envoi aux gestionnaires. */
+export async function checkProfile(input: { score: number; profile: Profile; constraints: Constraints }, signal: AbortSignal): Promise<ProfileCheck> {
+  // Court délai : en mode strict, React monte deux fois la page ; le premier montage est annulé avant l'appel.
+  await wait(50, signal)
+  const body = await openStream({ mode: 'monport_check', profile: input.profile, constraints: input.constraints }, signal)
+  if (!body) {
+    await wait(1200, signal)
+    return exampleCheck(input.score, input.constraints)
+  }
+  let check: ProfileCheck | null = null
+  await relay(body, (e) => { if (e.type === 'check') check = e.check }, signal)
+  return check ?? exampleCheck(input.score, input.constraints)
+}
+
+type PipelineInput = { score: number; profile: Profile; constraints: Constraints; check: ProfileCheck; adjustment: string }
+
+export async function runPipeline(input: PipelineInput, onEvent: (e: PipelineEvent) => void, signal: AbortSignal) {
+  await wait(50, signal)
+  const { profile, constraints, check, adjustment } = input
+  const body = await openStream({ mode: 'monport', profile, constraints, check, adjustment }, signal)
+  if (!body) return runScript(input, onEvent, signal)
+  await relay(body, onEvent, signal)
 }
 
 async function runScript(input: PipelineInput, onEvent: (e: PipelineEvent) => void, signal: AbortSignal) {
   const excluded = Object.values(input.constraints.themes).filter((l) => l === -2).length
   const classesOut = Object.values(input.constraints.classes).filter((l) => l === -2).length
   const after = UNIVERSE.length * 7 - excluded * 9 - classesOut * 6
-  const warnings = coherenceWarnings(input.score, input.constraints)
+  const coherent = input.check.coherent
 
   const status = (agent: AgentId, s: AgentStatus, message: string): PipelineEvent => ({ type: 'agent_status', agent, status: s, message })
   // Les trois gestionnaires, puis les trois juges, travaillent en parallèle : leurs étapes sont décalées.
   const each = (role: 'gestionnaire' | 'juge', s: AgentStatus, message: string, delay: number): [number, PipelineEvent][] =>
     PORTFOLIO_IDS.map((id, i) => [i ? 250 : delay, status(`${role}-${id}`, s, message)])
+  // Profil cohérent : le juge final garde un gagnant. Profil incohérent : Pépite mélange les bases 80/20.
+  const finale: [number, PipelineEvent][] = coherent
+    ? [
+        [400, status('juge-final', 'running', 'Comparaison des 3 portefeuilles…')],
+        [1500, status('juge-final', 'done', 'La variante fidèle l’emporte.')],
+      ]
+    : [[500, status('pepite', 'done', 'Mélanges 80/20 prêts : profil d’abord, préférences d’abord.')]]
 
   const script: [number, PipelineEvent][] = [
-    [300, { type: 'pepite', text: 'C’est parti! Mes agents se mettent au travail.' }],
-    [500, status('profil', 'running', 'Lecture de ton profil et de tes préférences…')],
+    [300, { type: 'pepite', text: 'C’est parti! J’écris les consignes de tes trois gestionnaires.' }],
+    [300, status('pepite', 'running', 'J’écris les 3 profils de contraintes…')],
     [1600, { type: 'universe', before: UNIVERSE.length * 7, after }],
-    [700, status('profil', 'done', `${after} placements retenus sur ${UNIVERSE.length * 7}.`)],
+    [500, status('pepite', 'done', '3 profils de contraintes envoyés aux gestionnaires.')],
     ...each('gestionnaire', 'running', 'Recherche de placements…', 400),
     ...each('gestionnaire', 'running', 'Calcul des poids…', 1400),
     ...each('gestionnaire', 'done', 'Portefeuille prêt.', 1200),
     ...each('juge', 'running', 'Vérification de tes limites…', 400),
-    [1200, status('juge-prudent', 'done', 'Toutes tes limites sont respectées.')],
-    [300, status('juge-equilibre', 'done', 'Toutes tes limites sont respectées.')],
-    [600, { type: 'rerun', portfolio: 'conviction', reason: 'trop concentré sur une seule région. Je le renvoie au gestionnaire.' }],
-    [1600, status('gestionnaire-conviction', 'done', 'Portefeuille recalculé : la concentration est corrigée.')],
-    [700, status('juge-conviction', 'done', 'Toutes tes limites sont respectées.')],
+    ...each('juge', 'done', 'Toutes tes limites sont respectées.', 1300),
+    ...finale,
     [400, status('risques', 'running', 'Recherche des incohérences avec ton profil…')],
-    ...warnings.map((text): [number, PipelineEvent] => [900, { type: 'warning', text }]),
-    [1000, status('risques', 'done', warnings.length ? `${warnings.length} mise(s) en garde à lire.` : 'Rien de particulier à signaler.')],
-    [500, { type: 'pepite', text: 'Voilà! Trois propositions t’attendent. C’est toi qui choisis.' }],
+    [1300, status('risques', 'done', 'Rien de particulier à signaler.')],
+    [500, { type: 'pepite', text: coherent ? 'Voilà! Ton portefeuille t’attend.' : 'Voilà! Trois propositions t’attendent. C’est toi qui choisis.' }],
     [300, { type: 'done' }],
   ]
   for (const [delay, event] of script) {
@@ -130,7 +162,7 @@ const tickerWeight = (ticker: string) => (q: Portfolio) => q.holdings.find((h) =
 const RULES: Rule[] = [
   {
     match: /tech|technolog/i,
-    reply: (p) => `D’accord! J’ajoute une part de FNB technologie au portefeuille ${p.name}, prise sur les actions régionales.`,
+    reply: (p) => `D’accord! J’ajoute une part de FNB technologie au portefeuille « ${p.name} », prise sur les actions régionales.`,
     patch: { themes: { tech: 2 } },
     diff: [{ label: 'FNB technologie', get: tickerWeight('THM-TEC') }],
   },
@@ -142,7 +174,7 @@ const RULES: Rule[] = [
   },
   {
     match: /crypto|bitcoin/i,
-    reply: (p) => `Je peux augmenter la crypto dans le portefeuille ${p.name}. Voici ce que ça donnerait.`,
+    reply: (p) => `Je peux augmenter la crypto dans le portefeuille « ${p.name} ». Voici ce que ça donnerait.`,
     patch: { classes: { crypto: 2 } },
     warning: (score) => (score < 50 ? 'ça augmente ton risque au-delà de ton profil. Tu peux quand même l’appliquer, c’est ton choix.' : undefined),
     diff: [{ label: CLASS_LABELS.crypto, get: (q) => q.allocation.crypto }],
@@ -165,7 +197,7 @@ export async function proposeAdjustment(p: Portfolio, message: string, score: nu
   const rule = RULES.find((r) => r.match.test(message))
   if (!rule) {
     return {
-      reply: `Je ne comprends pas encore bien ta demande. Essaie par exemple « plus de tech », « pas de pétrole » ou « moins de risque » pour le portefeuille ${PORTFOLIO_META[p.id].name}.`,
+      reply: `Je ne comprends pas encore bien ta demande. Essaie par exemple « plus de tech », « pas de pétrole » ou « moins de risque » pour le portefeuille « ${p.name} ».`,
       changes: [],
     }
   }
@@ -173,6 +205,6 @@ export async function proposeAdjustment(p: Portfolio, message: string, score: nu
   const changes = rule.diff
     .map((d) => ({ label: d.label, before: d.get(p), after: d.get(next) }))
     .filter((c) => Math.abs(c.after - c.before) >= 0.001)
-  if (!changes.length) return { reply: `C’est déjà le cas dans le portefeuille ${p.name} : rien à changer.`, changes: [] }
+  if (!changes.length) return { reply: `C’est déjà le cas dans le portefeuille « ${p.name} » : rien à changer.`, changes: [] }
   return { reply: rule.reply(p), changes, warning: rule.warning?.(score), patch: rule.patch, riskShift: rule.riskShift }
 }

@@ -1,38 +1,76 @@
-"""Pont entre le frontend MonPort et le pipeline.
+"""Pont entre le frontend MonPort et les agents.
 
-Le frontend envoie son profil et ses préférences (échelle −2 à +2) et attend ses propres événements
-(`frontend/src/types.ts`, `PipelineEvent`): une carte par agent (Profil, 3 gestionnaires, 3 juges,
-responsable des risques), les messages de Pépite, puis les 3 portefeuilles au format `Portfolio`.
+Deux appels, un par écran (`frontend/src/api.ts`):
 
-    {"mode": "monport", "profile": {...}, "constraints": {...}}
+    {"mode": "monport_check", "profile": {...}, "constraints": {...}}
+        Pépite lit le questionnaire (JSON) et juge sa cohérence -> {"type": "check", "check": PepiteCheck}
 
-Ce module traduit dans les deux sens sans toucher au pipeline: l'entrée devient un `InvestorForm`,
-les événements du bus deviennent des `PipelineEvent`. Tous les textes visibles sont tutoyés.
+    {"mode": "monport", "profile": ..., "constraints": ..., "check": PepiteCheck, "adjustment": "texte libre"}
+        Pépite écrit 3 profils de contraintes (JSON) -> 3 gestionnaires en parallèle -> 3 juges
+        profil incohérent: 3 portefeuilles, « Tes contraintes » et deux mélanges 80/20 calculés par le code
+        profil cohérent:   le juge final désigne un seul portefeuille
+        -> responsable des risques (CRO) -> {"type": "portfolios"}
+
+Les événements suivent `PipelineEvent` de `frontend/src/types.ts`: une carte par agent. Le pipeline de
+`orchestrator.py` n'est pas utilisé ici, seulement ses agents, l'optimiseur et `constraints`.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, AsyncIterator, Iterable, Optional
+import math
+from typing import Any, AsyncIterator, Awaitable, Callable, Iterable, Optional
 
 from pydantic import ValidationError
 
-from .constraints import excluded_mask
+from .agents.base import AgentError
+from .agents.cro import run_cro
+from .agents.final_judge import run_final_judge
+from .agents.judge import run_judge
+from .agents.pepite import run_check, run_plan
+from .agents.portfolio_manager import run_portfolio_manager
+from .config import get_settings
+from .constraints import DIMENSION_COLUMN, detect_conflicts, evaluate, excluded_mask, validate_all
 from .data import Market, get_market
-from .mandates import MANDATES
-from .orchestrator import stream_pipeline
-from .schemas import Constraint, ConstraintType as T, InvestorForm
+from .events import EventBus
+from .mandates import Mandate
+from .optimizer import optimize
+from .schemas import (
+    CoherenceIssue,
+    Constraint,
+    ConstraintPlan,
+    ConstraintType as T,
+    InvestorForm,
+    InvestorProfile,
+    JudgeVerdict,
+    PepiteCheck,
+    Portfolio,
+    Position,
+)
 
 logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------- #
 # Vocabulaire du frontend
 # --------------------------------------------------------------------------- #
-PORTFOLIO_IDS = {"pm1": "prudent", "pm2": "equilibre", "pm3": "conviction"}
-PORTFOLIO_NAMES = {"prudent": "Prudent", "equilibre": "Équilibré", "conviction": "Conviction"}
-MANDATE_TO_FRONT = {m.name: PORTFOLIO_IDS[m.id] for m in MANDATES}
+SLOTS = ["prudent", "equilibre", "conviction"]
 CLASSES = ["actions", "obligations", "immobilier", "or", "crypto", "liquidites"]
+CLASS_LABELS = {"actions": "Actions", "obligations": "Obligations", "immobilier": "Immobilier coté",
+                "or": "Or et matières premières", "crypto": "Crypto-actifs", "liquidites": "Liquidités"}
+
+# Profil incohérent: chaque gestionnaire construit une base…
+BASE_NAMES = {"prudent": "Ton profil", "equilibre": "Tes contraintes", "conviction": "Tes préférences"}
+# …et le client voit ces 3 portefeuilles (mêmes libellés que PORTFOLIO_META dans frontend/src/lib/engine.ts).
+BLEND = 0.8
+TRIO = {
+    "prudent": ("Profil d’abord (80/20)", "80 % calé sur ton profil, 20 % sur tes préférences."),
+    "equilibre": ("Tes contraintes", "Exactement ce que tu as demandé, même là où ça s’écarte de ton profil."),
+    "conviction": ("Préférences d’abord (80/20)", "80 % calé sur tes préférences, 20 % sur ton profil."),
+}
+# Profil cohérent: trois variantes en concurrence, un seul gagnant présenté.
+VARIANT_NAMES = {"prudent": "Variante prudente", "equilibre": "Variante fidèle", "conviction": "Variante audacieuse"}
+WINNER_NAME = "Ton portefeuille"
 
 # Valeurs possibles dans le dataset (synthétique et réel). Seules celles présentes servent.
 CLASS_TARGETS = {
@@ -60,6 +98,7 @@ THEME_SECTORS = {
     "consommation": ["Consumer Staples", "Consumer Discretionary"],
     "industrie": ["Industrials"],
 }
+DIRECT_CLASSES = ("Equity", "Crypto", "Alternative")  # titres détenus en direct, écartés par « FNB seulement »
 BLOCK_LABELS = {"classes": "classe", "regions": "région", "themes": "thématique", "factors": "facteur"}
 
 # Poids associés à chaque niveau: (Moins = plafond souple, Plus = plancher souple, Imposer = plancher dur)
@@ -74,6 +113,28 @@ LOSS_BY_REACTION = {0: 10.0, 1: 15.0, 2: 25.0, 3: 35.0}  # baisse de 20 %: je ve
 OBJECTIVES = {"securiser": "preservation", "fructifier": "balanced", "viser-haut": "growth"}
 EXPERIENCE = {1: "none", 2: "basic", 3: "intermediate", 4: "advanced", 5: "advanced"}
 FEES = {"ETF": 0.002}  # faute de donnée: 0,20 % par FNB, rien pour un titre détenu en direct
+LINE_CAP = 0.40  # limite de sécurité: aucune ligne au-delà de 40 %
+MAX_ADJUSTMENT = 1000
+
+# Répartition stratégique du profil (portefeuilles modèles 20/80 … 100/0): plancher d'obligations, fixé par le code
+# pour les portefeuilles qui suivent le profil (« Ton profil », et les 3 variantes quand le profil est cohérent).
+BOND_FLOOR = {"conservateur": 0.80, "modere": 0.60, "equilibre": 0.40, "dynamique": 0.20, "agressif": 0.0}
+BOND_SHIFT = {"prudent": 0.10, "equilibre": 0.0, "conviction": -0.10}
+BOND_TARGETS = ("Fixed Income", "Bonds")
+CRYPTO_TARGETS = ("Crypto", "Alternative")
+NO_CRYPTO = {"conservateur", "modere"}  # pas de crypto dans un portefeuille qui suit un profil prudent
+PROFILE_NOTE = "Répartition du profil"
+
+# Objectif d'optimisation de chaque gestionnaire. Cohérent: trois objectifs pour que la concurrence ait un sens
+# (les mandats Défensif / Équilibré / Croissance de mandates.py). Incohérent: « Ton profil » suit le profil de risque.
+VARIANT_OBJECTIVES = {"prudent": "min_volatility", "equilibre": "max_sharpe", "conviction": "max_return"}
+PROFILE_OBJECTIVES = {"conservateur": "min_volatility", "modere": "min_volatility", "equilibre": "max_sharpe",
+                      "dynamique": "max_return", "agressif": "max_return"}
+GUIDANCE = {
+    "min_volatility": "Cherche les variations les plus douces: FNB d'obligations, titres défensifs, actifs peu corrélés.",
+    "max_sharpe": "Cherche le meilleur rendement pour le risque pris. Diversifie par secteur, pays et classe d'actifs.",
+    "max_return": "Cherche le rendement le plus élevé sous le plafond de volatilité, sans concentrer le portefeuille.",
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -84,6 +145,22 @@ def _targets(block: str, item: str, allowed: dict[str, list[str]]) -> list[str]:
     dimension = {"classes": "asset_class", "regions": "country", "themes": "sector"}[block]
     present = {v.lower(): v for v in allowed[dimension]}
     return [present[c.lower()] for c in candidates if c.lower() in present]
+
+
+def _dedupe(constraints: list[Constraint]) -> list[Constraint]:
+    """Une exclusion l'emporte sur un poids visé (ex.: FNB seulement et « Imposer » les actions); pour une même cible,
+    on garde la contrainte la plus forte."""
+    excluded = {(c.type.value.removeprefix("exclude_"), (c.target or "").lower()) for c in constraints
+                if c.type.value.startswith("exclude_")}
+    unique: dict[tuple[str, str], Constraint] = {}
+    for c in constraints:
+        dimension = c.type.value.removeprefix("min_").removeprefix("max_").removesuffix("_weight")
+        if not c.type.value.startswith("exclude_") and (dimension, (c.target or "").lower()) in excluded:
+            continue
+        key = (c.type.value, (c.target or "").lower())
+        if key not in unique or (c.hard and not unique[key].hard):
+            unique[key] = c
+    return list(unique.values())
 
 
 def preference_constraints(prefs: dict, allowed: dict[str, list[str]]) -> tuple[list[Constraint], list[str]]:
@@ -111,25 +188,11 @@ def preference_constraints(prefs: dict, allowed: dict[str, list[str]]) -> tuple[
                                           hard=level == 2, note=note))
     skipped += [f"facteur « {f} »" for f, level in (prefs.get("factors") or {}).items() if level]
 
-    # FNB seulement: aucun titre détenu en direct (actions individuelles, crypto au comptant).
     if prefs.get("vehicles") == "fnb":
-        for t in ("Equity", "Crypto", "Alternative"):
-            if t.lower() in {v.lower() for v in allowed["asset_class"]}:
-                out.append(Constraint(type=T.EXCLUDE_ASSET_CLASS, target=t, hard=True, note="MonPort: FNB seulement"))
-
-    # Une exclusion l'emporte sur un poids visé (ex.: FNB seulement et « Imposer » les actions).
-    excluded = {(c.type.value.removeprefix("exclude_"), (c.target or "").lower()) for c in out
-                if c.type.value.startswith("exclude_")}
-    unique: dict[tuple[str, str], Constraint] = {}
-    for c in out:
-        dimension = c.type.value.removeprefix("min_").removeprefix("max_").removesuffix("_weight")
-        if not c.type.value.startswith("exclude_") and (dimension, (c.target or "").lower()) in excluded:
-            continue
-        # Une même cible peut venir de deux blocs (immobilier): on garde la contrainte la plus forte.
-        key = (c.type.value, (c.target or "").lower())
-        if key not in unique or (c.hard and not unique[key].hard):
-            unique[key] = c
-    return list(unique.values()), skipped
+        present = {v.lower() for v in allowed["asset_class"]}
+        out += [Constraint(type=T.EXCLUDE_ASSET_CLASS, target=t, hard=True, note="MonPort: FNB seulement")
+                for t in DIRECT_CLASSES if t.lower() in present]
+    return _dedupe(out), skipped
 
 
 def to_form(profile: dict, prefs: dict, market: Market) -> tuple[InvestorForm, list[str]]:
@@ -152,7 +215,237 @@ def to_form(profile: dict, prefs: dict, market: Market) -> tuple[InvestorForm, l
 
 
 # --------------------------------------------------------------------------- #
-# Sortie: résultat du pipeline -> Portfolio du frontend
+# Faits calculés: mêmes règles que riskScore() et coherenceWarnings() de frontend/src/lib/engine.ts
+# --------------------------------------------------------------------------- #
+def risk_score(profile: dict) -> int:
+    age = int(profile.get("age", 35))
+    points = (20 if age < 30 else 12 if age < 45 else 4 if age < 60 else -10) + min(int(profile.get("horizon", 10)), 25)
+    points += {"securiser": 0, "fructifier": 15, "viser-haut": 30}.get(str(profile.get("objective")), 15)
+    return min(95, max(5, points + int(profile.get("lossReaction", 2)) * 10))
+
+
+def coherence_facts(profile: dict, prefs: dict) -> list[str]:
+    score, classes = risk_score(profile), prefs.get("classes") or {}
+    crypto, actions = classes.get("crypto", 0), classes.get("actions", 0)
+    out = []
+    if score < 40 and crypto >= 1:
+        out.append("Tu cherches plutôt de la stabilité, mais tu demandes plus de crypto-actifs. Les deux se marient mal : "
+                   "la crypto peut perdre la moitié de sa valeur en quelques mois.")
+    if score < 40 and actions == 2:
+        out.append("Imposer beaucoup d’actions avec un profil prudent peut te faire vivre des baisses difficiles à supporter.")
+    if score > 65 and actions <= -1:
+        out.append("Ton profil est dynamique, mais tu limites les actions : le rendement attendu sera plus faible que ce "
+                   "que ton horizon permet.")
+    kept = [k for k in CLASSES if classes.get(k, 0) != -2]
+    if len(kept) == 1:
+        out.append(f"Tu n’as gardé qu’un seul type de placement ({CLASS_LABELS[kept[0]].lower()}) : ton portefeuille sera "
+                   "très peu diversifié.")
+    return out
+
+
+def fallback_check(profile: dict, facts: list[str]) -> PepiteCheck:
+    """Si Pépite ne répond pas: profil tiré du score du frontend, cohérence tirée des faits calculés."""
+    score = risk_score(profile)
+    label = ("conservateur" if score < 25 else "modere" if score < 45 else "equilibre" if score < 65
+             else "dynamique" if score < 80 else "agressif")
+    vol = {"conservateur": 0.07, "modere": 0.10, "equilibre": 0.13, "dynamique": 0.16, "agressif": 0.20}[label]
+    weight = {"conservateur": 0.08, "modere": 0.10, "equilibre": 0.12, "dynamique": 0.15, "agressif": 0.20}[label]
+    return PepiteCheck(
+        risk_score=max(1, min(10, round(score / 10))), risk_label=label, suggested_max_volatility=vol,
+        suggested_max_position_weight=weight, summary="J’ai relu tes réponses.", coherent=not facts,
+        issues=[CoherenceIssue(title="À vérifier", detail=f) for f in facts],
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Profils de contraintes: Pépite propose, le code valide
+# --------------------------------------------------------------------------- #
+def _limits(vol: float, weight: float) -> list[Constraint]:
+    """Limites du profil: volatilité, et poids par titre détenu en direct (un FNB n'est plafonné qu'à 40 %)."""
+    return [Constraint(type=T.MAX_VOLATILITY, value=round(vol, 3), hard=True, note="Limite du profil"),
+            Constraint(type=T.MAX_STOCK_WEIGHT, value=round(min(weight, LINE_CAP), 3), hard=True, note="Limite du profil"),
+            Constraint(type=T.MAX_POSITION_WEIGHT, value=LINE_CAP, hard=True, note="Limite de sécurité")]
+
+
+def follow_profile(constraints: list[Constraint], floor: float, risk_label: str,
+                   allowed: dict[str, list[str]]) -> list[Constraint]:
+    """Impose la répartition du profil: la part d'obligations et, pour un profil prudent, pas de crypto.
+    Ces règles remplacent les poids que les préférences visaient sur les mêmes classes; une exclusion des
+    obligations par le client l'emporte sur le plancher."""
+    present = {v.lower(): v for v in allowed["asset_class"]}
+    bonds = next((present[t.lower()] for t in BOND_TARGETS if t.lower() in present), None)
+    cryptos = [present[t.lower()] for t in CRYPTO_TARGETS if t.lower() in present] if risk_label in NO_CRYPTO else []
+    excluded = {(c.target or "").lower() for c in constraints if c.type is T.EXCLUDE_ASSET_CLASS}
+    if bonds and (floor <= 0 or bonds.lower() in excluded):
+        bonds = None
+    managed = {t.lower() for t in [bonds, *cryptos] if t}
+    out = [c for c in constraints if not (c.type in (T.MIN_ASSET_CLASS_WEIGHT, T.MAX_ASSET_CLASS_WEIGHT)
+                                          and (c.target or "").lower() in managed)]
+    out += [Constraint(type=T.EXCLUDE_ASSET_CLASS, target=t, hard=True, note=PROFILE_NOTE)
+            for t in cryptos if t.lower() not in excluded]
+    if bonds:
+        out.append(Constraint(type=T.MIN_ASSET_CLASS_WEIGHT, target=bonds, value=round(floor, 2), hard=True, note=PROFILE_NOTE))
+    if detect_conflicts(out):  # la répartition du profil passe avant les autres poids minimaux
+        out = [c for c in out if not c.type.value.startswith("min_") or c.note == PROFILE_NOTE]
+    return out
+
+
+def promote_preferences(constraints: list[Constraint]) -> list[Constraint]:
+    """« Moins » et « Plus » deviennent des contraintes dures, une à une, tant qu'elles ne créent pas de conflit:
+    dans les portefeuilles qui suivent les préférences, elles doivent changer les poids, pas seulement être vérifiées."""
+    out = list(constraints)
+    for i, c in enumerate(out):
+        if not c.hard:
+            candidate = out[:i] + [c.model_copy(update={"hard": True})] + out[i + 1:]
+            if not detect_conflicts(candidate):
+                out = candidate
+    return out
+
+
+def fallback_plan(check: PepiteCheck, prefs: list[Constraint]) -> dict[str, tuple[str, list[Constraint]]]:
+    """Profils écrits par le code si Pépite échoue ou si l'un des siens est inutilisable."""
+    vol, weight = check.suggested_max_volatility, check.suggested_max_position_weight
+    exclusions = [c for c in prefs if c.type.value.startswith("exclude_")]
+    if check.coherent:
+        return {
+            "prudent": ("Un cran plus prudent que tes réponses.", prefs + _limits(vol * 0.85, weight)),
+            "equilibre": ("Fidèle à tes réponses.", prefs + _limits(vol, weight)),
+            "conviction": ("Un cran plus audacieux que tes réponses.", prefs + _limits(vol * 1.15, weight)),
+        }
+    return {
+        "prudent": ("Seulement les limites de ton profil.", exclusions + _limits(vol, weight)),
+        "equilibre": ("Tout ce que tu as demandé.", prefs + _limits(vol, weight)),
+        "conviction": ("Seulement tes préférences.", prefs + [Constraint(type=T.MAX_POSITION_WEIGHT, value=LINE_CAP)]),
+    }
+
+
+def objective_for(slot: str, check: PepiteCheck, constraints: list[Constraint]) -> str:
+    objective = (VARIANT_OBJECTIVES[slot] if check.coherent
+                 else PROFILE_OBJECTIVES.get(check.risk_label, "max_sharpe") if slot == "prudent" else "max_sharpe")
+    # max_return sans plafond de volatilité concentre le portefeuille (voir optimizer.optimize)
+    if objective == "max_return" and not any(c.hard and c.type is T.MAX_VOLATILITY for c in constraints):
+        return "max_sharpe"
+    return objective
+
+
+def bond_floors(check: PepiteCheck) -> dict[str, float]:
+    """Incohérent: seul « Ton profil » suit la répartition du profil. Cohérent: les 3 variantes, décalées de ±10 points."""
+    base = BOND_FLOOR.get(check.risk_label, 0.0)
+    if not check.coherent:
+        return {"prudent": base}
+    return {s: min(0.9, max(0.0, base + BOND_SHIFT[s])) if base else 0.0 for s in SLOTS}
+
+
+def validate_profile(constraints: list[Constraint], exclusions: list[Constraint],
+                     allowed: dict[str, list[str]]) -> Optional[list[Constraint]]:
+    """Catalogue, exclusions du client et limite de 40 % garanties par le code. None si le profil reste contradictoire."""
+    valid, errors = validate_all(constraints, allowed)
+    if errors:
+        logger.info("Contraintes de Pépite écartées: %s", errors)
+    # Un plafond par titre sous 40 % vise les titres détenus en direct: un FNB d'obligations doit pouvoir peser 40 %.
+    caps = [c.value for c in valid if c.type in (T.MAX_POSITION_WEIGHT, T.MAX_STOCK_WEIGHT) and c.hard and c.value]
+    valid = [c for c in valid if c.type not in (T.MAX_POSITION_WEIGHT, T.MAX_STOCK_WEIGHT)]
+    valid.append(Constraint(type=T.MAX_POSITION_WEIGHT, value=LINE_CAP, hard=True, note="Limite de sécurité"))
+    if caps and min(caps) < LINE_CAP:
+        valid.append(Constraint(type=T.MAX_STOCK_WEIGHT, value=min(caps), hard=True, note="Limite du profil"))
+    valid = _dedupe(valid + exclusions)
+    if detect_conflicts(valid):  # on retire d'abord les poids minimaux, cause habituelle des conflits
+        valid = [c for c in valid if not c.type.value.startswith("min_")]
+    return None if detect_conflicts(valid) else valid
+
+
+def ensure_feasible(market: Market, constraints: list[Constraint]) -> tuple[list[Constraint], Optional[str]]:
+    """Relève le plafond de volatilité quand l'univers ne permet pas de descendre aussi bas: sans ça, le gestionnaire
+    et son repli échouent tous les deux (fréquent sur le dataset synthétique pour un profil prudent)."""
+    hard = [c for c in constraints if c.hard]
+    caps = [c.value for c in hard if c.type is T.MAX_VOLATILITY and c.value]
+    if not caps:
+        return constraints, None
+    eligible = market.assets[~excluded_mask(market, hard)]
+    picks = eligible.sort_values("ann_vol").index[:30].tolist()
+    for c in hard:  # les poids minimaux exigent des titres de leur groupe
+        column = DIMENSION_COLUMN.get(c.type.value.removeprefix("min_").removesuffix("_weight"))
+        if c.type.value.startswith("min_") and c.target and column:
+            group = eligible[eligible[column].str.lower() == c.target.lower()]
+            picks += group.sort_values("sharpe", ascending=False).index[:3].tolist()
+    picks = list(dict.fromkeys(picks))[: get_settings().max_assets_per_portfolio]
+    others = [c for c in constraints if not (c.hard and c.type is T.MAX_VOLATILITY)]
+    lowest = optimize(market, picks, "min_volatility", others)
+    if not lowest.ok or not lowest.metrics or lowest.metrics.volatility <= min(caps):
+        return constraints, None
+    cap = math.ceil((lowest.metrics.volatility + 0.003) * 100) / 100
+    note = "L’univers de placements ne permet pas un risque aussi bas que demandé : j’ai visé le plus bas possible."
+    return others + [Constraint(type=T.MAX_VOLATILITY, value=cap, hard=True, note="Plafond relevé au plus bas possible")], note
+
+
+def build_profiles(plan: Optional[ConstraintPlan], check: PepiteCheck, prefs: list[Constraint],
+                   allowed: dict[str, list[str]]) -> tuple[dict[str, tuple[str, list[Constraint]]], int]:
+    """Retourne les 3 profils par slot et le nombre de profils remplacés par ceux du code."""
+    fallback = fallback_plan(check, prefs)
+    floors = bond_floors(check)
+    exclusions = [c for c in prefs if c.type.value.startswith("exclude_")]
+    proposed = {p.slot: p for p in (plan.profiles if plan else [])}
+    out, replaced = {}, 0
+    for slot in SLOTS:
+        p = proposed.get(slot)
+        constraints = validate_profile(p.constraints, exclusions, allowed) if p else None
+        rationale = p.rationale if p else ""
+        if constraints is None:
+            replaced += 1
+            rationale, raw = fallback[slot]
+            constraints = validate_profile(raw, exclusions, allowed) or _limits(check.suggested_max_volatility, LINE_CAP)
+        # Le plafond par titre du profil, si Pépite l'a oublié (sauf « Tes préférences », qui ignore le profil).
+        if (check.coherent or slot != "conviction") and not any(c.type is T.MAX_STOCK_WEIGHT for c in constraints):
+            cap = min(check.suggested_max_position_weight, LINE_CAP)
+            constraints = constraints + [Constraint(type=T.MAX_STOCK_WEIGHT, value=cap, hard=True, note="Limite du profil")]
+        # « Ton profil » (incohérent) ignore les préférences; partout ailleurs, elles comptent pour de vrai.
+        if check.coherent or slot != "prudent":
+            constraints = promote_preferences(constraints)
+        if slot in floors:
+            constraints = follow_profile(constraints, floors[slot], check.risk_label, allowed)
+        out[slot] = (rationale, constraints)
+    return out, replaced
+
+
+# --------------------------------------------------------------------------- #
+# Portefeuilles: mélange 80/20 et gagnant
+# --------------------------------------------------------------------------- #
+def blend(market: Market, slot: str, core: Optional[Portfolio], satellite: Optional[Portfolio]) -> Optional[Portfolio]:
+    """Cœur-satellite: 80 % du capital suit `core`, 20 % suit `satellite`. Poids et indicateurs recalculés par le code."""
+    name, description = TRIO[slot]
+    if core is None or satellite is None:
+        base = core or satellite
+        return base.model_copy(update={"id": slot, "mandate": name, "mandate_description": description}) if base else None
+    weights: dict[str, float] = {}
+    for p, share in ((core, BLEND), (satellite, 1 - BLEND)):
+        for pos in p.positions:
+            weights[pos.symbol] = weights.get(pos.symbol, 0.0) + share * pos.weight
+    positions = []
+    for symbol, w in sorted(weights.items(), key=lambda kv: -kv[1]):
+        a = market.assets.loc[symbol]
+        positions.append(Position(symbol=symbol, name=str(a["name"]), weight=round(w, 4), sector=str(a["sector"]),
+                                  country=str(a["country"]), asset_class=str(a["asset_class"])))
+    return Portfolio(
+        id=slot, mandate=name, mandate_description=description, positions=positions,
+        metrics=market.portfolio_metrics(weights),
+        summary=f"{BLEND:.0%} du portefeuille « {core.mandate} » et {1 - BLEND:.0%} du portefeuille « {satellite.mandate} ».".replace("%", " %"),
+        tradeoffs=core.summary,
+    )
+
+
+def pick_winner(portfolios: list[Portfolio], verdicts: dict[str, JudgeVerdict], choice: Optional[str]) -> Portfolio:
+    """Le choix du juge final, s'il est conforme ou si aucun ne l'est; sinon le conforme le mieux noté."""
+    def rank(p: Portfolio) -> tuple:
+        v = verdicts.get(p.id)
+        return (bool(v and v.compliant), v.fit_score if v else 0, p.metrics.sharpe if p.metrics else 0)
+
+    best = max(portfolios, key=rank)
+    chosen = next((p for p in portfolios if p.id == choice), None)
+    return chosen if chosen and rank(chosen)[0] >= rank(best)[0] else best
+
+
+# --------------------------------------------------------------------------- #
+# Sortie: Portfolio du frontend
 # --------------------------------------------------------------------------- #
 def front_class(row: Any) -> str:
     """Classe du frontend pour un titre: le type d'instrument d'abord, puis la catégorie ou le nom du FNB."""
@@ -174,42 +467,32 @@ def front_class(row: Any) -> str:
     return "actions"
 
 
-def _rename(text: str) -> str:
-    """Les agents nomment les mandats; le client voit les noms MonPort."""
-    for mandate, front in MANDATE_TO_FRONT.items():
-        text = text.replace(mandate, PORTFOLIO_NAMES[front])
-    return text
-
-
-def to_portfolio(item: dict, market: Market, risk_report: Optional[dict], risk_score: int,
-                 notes: list[str]) -> dict:
-    p, verdict = item["portfolio"], item.get("verdict") or {}
-    front_id = PORTFOLIO_IDS[p["id"]]
+def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, risk_report: Optional[dict],
+                 risk_score_10: int, skipped: list[str], extra: list[str], name: str, tagline: str) -> dict:
     holdings, allocation, fees = [], {c: 0.0 for c in CLASSES}, 0.0
-    for pos in p["positions"]:
-        row = market.assets.loc[pos["symbol"]] if pos["symbol"] in market.assets.index else pos
+    for pos in p.positions:
+        row = market.assets.loc[pos.symbol] if pos.symbol in market.assets.index else pos.model_dump()
         cls = front_class(row)
-        holdings.append({"ticker": pos["symbol"], "name": pos["name"], "assetClass": cls, "weight": pos["weight"]})
-        allocation[cls] += pos["weight"]
-        fees += pos["weight"] * FEES.get(str(row.get("instrument_type", "")), 0.0)
+        holdings.append({"ticker": pos.symbol, "name": pos.name, "assetClass": cls, "weight": pos.weight})
+        allocation[cls] += pos.weight
+        fees += pos.weight * FEES.get(str(row.get("instrument_type", "")), 0.0)
 
-    m = p.get("metrics") or {}
-    mu, sigma = m.get("expected_return", 0.0), m.get("volatility", 0.0)
-    warnings = [
-        _rename(f"{w['title']}. {w['detail']}")
-        for w in (risk_report or {}).get("warnings", [])
-        if w.get("portfolio_id") == p["id"] and w.get("severity") in ("medium", "high")
-    ]
-    agent_notes = [_rename(t) for t in (p.get("summary"), p.get("tradeoffs"), verdict.get("comment")) if t]
-    if notes:
-        agent_notes.append(f"Pas encore pris en compte par les agents : {', '.join(notes)}.")
-    if verdict and not verdict.get("compliant", True):
+    m = p.metrics
+    mu, sigma = (m.expected_return, m.volatility) if m else (0.0, 0.0)
+    warnings = [f"{w['title']}. {w['detail']}" for w in (risk_report or {}).get("warnings", [])
+                if w.get("portfolio_id") == p.id and w.get("severity") in ("medium", "high")]
+    agent_notes = [t for t in (p.summary, p.tradeoffs, verdict.comment if verdict else None) if t] + extra
+    if skipped:
+        agent_notes.append(f"Pas encore pris en compte par les agents : {', '.join(skipped)}.")
+    if verdict and not verdict.compliant:
         warnings.insert(0, "Ce portefeuille ne respecte pas toutes tes limites. Lis les détails avant de le choisir.")
     elif verdict:
         agent_notes.append("Le juge confirme que ce portefeuille respecte tes limites.")
     return {
-        "id": front_id,
-        "riskScore": min(95, max(5, risk_score * 10)),
+        "id": p.id,
+        "name": name,
+        "tagline": tagline,
+        "riskScore": min(95, max(5, risk_score_10 * 10)),
         "holdings": holdings,
         "allocation": {k: round(v, 4) for k, v in allocation.items()},
         # Mêmes formules que metricsOf() dans frontend/src/lib/engine.ts, sur les chiffres de l'optimiseur.
@@ -218,8 +501,8 @@ def to_portfolio(item: dict, market: Market, risk_report: Optional[dict], risk_s
             "volatility": sigma,
             "worstYear": mu - 2.33 * sigma,
             "fees": round(fees, 5),
-            "sharpe": m.get("sharpe", 0.0),
-            "maxDrawdown": m.get("max_drawdown", 0.0),
+            "sharpe": m.sharpe if m else 0.0,
+            "maxDrawdown": m.max_drawdown if m else 0.0,
             "var95": -(mu - 1.645 * sigma),
             "es95": -(mu - 2.063 * sigma),
         },
@@ -229,7 +512,7 @@ def to_portfolio(item: dict, market: Market, risk_report: Optional[dict], risk_s
 
 
 # --------------------------------------------------------------------------- #
-# Événements: bus du pipeline -> PipelineEvent
+# Événements: bus des agents -> PipelineEvent
 # --------------------------------------------------------------------------- #
 TOOL_TEXT = {
     "describe_universe": "tour d’horizon des placements",
@@ -238,111 +521,230 @@ TOOL_TEXT = {
 }
 
 
-def _status(agent: str, status: str, message: str) -> dict:
-    return {"type": "agent_status", "agent": agent, "status": status, "message": message}
+def status(agent: str, state: str, message: str) -> dict:
+    return {"type": "agent_status", "agent": agent, "status": state, "message": message}
 
 
-def _pepite(text: str) -> dict:
+def pepite(text: str) -> dict:
     return {"type": "pepite", "text": text}
 
 
 class Translator:
-    """Un agent du pipeline = une carte du frontend: profil, gestionnaire-<id>, juge-<id>, risques."""
+    """Les statuts des agents deviennent des cartes: gestionnaire-<slot>, juge-<slot>, juge-final, risques.
+    Les événements « front » sont émis tels quels par l'orchestration (carte Pépite, portefeuilles…)."""
 
-    def __init__(self, market: Market, form: InvestorForm, skipped: list[str]) -> None:
-        self.market, self.form, self.skipped = market, form, skipped
-
-    def _card(self, agent: str, prefix: str) -> Optional[str]:
-        """« PM Défensif » -> « gestionnaire-prudent »."""
-        front = MANDATE_TO_FRONT.get(agent.removeprefix(prefix).strip())
-        return f"{'gestionnaire' if prefix == 'PM' else 'juge'}-{front}" if front else None
+    def __init__(self) -> None:
+        self.slots: dict[str, str] = {}  # nom de mandat -> slot, rempli quand les profils sont prêts
 
     def translate(self, e: dict) -> Iterable[dict]:
         kind, agent, state = e.get("type"), e.get("agent") or "", e.get("state")
-        pm = self._card(agent, "PM") if agent.startswith("PM ") else None
-        judge = self._card(agent, "Juge") if agent.startswith("Juge ") else None
-        if kind == "heartbeat":
+        if kind == "front":
+            yield e["event"]
+        elif kind == "heartbeat":
             yield {"type": "heartbeat"}
-        elif kind == "status" and agent == "Profil" and state == "start":
-            yield _status("profil", "running", "Lecture de ton profil et de tes préférences…")
-        elif kind == "profile":
-            hard = [c for c in self.form.constraints if c.hard]
-            before = len(self.market.assets)
-            after = int((~excluded_mask(self.market, hard)).sum())
-            yield {"type": "universe", "before": before, "after": after}
-            yield _status("profil", "done", f"{after} placements retenus sur {before}.")
-        elif pm and kind == "status" and state == "start":
-            yield _status(pm, "running", "Construction du portefeuille…")
-        elif pm and kind == "tool" and e.get("name") in TOOL_TEXT:
-            yield _status(pm, "running", f"{TOOL_TEXT[e['name']].capitalize()}…")
-        elif pm and kind == "status" and state == "warning":
-            yield _status(pm, "running", "Sélection de secours en cours…")
-        elif pm and kind == "status" and state == "done":
-            yield _status(pm, "done", "Portefeuille prêt.")
-        elif judge and kind == "status" and state == "start":
-            yield _status(judge, "running", "Vérification de tes limites…")
-        elif judge and kind == "status" and state in ("done", "warning"):
-            yield _status(judge, "done", "Évaluation terminée.")
-        elif kind == "status" and state == "retry":
-            yield _pepite("Oh! Les juges renvoient les portefeuilles aux gestionnaires.")
-            for front in PORTFOLIO_NAMES:
-                yield _status(f"juge-{front}", "pending", "")
-                yield _status(f"gestionnaire-{front}", "running", "Nouvel essai avec les remarques du juge…")
-        elif kind == "status" and agent == "CRO" and state == "start":
-            yield _status("risques", "running", "Recherche des incohérences avec ton profil…")
-        elif kind == "clarification":
-            yield {"type": "error", "message": " ".join(e.get("questions") or ["Tes préférences se contredisent."])}
-        elif kind == "error":
-            yield {"type": "error", "message": e.get("message") or "Erreur du pipeline."}
-        elif kind == "result":
-            yield from self._result(e["data"])
+        elif agent == "Juge final":
+            if state == "start":
+                yield status("juge-final", "running", "Comparaison des 3 portefeuilles…")
+        elif agent == "CRO":
+            if state == "start":
+                yield status("risques", "running", "Recherche des incohérences avec ton profil…")
+        elif agent.startswith("PM ") and (slot := self.slots.get(agent.removeprefix("PM "))):
+            card = f"gestionnaire-{slot}"
+            if kind == "tool" and e.get("name") in TOOL_TEXT:
+                yield status(card, "running", f"{TOOL_TEXT[e['name']].capitalize()}…")
+            elif state == "start":
+                yield status(card, "running", "Construction du portefeuille…")
+            elif state == "warning":
+                yield status(card, "running", "Sélection de secours en cours…")
+            elif state == "done":
+                yield status(card, "done", "Portefeuille prêt.")
+        elif agent.startswith("Juge ") and (slot := self.slots.get(agent.removeprefix("Juge "))):
+            if state == "start":
+                yield status(f"juge-{slot}", "running", "Vérification de tes limites…")
+            elif state in ("done", "warning"):
+                yield status(f"juge-{slot}", "done", "Évaluation terminée.")
 
-    def _result(self, data: dict) -> Iterable[dict]:
-        report = data.get("risk_report")
-        # Seulement les incohérences graves: les autres sont écrites pour un conseiller, pas pour le client.
-        for issue in (report or {}).get("profile_inconsistencies", []):
-            if issue.get("severity") == "high":
-                yield {"type": "warning", "text": _rename(issue["detail"])}
-        score = data["profile"]["assessment"]["risk_score"]
-        portfolios = {
-            PORTFOLIO_IDS[item["portfolio"]["id"]]: to_portfolio(item, self.market, report, score, self.skipped)
-            for item in data["portfolios"]
-            if item["portfolio"]["status"] == "ok"
-        }
-        if portfolios:
-            yield {"type": "portfolios", "portfolios": portfolios}
-        # Bilan de chaque juge: la conformité est calculée par le code (JudgeVerdict.compliant).
-        for item in data["portfolios"]:
-            verdict, card = item.get("verdict"), f"juge-{PORTFOLIO_IDS[item['portfolio']['id']]}"
-            if verdict is None:
-                yield _status(card, "done", "Pas de portefeuille à vérifier.")
-            elif verdict["compliant"]:
-                yield _status(card, "done", "Toutes tes limites sont respectées.")
-            else:
-                yield _status(card, "done", f"{verdict['hard_violations']} limite(s) non respectée(s).")
-        if report is None:
-            yield _status("risques", "done", "Pas de rapport : aucun portefeuille ne respecte toutes tes limites.")
-        else:
-            n = sum(1 for w in report.get("warnings", []) if w.get("severity") in ("medium", "high"))
-            yield _status("risques", "done", f"{n} mise(s) en garde à lire." if n else "Rien de particulier à signaler.")
-        yield _pepite("Voilà! Trois propositions t’attendent. C’est toi qui choisis.")
-        yield {"type": "done"}
+
+def front(bus: EventBus, event: dict) -> None:
+    bus.emit("front", event=event)
 
 
 # --------------------------------------------------------------------------- #
-# Point d'entrée
+# Orchestration
 # --------------------------------------------------------------------------- #
-async def stream_monport(payload: dict) -> AsyncIterator[dict]:
-    market = await asyncio.to_thread(get_market)
+def _questionnaire(payload: dict) -> tuple[dict, dict]:
+    """Le JSON du questionnaire, sans les ajouts prévus (jamais envoyés aux agents)."""
+    return payload.get("profile") or {}, payload.get("constraints") or {}
+
+
+async def _check(bus: EventBus, profile: dict, prefs: dict) -> PepiteCheck:
+    facts = coherence_facts(profile, prefs)
     try:
-        form, skipped = to_form(payload.get("profile") or {}, payload.get("constraints") or {}, market)
-    except (ValidationError, TypeError, ValueError) as exc:
-        logger.warning("Profil MonPort invalide: %s", exc)
-        yield {"type": "error", "message": "Ton profil est incomplet. Reprends le questionnaire."}
-        return
+        return await run_check(bus, {"profile": profile, "constraints": prefs}, facts)
+    except AgentError:
+        logger.exception("Vérification de Pépite en échec, repli sur les règles du code")
+        return fallback_check(profile, facts)
 
-    yield _pepite("C’est parti! Mes agents se mettent au travail.")
-    translator = Translator(market, form, skipped)
-    async for event in stream_pipeline({"mode": "initial", "form": form.model_dump(mode="json")}):
+
+async def check_questionnaire(payload: dict, bus: EventBus) -> None:
+    profile, prefs = _questionnaire(payload)
+    market = await asyncio.to_thread(get_market)
+    to_form(profile, prefs, market)  # valide le profil avant d'appeler le modèle
+    check = await _check(bus, profile, prefs)
+    front(bus, {"type": "check", "check": check.model_dump(mode="json")})
+    front(bus, {"type": "done"})
+
+
+async def _judge(bus: EventBus, market: Market, investor: InvestorProfile, p: Portfolio) -> JudgeVerdict:
+    try:
+        return await run_judge(bus, market, investor, p, investor.constraints)
+    except Exception as exc:  # noqa: BLE001  même repli que orchestrator._judge_portfolios
+        logger.exception("Juge %s en échec", p.id)
+        checks = evaluate(market, {x.symbol: x.weight for x in p.positions}, investor.constraints)
+        hard = sum(1 for c in checks if c.constraint.hard and not c.passed)
+        soft = sum(1 for c in checks if not c.constraint.hard and not c.passed)
+        return JudgeVerdict(portfolio_id=p.id, compliant=hard == 0, hard_violations=hard, soft_violations=soft,
+                            checks=checks, fit_score=0, comment=f"Avis indisponible ({type(exc).__name__}).")
+
+
+async def build_portfolios(payload: dict, bus: EventBus, translator: Translator) -> None:
+    profile, prefs = _questionnaire(payload)
+    market = await asyncio.to_thread(get_market)
+    form, skipped = to_form(profile, prefs, market)
+    try:
+        check = PepiteCheck.model_validate(payload.get("check"))
+    except ValidationError:
+        check = await _check(bus, profile, prefs)
+    coherent = check.coherent
+    adjustment = str(payload.get("adjustment") or "").strip()[:MAX_ADJUSTMENT] if coherent else ""
+
+    # Pépite écrit les 3 profils de contraintes
+    front(bus, pepite("C’est parti! J’écris les consignes de tes trois gestionnaires."))
+    front(bus, status("pepite", "running", "J’écris les 3 profils de contraintes…"))
+    allowed = market.allowed_values()
+    direct = [v for v in allowed["asset_class"] if v in DIRECT_CLASSES]
+    try:
+        plan = await run_plan(bus, {"profile": profile, "constraints": prefs}, check, adjustment, allowed, direct)
+    except AgentError:
+        logger.exception("Plan de Pépite en échec, repli sur les profils du code")
+        plan = None
+    profiles, replaced = build_profiles(plan, check, list(form.constraints), allowed)
+    if replaced:
+        logger.info("%d profil(s) de Pépite remplacé(s) par ceux du code", replaced)
+    notes: dict[str, list[str]] = {s: [] for s in SLOTS}
+    for slot in SLOTS:
+        constraints, note = await asyncio.to_thread(ensure_feasible, market, profiles[slot][1])
+        profiles[slot] = (profiles[slot][0], constraints)
+        if note:
+            notes[slot].append(note)
+    hard = [c for c in profiles["equilibre"][1] if c.hard]
+    before, after = len(market.assets), int((~excluded_mask(market, hard)).sum())
+    front(bus, {"type": "universe", "before": before, "after": after})
+    front(bus, status("pepite", "done", "3 profils de contraintes envoyés aux gestionnaires."))
+
+    # 3 gestionnaires en parallèle, un profil chacun
+    names = VARIANT_NAMES if coherent else BASE_NAMES
+    translator.slots = {names[s]: s for s in SLOTS}
+    investors = {s: InvestorProfile(form=form, assessment=check, constraints=profiles[s][1]) for s in SLOTS}
+
+    async def manage(slot: str) -> Portfolio:
+        objective = objective_for(slot, check, profiles[slot][1])
+        mandate = Mandate(id=slot, name=names[slot], objective=objective, description=profiles[slot][0],
+                          guidance=GUIDANCE[objective], vol_cap_factor=None)
+        try:
+            return await run_portfolio_manager(bus, market, mandate, investors[slot], investors[slot].constraints)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Gestionnaire %s en échec", slot)
+            return Portfolio(id=slot, mandate=mandate.name, mandate_description=mandate.description,
+                             status="failed", failure_reason=type(exc).__name__)
+
+    front(bus, pepite("Mes trois gestionnaires construisent leur portefeuille en parallèle."))
+    built = [p for p in await asyncio.gather(*(manage(s) for s in SLOTS)) if p.status == "ok"]
+    if not built:
+        front(bus, {"type": "error", "message": "Aucun portefeuille n’a pu être construit. Réessaie dans un instant."})
+        return
+    verdicts = dict(zip([p.id for p in built], await asyncio.gather(*(_judge(bus, market, investors[p.id], p) for p in built))))
+    for slot in SLOTS:
+        v = verdicts.get(slot)
+        text = ("Pas de portefeuille à vérifier." if v is None else "Toutes tes limites sont respectées." if v.compliant
+                else f"{v.hard_violations} limite(s) non respectée(s).")
+        front(bus, status(f"juge-{slot}", "done", text))
+
+    # Cohérent: un gagnant. Incohérent: tes contraintes + deux mélanges 80/20.
+    if coherent:
+        choice, justification = None, ""
+        if len(built) > 1:
+            try:
+                pick = await run_final_judge(bus, investors["equilibre"], built, verdicts)
+                choice, justification = pick.winner, pick.justification
+            except AgentError:
+                logger.exception("Juge final en échec, choix par le code")
+        winner = pick_winner(built, verdicts, choice)
+        if winner.id != choice:
+            justification = f"La {winner.mandate.lower()} respecte le mieux tes limites, avec la meilleure note du juge."
+        front(bus, status("juge-final", "done", f"La {winner.mandate.lower()} l’emporte."))
+        presented = [(winner, verdicts.get(winner.id), WINNER_NAME, justification)]
+    else:
+        by = {p.id: p for p in built}
+        presented = []
+        for slot, p in (("prudent", blend(market, "prudent", by.get("prudent"), by.get("conviction"))),
+                        ("equilibre", by.get("equilibre")),
+                        ("conviction", blend(market, "conviction", by.get("conviction"), by.get("prudent")))):
+            if p is not None:
+                p = p.model_copy(update={"mandate": TRIO[slot][0]})
+                # Les juges ont vérifié les bases; seul « Tes contraintes » est présenté tel quel.
+                presented.append((p, verdicts.get(slot) if slot == "equilibre" else None, *TRIO[slot]))
+        front(bus, status("pepite", "done", "Mélanges 80/20 prêts : profil d’abord, préférences d’abord."))
+
+    # Responsable des risques, puis les portefeuilles
+    report = None
+    try:
+        rr = await run_cro(bus, investors["equilibre"], [p for p, *_ in presented],
+                           {p.id: v for p, v, *_ in presented if v})
+        report = rr.model_dump(mode="json")
+    except AgentError:
+        logger.exception("CRO en échec")
+    n = sum(1 for w in (report or {}).get("warnings", []) if w.get("severity") in ("medium", "high"))
+    # Les incohérences du profil, Pépite les a déjà montrées avant l'envoi: on ne garde que les mises en garde
+    # sur les portefeuilles.
+    front(bus, status("risques", "done", f"{n} mise(s) en garde à lire." if n else "Rien de particulier à signaler."))
+    front(bus, {"type": "portfolios", "portfolios": {
+        p.id: to_portfolio(p, v, market, report, check.risk_score, skipped, notes[p.id], name, tagline)
+        for p, v, name, tagline in presented
+    }})
+    front(bus, pepite("Voilà! Ton portefeuille t’attend." if coherent
+                      else "Voilà! Trois propositions t’attendent. C’est toi qui choisis."))
+    front(bus, {"type": "done"})
+
+
+# --------------------------------------------------------------------------- #
+# Points d'entrée (main.py)
+# --------------------------------------------------------------------------- #
+async def _stream(work: Callable[[EventBus], Awaitable[None]], translator: Translator) -> AsyncIterator[dict]:
+    bus = EventBus()
+
+    async def worker() -> None:
+        try:
+            await work(bus)
+        except (ValidationError, TypeError, ValueError) as exc:
+            logger.warning("Profil MonPort invalide: %s", exc)
+            front(bus, {"type": "error", "message": "Ton profil est incomplet. Reprends le questionnaire."})
+        except Exception:  # noqa: BLE001
+            logger.exception("Erreur inattendue (MonPort)")
+            front(bus, {"type": "error", "message": "Mes agents ont eu un pépin. Réessaie dans un instant."})
+        finally:
+            bus.close()
+
+    task = asyncio.create_task(worker())
+    async for event in bus.stream(task):
         for out in translator.translate(event):
             yield out
+
+
+def stream_check(payload: dict) -> AsyncIterator[dict]:
+    return _stream(lambda bus: check_questionnaire(payload, bus), Translator())
+
+
+def stream_monport(payload: dict) -> AsyncIterator[dict]:
+    translator = Translator()
+    return _stream(lambda bus: build_portfolios(payload, bus, translator), translator)

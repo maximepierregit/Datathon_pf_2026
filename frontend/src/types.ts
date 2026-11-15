@@ -69,22 +69,31 @@ export interface Portfolio {
   agentNotes: string[]
 }
 
-/** Portefeuille tel que l'envoie le backend : le nom et l'accroche viennent de PORTFOLIO_META. */
-export type BackendPortfolio = Omit<Portfolio, 'name' | 'tagline'>
+/** Portefeuille tel que l'envoie le backend ; sans nom ni accroche, on prend ceux de PORTFOLIO_META. */
+export type BackendPortfolio = Omit<Portfolio, 'name' | 'tagline'> & Partial<Pick<Portfolio, 'name' | 'tagline'>>
 
-/** Une carte par agent du backend : le profil, un gestionnaire et un juge par portefeuille, le responsable des risques. */
-export type AgentId = 'profil' | `gestionnaire-${PortfolioId}` | `juge-${PortfolioId}` | 'risques'
+/** Vérification du questionnaire par Pépite (`PepiteCheck` du backend), renvoyée telle quelle à la construction. */
+export interface ProfileCheck {
+  coherent: boolean
+  summary: string
+  issues: { title: string; detail: string }[]
+  [field: string]: unknown
+}
+
+/** Une carte par agent : Pépite, un gestionnaire et un juge par portefeuille, le juge final (profil cohérent), le responsable des risques. */
+export type AgentId = 'pepite' | `gestionnaire-${PortfolioId}` | `juge-${PortfolioId}` | 'juge-final' | 'risques'
 
 export type AgentStatus = 'pending' | 'running' | 'done'
 
 /** Même forme que les événements SSE du backend (`backend/src/invest_agents/monport.py`). */
 export type PipelineEvent =
+  | { type: 'check'; check: ProfileCheck }
   | { type: 'agent_status'; agent: AgentId; status: AgentStatus; message: string }
   | { type: 'pepite'; text: string }
   | { type: 'universe'; before: number; after: number }
   | { type: 'rerun'; portfolio: PortfolioId; reason: string }
   | { type: 'warning'; text: string }
-  /** Un portefeuille en échec côté backend est absent : le moteur d'exemple le remplace. */
+  /** Profil cohérent : un seul portefeuille, le gagnant. Profil incohérent : les trois. */
   | { type: 'portfolios'; portfolios: Partial<Record<PortfolioId, BackendPortfolio>> }
   | { type: 'error'; message: string }
   | { type: 'done' }

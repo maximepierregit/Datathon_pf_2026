@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # --------------------------------------------------------------------------- #
 class ConstraintType(str, Enum):
     MAX_POSITION_WEIGHT = "max_position_weight"
+    MAX_STOCK_WEIGHT = "max_stock_weight"
     MIN_POSITIONS = "min_positions"
     MAX_POSITIONS = "max_positions"
     MAX_VOLATILITY = "max_volatility"
@@ -228,3 +229,42 @@ class RiskReport(BaseModel):
         default_factory=list, description="Mises en garde sur les portefeuilles présentés"
     )
     summary: str = Field(description="Synthèse du CRO en 3 à 5 phrases, en français")
+
+
+# --------------------------------------------------------------------------- #
+# Pépite, l'analyste du frontend MonPort (monport.py)
+# --------------------------------------------------------------------------- #
+MonPortSlot = Literal["prudent", "equilibre", "conviction"]
+
+
+class CoherenceIssue(BaseModel):
+    title: str = Field(description="L'enjeu en quelques mots, tutoyé, sans jargon")
+    detail: str = Field(description="Une ou deux phrases tutoyées: ce qui se contredit et ce que ça risque de te coûter")
+
+
+class PepiteCheck(ProfileAssessment):
+    """Vérification du questionnaire par Pépite: le profil de risque, puis la cohérence profil ↔ préférences."""
+
+    coherent: bool = Field(description="False si les préférences contredisent nettement le profil de risque")
+    issues: list[CoherenceIssue] = Field(
+        default_factory=list, description="Les enjeux à montrer au client; liste vide si le profil est cohérent"
+    )
+
+
+class ConstraintProfile(BaseModel):
+    """Un profil de contraintes, envoyé tel quel à un gestionnaire."""
+
+    slot: MonPortSlot
+    rationale: str = Field(description="Une ou deux phrases pour le gestionnaire: ce que vise ce profil")
+    constraints: list[Constraint]
+
+
+class ConstraintPlan(BaseModel):
+    profiles: list[ConstraintProfile] = Field(description="Exactement 3 profils, un par slot (prudent, equilibre, conviction)")
+
+
+class FinalPick(BaseModel):
+    """Choix du juge final quand le profil est cohérent: un seul portefeuille est présenté."""
+
+    winner: MonPortSlot
+    justification: str = Field(description="Deux ou trois phrases tutoyées, sans jargon, qui expliquent le choix au client")

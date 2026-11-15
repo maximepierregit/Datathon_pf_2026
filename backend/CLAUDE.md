@@ -78,6 +78,7 @@ Une ambiguïté (extraction) ou un conflit (fusion, ou contraintes du formulaire
 
 ## Contraintes
 
+- `max_stock_weight` plafonne seulement les titres détenus en direct (`instrument_type` différent de `ETF`, voir `constraints.is_fund`): un FNB est diversifié par nature. MonPort s'en sert pour le poids par titre du profil et garde `max_position_weight` à 0,40.
 - Types dans `schemas.ConstraintType`; métadonnées dans `constraints.SPECS` (`dimension`, `kind`, `direction`). Ajouter un type = l'ajouter aux deux, puis gérer son cas dans `evaluate()`, `optimize()` et `describe()`.
 - Valeurs en **fractions** (0.10 = 10 %), comptes en entiers.
 - `hard=True`: imposée par l'optimiseur. `hard=False`: préférence, évaluée seulement.
@@ -128,6 +129,7 @@ Changer le format d'un événement casse le frontend: mettre à jour le README e
 - Actifs avec moins de 120 observations écartés. Secteur, pays et classe manquants deviennent `Non classé`.
 - `get_market()` est en cache (`lru_cache`); appelé via `asyncio.to_thread` dans l'orchestrateur.
 - **Le dataset actuel est synthétique** (`make_sample_dataset.py`, symboles `SYN*`, `SETF*`, `SCRY*`). Aucun chiffre n'a de valeur réelle. Le vrai dataset reste à exporter du notebook.
+- Comme dans l'univers réel, l'`asset_class` d'un FNB reprend sa catégorie (`Equities`, `Fixed Income`, `Money Market`, `Commodities`, `Real Estate`); les actions sont `Equity`, les cryptos `Crypto`. Le jeu synthétique compte 6 FNB d'obligations: un profil prudent doit tenir sous la limite de 40 % par ligne.
 
 ## Déploiement AgentCore
 

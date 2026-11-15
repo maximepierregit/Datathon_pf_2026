@@ -4,6 +4,7 @@ import { Pepite } from './Pepite'
 const STEPS = [
   { label: 'Ton profil', match: ['/profil', '/transition'] },
   { label: 'Tes préférences', match: ['/preferences'] },
+  { label: 'Vérification', match: ['/verification'] },
   { label: 'Construction', match: ['/construction'] },
   { label: 'Portefeuilles', match: ['/portefeuille'] },
 ]

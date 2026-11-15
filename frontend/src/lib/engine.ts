@@ -6,19 +6,26 @@ import type { AssetClass, ConstraintBlock, Constraints, Holding, Level, Metrics,
 const CLASSES = Object.keys(CLASS_LABELS) as AssetClass[]
 const LINE_CAP = 0.4
 
+/** Profil incohérent : les 3 portefeuilles présentés (mêmes libellés que TRIO dans backend/src/invest_agents/monport.py). */
 export const PORTFOLIO_META: Record<PortfolioId, { name: string; tagline: string }> = {
   prudent: {
-    name: 'Prudent',
-    tagline: 'Ton profil d’abord : on privilégie la stabilité, quitte à mettre de côté certaines préférences.',
+    name: 'Profil d’abord (80/20)',
+    tagline: '80 % calé sur ton profil, 20 % sur tes préférences.',
   },
   equilibre: {
-    name: 'Équilibré',
-    tagline: 'Le juste milieu entre ton profil et tes préférences. Un bon point de départ.',
+    name: 'Tes contraintes',
+    tagline: 'Exactement ce que tu as demandé, même là où ça s’écarte de ton profil.',
   },
   conviction: {
-    name: 'Conviction',
-    tagline: 'Tes préférences d’abord : on suit tes choix, dans les limites de sécurité.',
+    name: 'Préférences d’abord (80/20)',
+    tagline: '80 % calé sur tes préférences, 20 % sur ton profil.',
   },
+}
+
+/** Profil cohérent : un seul portefeuille, celui que le juge final a gardé. */
+export const WINNER_META = {
+  name: 'Ton portefeuille',
+  tagline: 'Trois gestionnaires se sont fait concurrence ; le juge a gardé celui-ci pour toi.',
 }
 
 export const PORTFOLIO_IDS: PortfolioId[] = ['prudent', 'equilibre', 'conviction']

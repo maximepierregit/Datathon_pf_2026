@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Navigate, useNavigate } from 'react-router-dom'
 import { runPipeline } from '../api'
 import { Pepite, PepiteSays, type Pose } from '../components/Pepite'
 import { Alert, Arrow, Badge, Button, Card, Separator } from '../components/ui'
 import { PORTFOLIO_IDS, PORTFOLIO_META, riskLabel, riskScore } from '../lib/engine'
 import { useApp } from '../store'
-import type { AgentId, AgentStatus, PipelineEvent } from '../types'
+import type { AgentId, AgentStatus, PipelineEvent, PortfolioId } from '../types'
 
 interface Agent {
   id: AgentId
@@ -13,29 +13,41 @@ interface Agent {
   pose: Pose
 }
 
-/** Les agents du backend, dans l'ordre du pipeline. Gestionnaires et juges travaillent en parallèle. */
-const STEPS: { title: string; role: string; agents: Agent[] }[] = [
-  {
-    title: 'Profil',
-    role: 'Analyse tes réponses et filtre l’univers de placements.',
-    agents: [{ id: 'profil', name: 'Profil', pose: 'binoculars' }],
-  },
-  {
-    title: 'Trois gestionnaires, en parallèle',
-    role: 'Chacun choisit les placements d’un portefeuille. L’optimiseur calcule les poids.',
-    agents: PORTFOLIO_IDS.map((id) => ({ id: `gestionnaire-${id}`, name: `Gestionnaire ${PORTFOLIO_META[id].name}`, pose: 'laptop' })),
-  },
-  {
-    title: 'Trois juges',
-    role: 'Chacun vérifie qu’un portefeuille respecte tes limites et peut le renvoyer à son gestionnaire.',
-    agents: PORTFOLIO_IDS.map((id) => ({ id: `juge-${id}`, name: `Juge ${PORTFOLIO_META[id].name}`, pose: 'thinking' })),
-  },
-  {
-    title: 'Responsable des risques',
-    role: 'Cherche les incohérences avec ton profil et prépare les mises en garde.',
-    agents: [{ id: 'risques', name: 'Responsable des risques', pose: 'flag' }],
-  },
-]
+// Ce que construit chaque gestionnaire (mêmes noms que VARIANT_NAMES et BASE_NAMES dans monport.py).
+const VARIANTS: Record<PortfolioId, string> = { prudent: 'Variante prudente', equilibre: 'Variante fidèle', conviction: 'Variante audacieuse' }
+const BASES: Record<PortfolioId, string> = { prudent: 'Ton profil', equilibre: 'Tes contraintes', conviction: 'Tes préférences' }
+
+/** Les agents dans l'ordre du pipeline. Profil cohérent : concurrence et juge final. Incohérent : trois bases, puis les mélanges 80/20. */
+function stepsFor(coherent: boolean): { title: string; role: string; agents: Agent[] }[] {
+  const names = coherent ? VARIANTS : BASES
+  return [
+    {
+      title: 'Pépite',
+      role: 'Traduit tes réponses en 3 profils de contraintes, un par gestionnaire.',
+      agents: [{ id: 'pepite', name: 'Pépite', pose: 'map' }],
+    },
+    {
+      title: coherent ? 'Trois gestionnaires en concurrence' : 'Trois gestionnaires, en parallèle',
+      role: coherent
+        ? 'Chacun reçoit une variante de tes consignes. L’optimiseur calcule les poids.'
+        : 'Un portefeuille de base chacun : ton profil, tes contraintes, tes préférences. L’optimiseur calcule les poids.',
+      agents: PORTFOLIO_IDS.map((id) => ({ id: `gestionnaire-${id}`, name: names[id], pose: 'laptop' })),
+    },
+    {
+      title: 'Trois juges',
+      role: 'Chacun vérifie qu’un portefeuille respecte ses limites.',
+      agents: PORTFOLIO_IDS.map((id) => ({ id: `juge-${id}`, name: `Juge · ${names[id]}`, pose: 'thinking' })),
+    },
+    ...(coherent
+      ? [{ title: 'Juge final', role: 'Compare les 3 portefeuilles et garde le meilleur pour toi.', agents: [{ id: 'juge-final' as const, name: 'Juge final', pose: 'cool' as const }] }]
+      : []),
+    {
+      title: 'Responsable des risques',
+      role: 'Relit les portefeuilles présentés et prépare les mises en garde.',
+      agents: [{ id: 'risques', name: 'Responsable des risques', pose: 'flag' }],
+    },
+  ]
+}
 
 const STATUS_LABEL: Record<AgentStatus, string> = { pending: 'À venir', running: 'En cours…', done: 'Terminé' }
 
@@ -63,8 +75,10 @@ export default function Pipeline() {
   const navigate = useNavigate()
   const state = useApp()
   const score = riskScore(state.profile)
+  const coherent = state.check?.coherent ?? false
+  const steps = stepsFor(coherent)
   const [agents, setAgents] = useState<Record<AgentId, AgentState>>(
-    () => Object.fromEntries(STEPS.flatMap((s) => s.agents).map((a) => [a.id, { status: 'pending', message: '' }])) as Record<AgentId, AgentState>,
+    () => Object.fromEntries(steps.flatMap((s) => s.agents).map((a) => [a.id, { status: 'pending', message: '' }])) as Record<AgentId, AgentState>,
   )
   const [log, setLog] = useState<PipelineEvent[]>([])
   const [pepite, setPepite] = useState('Je rassemble mes agents…')
@@ -72,10 +86,11 @@ export default function Pipeline() {
   const [rerun, setRerun] = useState(false)
   const [error, setError] = useState('')
   useEffect(() => {
+    if (!state.check) return
     const ctrl = new AbortController()
     let received = false
     let failed = false
-    runPipeline({ score, profile: state.profile, constraints: state.constraints }, (e) => {
+    runPipeline({ score, profile: state.profile, constraints: state.constraints, check: state.check, adjustment: state.adjustment }, (e) => {
       setLog((l) => [...l, e])
       if (e.type === 'agent_status') setAgents((a) => ({ ...a, [e.agent]: { status: e.status, message: e.message } }))
       if (e.type === 'pepite') setPepite(e.text)
@@ -113,6 +128,8 @@ export default function Pipeline() {
   const warnings = log.filter((e): e is Extract<PipelineEvent, { type: 'warning' }> => e.type === 'warning')
   const judging = PORTFOLIO_IDS.some((id) => agents[`juge-${id}`].status === 'running')
   const pose: Pose = done ? 'thumbsup' : rerun && judging ? 'surprised' : 'coffee'
+  // Sans vérification de Pépite, on y retourne : c'est elle qui décide du scénario.
+  if (!state.check) return <Navigate to="/verification" replace />
 
   return (
     <div className="mx-auto flex w-full max-w-[1020px] flex-col gap-8 px-4 py-12 sm:px-6">
@@ -121,7 +138,8 @@ export default function Pipeline() {
         <h1 className="text-[36px] font-semibold leading-10 text-navy md:text-[50px] md:leading-[54px]">Profil {riskLabel(score)}</h1>
         <Separator />
         <p className="m-0 max-w-[560px] text-ink-soft">
-          Selon tes réponses : {state.profile.age} ans, horizon de {state.profile.horizon} ans. Les agents construisent maintenant trois propositions.
+          Selon tes réponses : {state.profile.age} ans, horizon de {state.profile.horizon} ans.{' '}
+          {coherent ? 'Trois gestionnaires se font concurrence ; le juge gardera le meilleur portefeuille.' : 'Les agents préparent maintenant trois propositions.'}
         </p>
       </div>
 
@@ -130,7 +148,7 @@ export default function Pipeline() {
       </PepiteSays>
 
       <ol className="m-0 flex list-none flex-col gap-6 p-0">
-        {STEPS.map((step, i) => (
+        {steps.map((step, i) => (
           <li key={step.title} className="flex flex-col gap-3">
             <div className="flex flex-col">
               <span className="text-sm font-semibold text-slate">
@@ -142,7 +160,7 @@ export default function Pipeline() {
               {step.agents.map((a) => (
                 <li key={a.id}>
                   <AgentCard agent={a} st={agents[a.id]}>
-                    {a.id === 'profil' && universe && (
+                    {a.id === 'pepite' && universe && (
                       <div className="fade-in text-right">
                         <div className="text-3xl font-light text-navy">
                           {universe.after}
@@ -173,7 +191,7 @@ export default function Pipeline() {
 
       <div className="flex justify-end">
         <Button disabled={!done} onClick={() => navigate('/portefeuille')}>
-          Voir mes 3 portefeuilles <Arrow />
+          {coherent ? 'Voir mon portefeuille' : 'Voir mes 3 portefeuilles'} <Arrow />
         </Button>
       </div>
     </div>

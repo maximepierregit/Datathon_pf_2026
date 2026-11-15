@@ -13,7 +13,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from .config import get_settings
-from .constraints import ANY, DIMENSION_COLUMN, SPECS, evaluate, excluded_mask
+from .constraints import ANY, DIMENSION_COLUMN, SPECS, evaluate, excluded_mask, is_fund
 from .data import UNKNOWN
 from .data import Market
 from .schemas import Constraint, ConstraintCheck, ConstraintType as T, PortfolioMetrics
@@ -90,6 +90,9 @@ def optimize(
     for c in hard:
         if c.type is T.MAX_POSITION_WEIGHT and c.value is not None:
             ub = np.minimum(ub, c.value)
+        elif c.type is T.MAX_STOCK_WEIGHT and c.value is not None:
+            direct = np.array([not is_fund(market, x) for x in syms])
+            ub = np.where(direct, np.minimum(ub, c.value), ub)
         elif c.type in (T.MAX_SYMBOL_WEIGHT, T.MIN_SYMBOL_WEIGHT):
             vec = _group_vector(market, syms, "symbol", c.target or "")
             if vec.sum() == 0:

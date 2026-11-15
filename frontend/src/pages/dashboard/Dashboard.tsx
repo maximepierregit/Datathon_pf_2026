@@ -22,11 +22,14 @@ export default function Dashboard() {
   const acceptDisclaimer = useApp((s) => s.acceptDisclaimer)
   const [params, setParams] = useSearchParams()
   const [chat, setChat] = useState(false)
-  if (!portfolios) return <Navigate to="/" replace />
+  // Profil cohérent : un seul portefeuille, le gagnant. Profil incohérent : les trois.
+  const ids = PORTFOLIO_IDS.filter((pid) => portfolios?.[pid])
+  if (!portfolios || !ids.length) return <Navigate to="/" replace />
 
-  const id = (PORTFOLIO_IDS.includes(params.get('p') as PortfolioId) ? params.get('p') : 'equilibre') as PortfolioId
+  const single = ids.length === 1
+  const id = (ids.includes(params.get('p') as PortfolioId) ? params.get('p') : ids.includes('equilibre') ? 'equilibre' : ids[0]) as PortfolioId
   const level = (LEVELS.some((l) => l.id === params.get('niveau')) ? params.get('niveau') : defaultDashboardLevel(profile.comfort)) as DashboardLevel
-  const p = portfolios[id]
+  const p = portfolios[id]!
   const set = (k: string, v: string) => setParams((prev) => ({ ...Object.fromEntries(prev), [k]: v }), { replace: true })
   const View = { debutant: Beginner, intermediaire: Intermediate, avance: Advanced }[level]
 
@@ -37,39 +40,42 @@ export default function Dashboard() {
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div className="flex flex-col">
               <span className="text-sm font-semibold text-slate">
-                Proposition {PORTFOLIO_IDS.indexOf(id) + 1} sur 3 · {money(profile.amount)}
+                {single ? 'Choisi par le juge parmi 3 propositions' : `Proposition ${ids.indexOf(id) + 1} sur ${ids.length}`} · {money(profile.amount)}
               </span>
-              <h1 className="text-[36px] font-semibold leading-10 text-navy md:text-[50px] md:leading-[54px]">Portefeuille {p.name}</h1>
+              <h1 className="text-[36px] font-semibold leading-10 text-navy md:text-[50px] md:leading-[54px]">{p.name}</h1>
               <Separator />
               <p className="m-0 max-w-[560px] text-ink-soft">{p.tagline}</p>
             </div>
             <Button onClick={() => setChat(true)}>Ajuster avec Pépite</Button>
           </div>
 
-          <div role="tablist" aria-label="Les 3 portefeuilles proposés" className="grid gap-2 sm:grid-cols-3">
-            {PORTFOLIO_IDS.map((pid) => {
-              const q = portfolios[pid]
-              const on = pid === id
-              return (
-                <button
-                  key={pid}
-                  role="tab"
-                  aria-selected={on}
-                  onClick={() => set('p', pid)}
-                  className={`flex flex-col items-start gap-1 rounded-t-[var(--radius-card)] border-x border-t px-4 py-3 text-left transition-colors ${on ? 'border-line-soft border-t-red border-t-[3px] bg-mist' : 'border-transparent bg-white hover:bg-mist/60'}`}
-                >
-                  <span className="flex w-full items-center justify-between">
-                    <span className={`text-lg font-semibold ${on ? 'text-navy' : 'text-slate'}`}>{q.name}</span>
-                    {pid === 'equilibre' && <span className="text-xs font-semibold text-red">Point de départ</span>}
-                  </span>
-                  <span className="text-sm text-ink-soft">
-                    {pct(q.allocation.actions, 0)} actions · ≈ {pct(q.metrics.expectedReturn)} / an
-                  </span>
-                  {q.warnings.length > 0 && <span className="text-xs font-semibold text-red-dark">⚠ À lire avant de choisir</span>}
-                </button>
-              )
-            })}
-          </div>
+          {!single && (
+            <div role="tablist" aria-label="Les 3 portefeuilles proposés" className="grid gap-2 sm:grid-cols-3">
+              {ids.map((pid) => {
+                const q = portfolios[pid]!
+                const on = pid === id
+                return (
+                  <button
+                    key={pid}
+                    role="tab"
+                    aria-selected={on}
+                    onClick={() => set('p', pid)}
+                    className={`flex flex-col items-start gap-1 rounded-t-[var(--radius-card)] border-x border-t px-4 py-3 text-left transition-colors ${on ? 'border-line-soft border-t-red border-t-[3px] bg-mist' : 'border-transparent bg-white hover:bg-mist/60'}`}
+                  >
+                    <span className="flex w-full items-center justify-between">
+                      <span className={`text-lg font-semibold ${on ? 'text-navy' : 'text-slate'}`}>{q.name}</span>
+                      {pid === 'equilibre' && <span className="text-xs font-semibold text-red">Point de départ</span>}
+                    </span>
+                    <span className="text-sm text-ink-soft">
+                      {pct(q.allocation.actions, 0)} actions · ≈ {pct(q.metrics.expectedReturn)} / an
+                    </span>
+                    {q.warnings.length > 0 && <span className="text-xs font-semibold text-red-dark">⚠ À lire avant de choisir</span>}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+          {single && <div className="h-6" aria-hidden />}
         </div>
       </section>
 
