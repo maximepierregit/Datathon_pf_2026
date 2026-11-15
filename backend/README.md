@@ -10,8 +10,9 @@ cd backend
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .
 cp .env.example .env            # puis exporter les variables (ou laisser les valeurs par défaut)
 
-# Dataset: exporter le DataFrame de create_opt_inputs (data-prep/Universe_Cleaned.ipynb), ou générer un jeu SYNTHÉTIQUE
-#   opt.to_parquet("backend/data/universe.parquet")
+# Dataset réel (805 tickers, rendements en CAD depuis 2021): data-prep/build_universe.py, depuis la racine du dépôt
+#   pip install -r data-prep/requirements.txt && python data-prep/build_universe.py   (cache dans backend/data/raw/)
+# ou un jeu SYNTHÉTIQUE pour le développement:
 .venv/bin/python scripts/make_sample_dataset.py
 
 .venv/bin/python scripts/run_web.py                                  # contrat du frontend (appelle Bedrock, ~70 s)
@@ -21,7 +22,10 @@ PORT=8091 .venv/bin/python main.py                                   # serveur A
 
 Colonnes lues dans le dataset: `date`, `symbol`, `total_return_cad` (obligatoires), puis `name`, `currency`,
 `asset_class`, `instrument_type`, `sector`, `industry`, `country`, `category_group`, `category`, `market_cap`,
-`expense_ratio`, `is_included_universe` (si présentes).
+`expense_ratio`, `theme`, `is_included_universe` (si présentes). `sector`, `industry` et `country` ne concernent
+que les actions (`Non classé` ailleurs). `theme` contient des identifiants séparés par `;` (`tech;ia`), issus de
+`data-prep/themes.csv`; quand la colonne existe, elle fait foi pour tech, ia, robotique, energie-propre, esg,
+armement et vice, et les heuristiques de `classify.py` ajoutent les autres thématiques.
 
 ## Contrat du frontend
 
@@ -143,7 +147,9 @@ est lu depuis S3. Pour l'appel depuis l'EC2: `bedrock-agentcore:InvokeAgentRunti
 
 ## Limites connues
 
-- Le dataset de `make_sample_dataset.py` est synthétique (mêmes FNB que le notebook, prix inventés).
+- Le dataset de `make_sample_dataset.py` est synthétique (mêmes FNB que le notebook, prix inventés). Le vrai
+  dataset vient de `data-prep/build_universe.py`.
+- Les actifs cotés depuis moins de 120 jours (FDXF, HONA, VYLR à la construction) sont écartés au chargement.
 - Le classement de l'univers repose en partie sur le nom des placements. Les FNB d'allocation (AOA, AOK…) sont
   classés en actions alors qu'ils contiennent des obligations.
 - Le dataset réel ne contient ni or physique ni marché monétaire: « Or » se limite à COMT (matières premières) et

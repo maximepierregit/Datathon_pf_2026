@@ -65,15 +65,17 @@ export const BLOCKS: Record<ConstraintBlock, { title: string; hint: string; item
     items: [
       { id: 'tech', label: 'Technologie' },
       { id: 'ia', label: 'Intelligence artificielle' },
+      { id: 'robotique', label: 'Robotique' },
       { id: 'sante', label: 'Santé' },
       { id: 'energie-propre', label: 'Énergie propre' },
+      { id: 'esg', label: 'ESG et environnement' },
       { id: 'fossiles', label: 'Énergies fossiles' },
       { id: 'finance', label: 'Banques et assurances' },
       { id: 'immobilier', label: 'Immobilier' },
       { id: 'consommation', label: 'Consommation' },
       { id: 'industrie', label: 'Industrie et infrastructures' },
       { id: 'armement', label: 'Armement' },
-      { id: 'alcool-tabac', label: 'Alcool et tabac' },
+      { id: 'vice', label: 'Vices (alcool, tabac, cannabis, jeu)' },
     ],
   },
   factors: {

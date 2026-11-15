@@ -41,7 +41,7 @@ THEME_LABELS = {
     "tech": "Technologie", "ia": "Intelligence artificielle", "sante": "Santé", "energie-propre": "Énergie propre",
     "fossiles": "Énergies fossiles", "finance": "Banques et assurances", "immobilier": "Immobilier",
     "consommation": "Consommation", "industrie": "Industrie et infrastructures", "armement": "Armement",
-    "alcool-tabac": "Alcool et tabac",
+    "vice": "Vices (alcool, tabac, cannabis, jeu)", "esg": "ESG et environnement", "robotique": "Robotique",
 }
 FACTOR_LABELS = {"taille": "Petites capitalisations", "qualite": "Qualité", "momentum": "Momentum", "value": "Value"}
 

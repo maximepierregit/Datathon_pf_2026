@@ -14,7 +14,9 @@ Pipeline multi-agents qui propose 3 portefeuilles (Prudent, Équilibré, Convict
 # Installation (Python 3.12 en local; le runtime AgentCore utilise 3.13)
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .
 
-# Dataset synthétique (le vrai dataset n'est pas dans le repo; backend/data/ est ignoré par git)
+# Dataset réel (backend/data/ est ignoré par git): depuis la racine, avec les dépendances de data-prep/requirements.txt
+python data-prep/build_universe.py          # --refresh all pour tout retélécharger; cache dans backend/data/raw/
+# ou dataset synthétique
 .venv/bin/python scripts/make_sample_dataset.py
 
 # Contrat du frontend en local (appelle Bedrock)
@@ -117,6 +119,7 @@ Vérificateur 3 Juges ▶ rerun + nouvel essai des non conformes (MAX_PM_RETRIES
 - `Market.assets["asset_class"]` contient les classes **du frontend** (actions, obligations, immobilier, or, crypto, liquidites). La classe brute du notebook est dans `asset_class_raw`.
 - `region`: canada, usa, europe, asie, emergents, ou `monde` (FNB mondiaux) / `aucune` (hors actions et immobilier). Ces deux valeurs ne sont pas des groupes (`NOT_A_GROUP`).
 - `themes` et `factors` sont des ensembles encodés `|a|b|`; `Market.members()` gère l'appartenance.
+- La colonne `theme` du dataset (`tech;ia`, depuis `data-prep/themes.csv`) fait foi pour `CURATED_THEMES` (classify.py); les heuristiques ne produisent que les autres thématiques. Nouvelle thématique: l'ajouter à `classify.THEMES`, `contract.THEME_LABELS`, `frontend/src/data/catalog.ts` et `THEME_IDS` de `build_universe.py`.
 - `CASH-CAD` est ajouté au marché (rendement = taux sans risque, vol nulle).
 - Toute dimension de contrainte passe par `Market.members(dimension, target)` et `Market.groups(dimension)`. Ne pas comparer des colonnes à la main.
 
@@ -134,7 +137,7 @@ Vérificateur 3 Juges ▶ rerun + nouvel essai des non conformes (MAX_PM_RETRIES
 - Rendement espéré: `(1 − MU_SHRINK) × historique + MU_SHRINK × hypothèse de la classe` (0,5 par défaut). Le dataset réel couvre 2026-01-01 → 2026-11-10: la moyenne historique seule est trop bruitée.
 - Covariance annualisée, projetée semi-définie positive. `np.diag()` d'un DataFrame est en lecture seule: copier avant `fill_diagonal`.
 - Le résidu d'arrondi est placé là où il reste de la marge sous le plafond.
-- `DATASET_PATH`: défaut `data/universe.parquet`, accepte `s3://`. **Le dataset actuel est synthétique** (`make_sample_dataset.py`: mêmes FNB et cryptos que le notebook, actions `SYN*`, prix inventés).
+- `DATASET_PATH`: défaut `data/universe.parquet`, accepte `s3://`. Le dataset réel vient de `data-prep/build_universe.py` (805 tickers, jours ouvrables depuis 2021-01-01, chaque actif commence à sa première cotation). `make_sample_dataset.py` génère un jeu synthétique de secours.
 
 ## Modèles Bedrock
 

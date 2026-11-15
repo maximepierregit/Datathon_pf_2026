@@ -9,17 +9,24 @@ Les identifiants correspondent à `frontend/src/data/catalog.ts` et `frontend/sr
 
 from __future__ import annotations
 
+import logging
 import re
 
 import numpy as np
 import pandas as pd
 
+logger = logging.getLogger(__name__)
+
 ASSET_CLASSES = ["actions", "obligations", "immobilier", "or", "crypto", "liquidites"]
 REGIONS = ["canada", "usa", "europe", "asie", "emergents"]
 THEMES = [
-    "tech", "ia", "sante", "energie-propre", "fossiles", "finance",
-    "immobilier", "consommation", "industrie", "armement", "alcool-tabac",
+    "tech", "ia", "robotique", "sante", "energie-propre", "esg", "fossiles", "finance",
+    "immobilier", "consommation", "industrie", "armement", "vice",
 ]
+# Thématiques étiquetées à la main (colonne `theme` du dataset, issue de data-prep/themes.csv). Quand le
+# dataset fournit cette colonne, elle fait foi pour ces thématiques; les heuristiques ne servent qu'aux autres.
+CURATED_THEMES = {"tech", "ia", "robotique", "energie-propre", "esg", "armement", "vice"}
+THEME_SEP_IN = ";"  # séparateur de la colonne `theme` du dataset
 FACTORS = ["taille", "qualite", "momentum", "value"]
 INSTRUMENTS = ["Stock", "ETF", "Cryptocurrency", "Cash"]
 
@@ -63,6 +70,10 @@ def asset_class_of(row: pd.Series, instrument: str) -> str:
         return "liquidites"
     if instrument == "Cryptocurrency" or raw in ("alternative", "crypto", "cryptocurrency") or _has(t, "bitcoin", " ether", "crypto"):
         return "crypto"
+    if instrument == "Stock":
+        # Une action se classe par son secteur, pas par les mots de son nom (« Goldman » n'est pas de l'or,
+        # une minière aurifère reste une action).
+        return "immobilier" if str(row.get("sector") or "") == "Real Estate" else "actions"
     if raw == "fixed income" or _has(t, " bond", "obligation", "treasury", "fixed income", "t-bill"):
         return "obligations"
     if raw in ("money market", "cash") or _has(t, "money market", "marché monétaire", "high interest savings", "cash management"):
@@ -89,6 +100,10 @@ _SUFFIX_REGION = {".TO": "canada", ".V": "canada", ".NE": "canada", ".PA": "euro
 def region_of(symbol: str, row: pd.Series, asset_class: str, instrument: str) -> str:
     if asset_class not in ("actions", "immobilier"):
         return NO_REGION
+    # Une action a un pays connu: il prime sur les mots du nom (« Philip Morris International » n'est pas mondial).
+    country = str(row.get("country") or "").lower()
+    if instrument == "Stock" and country in _COUNTRY_REGION:
+        return _COUNTRY_REGION[country]
     t = _text(row)
     if _has(t, "emerging", "émergent", "latin america", "china", "india", "brazil"):
         return "emergents"
@@ -137,9 +152,18 @@ def themes_of(row: pd.Series, asset_class: str) -> set[str]:
         out.add("industrie")
     if _has(t, "aerospace & defense", "defense", "defence", "armement"):
         out.add("armement")
-    if _has(t, "tobacco", "brewer", "distiller", "alcohol", "spirits", "wine", "tabac", "alcool"):
-        out.add("alcool-tabac")
+    if _has(t, "tobacco", "brewer", "distiller", "alcohol", "spirits", "wine", "tabac", "alcool", "cannabis",
+            "casino", "gambling"):
+        out.add("vice")
     return out
+
+
+def curated_themes(row: pd.Series) -> set[str] | None:
+    """Thématiques de la colonne `theme` (« tech;ia »). None si la colonne est absente ou vide pour ce symbole."""
+    raw = row.get("theme")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    return {x.strip().lower() for x in raw.split(THEME_SEP_IN) if x.strip()}
 
 
 def factors_of(row: pd.Series, asset_class: str) -> set[str]:
@@ -162,6 +186,10 @@ def factors_of(row: pd.Series, asset_class: str) -> set[str]:
 def classify(meta: pd.DataFrame, returns: pd.DataFrame) -> pd.DataFrame:
     """Ajoute instrument_type, asset_class (classes du frontend), region, themes, factors et fee."""
     meta = meta.copy()
+    # Le dataset porte des thématiques étiquetées: elles font foi pour CURATED_THEMES (un symbole sans
+    # étiquette n'en a donc aucune), les heuristiques complètent les autres (santé, finance, etc.).
+    has_curated = "theme" in meta.columns and meta["theme"].notna().any()
+    unknown: set[str] = set()
     instruments, classes, regions, themes, factors = [], [], [], [], []
     for symbol, row in meta.iterrows():
         inst = instrument_of(row)
@@ -169,8 +197,15 @@ def classify(meta: pd.DataFrame, returns: pd.DataFrame) -> pd.DataFrame:
         instruments.append(inst)
         classes.append(cls)
         regions.append(region_of(str(symbol), row, cls, inst))
-        themes.append(themes_of(row, cls))
+        tags = themes_of(row, cls)
+        if has_curated:
+            curated = curated_themes(row) or set()
+            unknown |= curated - set(THEMES)
+            tags = (tags - CURATED_THEMES) | (curated & set(THEMES))
+        themes.append(tags)
         factors.append(factors_of(row, cls))
+    if unknown:
+        logger.warning("Thématiques inconnues ignorées dans la colonne `theme`: %s", sorted(unknown))
 
     # Momentum: le tiers des actions au meilleur rendement cumulé sur la période (calculé, pas déduit du nom).
     cumulative = (1 + returns.fillna(0.0)).prod() - 1

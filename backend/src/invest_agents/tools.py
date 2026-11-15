@@ -66,6 +66,9 @@ def make_pm_tools(market: Market, state: PMState) -> list:
             "by_region": a["region"].value_counts().to_dict(),
             "by_instrument_type": a["instrument_type"].value_counts().to_dict(),
             "by_country": a["country"].value_counts().to_dict(),
+            # Un actif peut porter plusieurs thématiques: les comptes ne s'additionnent pas.
+            "by_theme": {g: int(market.members("theme", g).reindex(a.index).fillna(False).sum())
+                         for g in market.groups("theme")},
             "ann_vol_range": [round(float(a["ann_vol"].min()), 3), round(float(a["ann_vol"].max()), 3)],
             "ann_return_range": [round(float(a["ann_return"].min()), 3), round(float(a["ann_return"].max()), 3)],
         }
@@ -91,7 +94,8 @@ def make_pm_tools(market: Market, state: PMState) -> list:
             country: Pays exact à conserver (optionnel).
             asset_class: Classe d'actifs: actions, obligations, immobilier, or, crypto ou liquidites (optionnel).
             region: Région: canada, usa, europe, asie, emergents, ou monde pour les FNB mondiaux (optionnel).
-            theme: Thématique (ex. tech, sante, finance, ia) (optionnel).
+            theme: Thématique: tech, ia, robotique, sante, energie-propre, esg, fossiles, finance, immobilier,
+                consommation, industrie, armement ou vice (optionnel).
             factor: Facteur: taille, qualite, momentum ou value (optionnel).
             instrument_type: Stock, ETF, Cryptocurrency ou Cash (optionnel).
             max_volatility: Volatilité annualisée maximale d'un actif, en fraction (0.25 = 25 %).

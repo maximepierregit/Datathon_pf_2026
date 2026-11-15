@@ -25,7 +25,8 @@ UNKNOWN = "Non classé"
 # Colonnes produites par `create_opt_inputs` dans Universe_Cleaned.ipynb
 REQUIRED_COLUMNS = {"date", "symbol", "total_return_cad"}
 META_COLUMNS = ["name", "sector", "industry", "country", "currency", "asset_class", "instrument_type", "market",
-                "category_group", "category", "market_cap", "expense_ratio"]
+                "category_group", "category", "market_cap", "expense_ratio",
+                "theme"]  # `theme`: identifiants séparés par « ; » (data-prep/build_universe.py)
 # Dimension de contrainte -> colonne de `Market.assets`. `theme` et `factor` sont des ensembles encodés "|a|b|".
 DIMENSION_COLUMN = {"sector": "sector", "country": "country", "asset_class": "asset_class", "region": "region",
                     "instrument_type": "instrument_type", "theme": "themes", "factor": "factors"}
