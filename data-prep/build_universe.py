@@ -1,6 +1,6 @@
 """Construit backend/data/universe.parquet à partir des sources réelles (version script de Universe_Cleaned.ipynb).
 
-Étapes (chaque couche « raw » est mise en cache dans backend/data/raw/ et réutilisée si elle existe):
+Étapes (chaque couche « raw » est mise en cache dans data-prep/data/raw/ et réutilisée si elle existe):
 
 1. catalog  : tickers S&P 500 / TSX / CAC 40 (Wikipedia) + FNB + cryptos, métadonnées financedatabase,
               corrections manuelles des FNB (BITW, NICO), filtre de capitalisation (Mid/Large/Mega).
@@ -33,7 +33,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "backend" / "data"
-RAW = DATA / "raw"
+RAW = Path(__file__).resolve().parent / "data" / "raw"  # cache des couches brutes
 OUT = DATA / "universe.parquet"
 THEMES_CSV = Path(__file__).resolve().parent / "themes.csv"
 

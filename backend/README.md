@@ -12,7 +12,7 @@ cp .env.example .env            # puis exporter les variables (ou laisser les va
 # Dataset, au choix:
 # a) réel, depuis S3 (exige des identifiants AWS avec s3:GetObject, ex. WSParticipantRole):
 #   export MONPORT_UNIVERSE_PARQUET_URI=s3://monport-datasets-381491955506/universe/universe.parquet
-# b) réel, reconstruit en local depuis la racine du dépôt (Wikipedia + yfinance, cache dans backend/data/raw/):
+# b) réel, reconstruit en local depuis la racine du dépôt (Wikipedia + yfinance, cache dans data-prep/data/raw/):
 #   pip install -r data-prep/requirements.txt && python data-prep/build_universe.py
 # c) SYNTHÉTIQUE, pour le développement:
 .venv/bin/python scripts/make_sample_dataset.py
