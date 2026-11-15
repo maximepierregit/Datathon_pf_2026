@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
-import { runPipeline } from '../api'
+import { rebuildPipeline, runPipeline } from '../api'
 import { Pepite, PepiteSays, type Pose } from '../components/Pepite'
 import { Alert, Arrow, Badge, Button, Card, Separator } from '../components/ui'
 import { PORTFOLIO_IDS, PORTFOLIO_META, riskLabel, riskScore } from '../lib/engine'
@@ -84,8 +84,10 @@ export default function Pipeline() {
   const [agents, setAgents] = useState<Record<AgentId, AgentState>>(
     () => Object.fromEntries(steps.flatMap((s) => s.agents).map((a) => [a.id, { status: 'pending', message: '' }])) as Record<AgentId, AgentState>,
   )
+  // Relance demandée depuis le chat : lu une seule fois, le mode strict remonte la page sans réinitialiser l'état.
+  const [rebuild] = useState(() => state.rebuild && Boolean(state.session))
   const [log, setLog] = useState<PipelineEvent[]>([])
-  const [pepite, setPepite] = useState('Je rassemble mes agents…')
+  const [pepite, setPepite] = useState(rebuild ? 'Je relance mes agents avec tes changements…' : 'Je rassemble mes agents…')
   const [done, setDone] = useState(false)
   const [rerun, setRerun] = useState(false)
   const [error, setError] = useState('')
@@ -94,10 +96,15 @@ export default function Pipeline() {
     const ctrl = new AbortController()
     let received = false
     let failed = false
-    runPipeline({ score, profile: state.profile, constraints: state.constraints, check: state.check, adjustment: state.adjustment, session: state.session }, (e) => {
+    let said = ''
+    if (!rebuild) state.setChat(() => [])
+    const onEvent = (e: PipelineEvent) => {
       setLog((l) => [...l, e])
       if (e.type === 'agent_status') setAgents((a) => ({ ...a, [e.agent]: { status: e.status, message: e.message } }))
-      if (e.type === 'pepite') setPepite(e.text)
+      if (e.type === 'pepite') {
+        setPepite(e.text)
+        said = e.text
+      }
       if (e.type === 'rerun') {
         const name = (coherent ? VARIANTS : BASES)[e.portfolio] ?? PORTFOLIO_META[e.portfolio].name
         setRerun(true)
@@ -118,12 +125,30 @@ export default function Pipeline() {
         failed = true
       }
       if (e.type === 'done') {
-        // Sans portefeuilles reçus (script d'exemple ou échec du backend), le moteur d'exemple prend le relais.
-        if (!received) state.build()
-        if (failed) setPepite('Mes agents ont eu un pépin. Je te montre des portefeuilles d’exemple pour l’instant.')
+        if (rebuild) {
+          // Une relance ratée garde les portefeuilles d'avant ; réussie, le chat le note et on y retourne.
+          state.setRebuild(false)
+          if (received) {
+            state.setChat((m) => [...m, { from: 'info', text: 'Portefeuilles reconstruits' }, ...(said ? [{ from: 'pepite' as const, text: said }] : [])])
+            setTimeout(() => !ctrl.signal.aborted && navigate('/portefeuille'), 1500)
+          } else setPepite('Mes agents ont eu un pépin. Tes portefeuilles d’avant n’ont pas changé.')
+        } else {
+          // Sans portefeuilles reçus (script d'exemple ou échec du backend), le moteur d'exemple prend le relais.
+          if (!received) state.build()
+          if (failed) setPepite('Mes agents ont eu un pépin. Je te montre des portefeuilles d’exemple pour l’instant.')
+        }
         setDone(true)
       }
-    }, ctrl.signal).catch(() => {})
+    }
+    const input = { score, profile: state.profile, constraints: state.constraints, check: state.check, adjustment: state.adjustment, session: state.session }
+    const run = rebuild
+      ? rebuildPipeline(state.session!, onEvent, ctrl.signal).then((ok) => {
+          if (ok) return
+          onEvent({ type: 'error', message: 'Mes agents ne sont pas joignables pour l’instant.' })
+          onEvent({ type: 'done' })
+        })
+      : runPipeline(input, onEvent, ctrl.signal)
+    run.catch(() => {})
     return () => ctrl.abort()
     // Le pipeline ne se lance qu'une fois par visite.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -139,12 +164,20 @@ export default function Pipeline() {
   return (
     <div className="mx-auto flex w-full max-w-[1020px] flex-col gap-8 px-4 py-12 sm:px-6">
       <div className="flex flex-col gap-1">
-        <span className="text-sm font-semibold text-slate">Profil retenu</span>
-        <h1 className="text-[36px] font-semibold leading-10 text-navy md:text-[50px] md:leading-[54px]">Profil {riskLabel(score).toLowerCase()}</h1>
+        <span className="text-sm font-semibold text-slate">{rebuild ? 'Tes changements' : 'Profil retenu'}</span>
+        <h1 className="text-[36px] font-semibold leading-10 text-navy md:text-[50px] md:leading-[54px]">
+          {rebuild ? 'Pépite relance ses agents' : `Profil ${riskLabel(score).toLowerCase()}`}
+        </h1>
         <Separator />
         <p className="m-0 max-w-[560px] text-ink-soft">
-          Selon tes réponses : {state.profile.age} ans, horizon de {state.profile.horizon} ans.{' '}
-          {coherent ? 'Trois gestionnaires se font concurrence ; le juge gardera le meilleur portefeuille.' : 'Les agents préparent maintenant trois propositions.'}
+          {rebuild ? (
+            'J’applique ce qu’on s’est dit dans le chat. Tu reviens à ton tableau de bord dès que tes nouveaux portefeuilles sont prêts.'
+          ) : (
+            <>
+              Selon tes réponses : {state.profile.age} ans, horizon de {state.profile.horizon} ans.{' '}
+              {coherent ? 'Trois gestionnaires se font concurrence ; le juge gardera le meilleur portefeuille.' : 'Les agents préparent maintenant trois propositions.'}
+            </>
+          )}
         </p>
       </div>
 
@@ -196,7 +229,7 @@ export default function Pipeline() {
 
       <div className="flex justify-end">
         <Button disabled={!done} onClick={() => navigate('/portefeuille')}>
-          {coherent ? 'Voir mon portefeuille' : 'Voir mes 3 portefeuilles'} <Arrow />
+          {rebuild ? (coherent ? 'Retour à mon portefeuille' : 'Retour à mes portefeuilles') : coherent ? 'Voir mon portefeuille' : 'Voir mes 3 portefeuilles'} <Arrow />
         </Button>
       </div>
     </div>

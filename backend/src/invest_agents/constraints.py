@@ -7,7 +7,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
-from .config import PREFERENCE_DIMENSIONS, PREFERENCE_LEVELS, validate_settings
+from .config import PREFERENCE_DIMENSIONS, PREFERENCE_LEVELS, UNKNOWN_EXPOSURE_POLICIES, validate_settings
 
 
 # Les pays/secteurs de l'univers sont fiables uniquement pour les actions.
@@ -98,6 +98,10 @@ class ConstraintPlan:
     constraint_tolerance: float
     soft_preferences: tuple[SoftPreference, ...] = ()
     notices: tuple[str, ...] = ()
+    # Politique "flag" : par dimension plafonnée, les instruments dont l'exposition est
+    # inconnue (non comptés dans le plafond) ; groupes plafonnés sans aucun actif exposé connu.
+    unknown_exposures: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    inert_groups: tuple[str, ...] = ()
 
     def index_of(self, symbol: str) -> int:
         return self.symbols.index(str(symbol).strip().upper())
@@ -301,14 +305,43 @@ def _required_groups(settings: Mapping[str, Any]) -> dict[str, dict[str, float]]
     return result
 
 
+def _unknown_policy(settings: Mapping[str, Any]) -> str:
+    """"strict" (défaut) : exposition inconnue rejetée ; "flag" : plafonds sur expositions connues."""
+    policy = settings["constraints"].get("unknown_exposure_policy", "strict")
+    if policy not in UNKNOWN_EXPOSURE_POLICIES:
+        raise ConstraintError(f"unknown_exposure_policy invalide : {policy!r}.")
+    return policy
+
+
 def _controlled_economic_dimensions(settings: Mapping[str, Any]) -> set[str]:
+    """Dimensions exigeant une exposition connue, sinon l'instrument est rejeté.
+
+    Exclusions et présences obligatoires l'exigent toujours (une garantie est nécessaire).
+    Les plafonds (group_limits) l'exigent seulement en politique "strict".
+    """
     exclusions = _hard_exclusions(settings)
     group_limits = settings["constraints"]["group_limits"]
     required_groups = _required_groups(settings)
+    capped_strictly = _unknown_policy(settings) == "strict"
     return {
         d for d in ECONOMIC_DIMENSIONS
-        if exclusions.get(d) or group_limits.get(d) or required_groups.get(d)
+        if exclusions.get(d) or required_groups.get(d) or (capped_strictly and group_limits.get(d))
     }
+
+
+def _flagged_dimensions(settings: Mapping[str, Any]) -> set[str]:
+    """Dimensions économiques plafonnées dont les expositions inconnues sont signalées, pas rejetées."""
+    if _unknown_policy(settings) != "flag":
+        return set()
+    group_limits = settings["constraints"]["group_limits"]
+    return {d for d in ECONOMIC_DIMENSIONS if group_limits.get(d)} - _controlled_economic_dimensions(settings)
+
+
+def _unknown_notice(dimension: str, limits: Mapping[str, Any], unknown: Sequence[str]) -> str:
+    sample = ", ".join(unknown[:8]) + (", ..." if len(unknown) > 8 else "")
+    return (f"Plafonds {dimension} ({', '.join(sorted(map(str, limits)))}) appliqués aux expositions CONNUES "
+            f"seulement : {len(unknown)} instrument(s) à exposition {dimension} inconnue (ETF/crypto sans "
+            f"look-through, métadonnée absente) ne sont PAS comptés dans ces plafonds : {sample}.")
 
 
 def filter_eligible_universe(
@@ -393,6 +426,11 @@ def filter_eligible_universe(
     ], columns=["symbol", "reasons"])
     if economic_controls:
         notes.append("Expositions ETF inconnues : exclusion prudente pour les dimensions économiques contrôlées.")
+    for dimension in sorted(_flagged_dimensions(cfg)):
+        unknown = sorted(s for s, row in chosen.iterrows()
+                         if not _exposure(s, row, dimension, exposure_overrides)[1])
+        if unknown:
+            notes.append(_unknown_notice(dimension, c["group_limits"][dimension], unknown))
     if exclusions.get("theme"):
         notes.append("Exclusion thématique fondée sur les tags du Parquet, sans garantie look-through des ETF.")
     return ScreeningResult(chosen.sort_index(), rejects, required, tuple(notes))
@@ -553,9 +591,18 @@ def _group_specs(
     symbols: tuple[str, ...],
     settings: Mapping[str, Any],
     exposure_overrides: Mapping[str, Mapping[str, Any]] | None,
-) -> list[GroupConstraint]:
-    """Construire les coefficients linéaires de groupes, pouvant se chevaucher."""
+) -> tuple[list[GroupConstraint], dict[str, tuple[str, ...]], tuple[str, ...]]:
+    """Construire les coefficients linéaires de groupes, pouvant se chevaucher.
+
+    Retourne (contraintes, expositions inconnues par dimension, groupes plafonnés inertes).
+    Politique "flag" : un instrument à exposition inconnue a le coefficient de son exposition
+    CONNUE (0 si aucune) et est signalé ; politique "strict" : erreur, comme avant.
+    """
     c = settings["constraints"]
+    strict_dimensions = _controlled_economic_dimensions(settings)
+    flagged = _flagged_dimensions(settings)
+    unknown: dict[str, set[str]] = {}
+    inert: list[str] = []
     req_groups = _required_groups(settings)
     bounds_by_dimension: dict[str, dict[str, dict[str, float]]] = {}
     for dimension, groups in c["group_limits"].items():
@@ -589,14 +636,19 @@ def _group_specs(
                     continue
                 exposure, complete = _exposure(symbol, meta.loc[symbol], dimension, exposure_overrides)
                 if dimension in ECONOMIC_DIMENSIONS and not complete:
-                    raise ConstraintError(
-                        f"Exposition non vérifiée : {symbol}/{dimension}. "
-                        "Utiliser filter_eligible_universe ou ajouter un look-through vérifié.")
+                    if dimension in flagged and dimension not in strict_dimensions:
+                        unknown.setdefault(dimension, set()).add(symbol)
+                    else:
+                        raise ConstraintError(
+                            f"Exposition non vérifiée : {symbol}/{dimension}. "
+                            "Utiliser filter_eligible_universe ou ajouter un look-through vérifié.")
                 coeff[i] = exposure.get(group_name, 0.0)
             if low > TOL and not np.any(coeff > TOL):
                 raise ConstraintInfeasibleError(f"Aucun actif n'est exposé au groupe requis {dimension}/{group_name}.")
+            if high < 1.0 - TOL and not np.any(coeff > TOL):
+                inert.append(f"{dimension}:{group_name}")
             linear.append(GroupConstraint(f"{dimension}:{group_name}", coeff, low, high))
-    return linear
+    return linear, {d: tuple(sorted(v)) for d, v in sorted(unknown.items())}, tuple(inert)
 
 
 def build_constraint_plan(
@@ -647,7 +699,14 @@ def build_constraint_plan(
         bad = [symbols[i] for i in np.flatnonzero(lower > upper + TOL)]
         raise ConstraintInfeasibleError(f"Borne min supérieure à la borne max : {bad}")
 
-    groups = _group_specs(meta, symbols, cfg, exposure_overrides)
+    groups, unknown_exposures, inert_groups = _group_specs(meta, symbols, cfg, exposure_overrides)
+    for dimension, names in unknown_exposures.items():
+        text = _unknown_notice(dimension, c["group_limits"][dimension], names)
+        if text not in notices:
+            notices.append(text)
+    for name in inert_groups:
+        notices.append(f"Plafond {name} INERTE : aucun candidat n'a d'exposition connue à ce groupe "
+                       "(nom inexistant dans les métadonnées, ou look-through absent).")
     soft: list[SoftPreference] = []
     prefs = _preferences(cfg)
     pref_cfg = cfg["preferences"]
@@ -668,6 +727,7 @@ def build_constraint_plan(
         cash_symbol=cash_symbol, sum_tolerance=float(cfg["optimization"]["sum_weights_tolerance"]),
         constraint_tolerance=float(cfg["optimization"]["constraint_tolerance"]),
         soft_preferences=tuple(soft), notices=tuple(notices),
+        unknown_exposures=unknown_exposures, inert_groups=inert_groups,
     )
 
 
@@ -761,6 +821,24 @@ def validate_weights(
                 raise ConstraintInfeasibleError(f"{ticker} détenu à {w[i]:.4%}, sous le minimum de 1 %.")
 
 
+def unknown_exposure_weights(
+    weights: Mapping[str, float] | Sequence[float] | np.ndarray,
+    plan: ConstraintPlan,
+) -> dict[str, float]:
+    """Poids détenu dans des instruments à exposition inconnue, par dimension plafonnée.
+
+    Ce poids n'est contrôlé par AUCUN plafond de la dimension : à afficher à côté du résultat.
+    """
+    if isinstance(weights, Mapping):
+        w = {s: float(weights.get(s, 0.0)) for s in plan.symbols}
+    else:
+        arr = np.asarray(weights, dtype=float)
+        if arr.ndim != 1 or len(arr) != len(plan.symbols):
+            raise ConstraintError("Vecteur de poids de dimension incorrecte.")
+        w = dict(zip(plan.symbols, arr.tolist()))
+    return {d: round(sum(w[s] for s in names), 10) for d, names in plan.unknown_exposures.items()}
+
+
 def summarize_plan(plan: ConstraintPlan) -> dict[str, Any]:
     """Résumé JSON-compatible destiné à Kiro, aux tests et à l'explication du jury."""
     return {
@@ -780,6 +858,8 @@ def summarize_plan(plan: ConstraintPlan) -> dict[str, Any]:
             for p in plan.soft_preferences
         ],
         "notices": list(plan.notices),
+        "unknown_exposures": {d: list(v) for d, v in plan.unknown_exposures.items()},
+        "inert_groups": list(plan.inert_groups),
         "minimum_holding_requires_post_processing": True,
     }
 
@@ -789,5 +869,6 @@ __all__ = [
     "ConstraintPlan", "GroupConstraint", "ScreeningResult", "SoftPreference",
     "UnresolvedPreferenceError", "assert_ready_for_optimization",
     "build_constraint_plan", "check_linear_feasibility", "filter_eligible_universe",
-    "scipy_constraints", "select_candidates", "summarize_plan", "validate_weights",
+    "scipy_constraints", "select_candidates", "summarize_plan", "unknown_exposure_weights",
+    "validate_weights",
 ]

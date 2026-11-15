@@ -64,11 +64,34 @@
   .bob {
     animation: bob 2.4s ease-in-out infinite;
   }
+  .think-dot {
+    animation: think 1.4s ease-in-out infinite both;
+  }
+  .halo {
+    animation: halo 2.8s ease-in-out infinite;
+  }
 }
 @keyframes fade-in {
   from {
     opacity: 0;
     transform: translateY(6px);
+  }
+}
+@keyframes think {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-4px);
+  }
+}
+@keyframes halo {
+  50% {
+    transform: scale(1.07);
+    opacity: 0.6;
   }
 }
 @keyframes bob {

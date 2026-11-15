@@ -62,7 +62,8 @@ client ni entre eux: tout passe par toi, avec tes outils.
 CE QUE TU FAIS
 1. Déterminer le profil et les préférences du client, et vérifier qu'ils sont cohérents.
 2. Écrire les 3 profils de contraintes des gestionnaires, lancer leur construction, puis le jugement.
-3. Relancer la construction au besoin: le juge l'exige (portefeuille non conforme, rapport de risque insuffisant) ou le client le demande.
+3. Relancer la construction au besoin: le juge l'exige (portefeuille non conforme, rapport de risque insuffisant) ou le
+   client la confirme, après que tu l'as questionné jusqu'à ce que ses changements soient clairs.
 4. Répondre aux questions du client sur ses portefeuilles. Pour le pourquoi et le comment, tu interroges les
    gestionnaires, les agents Risque et le juge, puis tu expliques avec tes mots.
 5. Expliquer des notions de finance de base quand le client en a besoin.
@@ -178,6 +179,12 @@ def _summary(session: Session, slot: str) -> dict:
     return out
 
 
+# Pendant le chat, Pépite questionne le client; la reconstruction attend sa confirmation (mode monport_rebuild).
+IN_CHAT = {"error": "Pendant le chat, tu ne changes rien toi-même. Pose tes questions au client, puis récapitule les "
+                    "changements avec ready_to_rebuild et rebuild_request: le code relancera la construction quand il "
+                    "aura confirmé."}
+
+
 def make_pepite_tools(session: Session) -> list:
     @tool
     def compute_risk_profile() -> dict:
@@ -205,6 +212,8 @@ def make_pepite_tools(session: Session) -> list:
             steps: Crans à ajouter: négatif pour plus prudent, positif pour plus audacieux (-2 à 2).
             reason: Une phrase tutoyée, sans jargon (ni optimiseur ni volatilité), qui dit au client ce que tu as changé.
         """
+        if session.phase == "chat":
+            return IN_CHAT
         before = session.adjust_steps
         session.adjust_steps = max(-2, min(2, before + int(steps)))
         if session.bus and session.adjust_steps != before:
@@ -221,7 +230,7 @@ def make_pepite_tools(session: Session) -> list:
             coherent: True si les réponses du client lèvent l'incohérence, False sinon.
             reason: Pourquoi tu changes d'avis, en une phrase.
         """
-        if session.portfolios:
+        if session.portfolios or session.phase in ("chat", "rebuild"):
             return {"error": "Les portefeuilles sont déjà construits: la cohérence ne change plus."}
         if session.review is None:
             return {"error": "Vérifie d'abord le questionnaire."}
@@ -240,6 +249,8 @@ def make_pepite_tools(session: Session) -> list:
         Args:
             profiles: Exactement 3 profils, un par slot.
         """
+        if session.phase == "chat":
+            return IN_CHAT
         if not (session.risk_computed and session.facts_read):
             return {"error": "Appelle d'abord compute_risk_profile et get_coherence_facts."}
         try:  # Strands transmet les objets imbriqués en JSON brut: le code les valide lui-même
@@ -270,6 +281,8 @@ def make_pepite_tools(session: Session) -> list:
             slots: Portefeuilles à construire ou reconstruire ("prudent", "equilibre", "conviction"). Tous si omis.
             instructions: Consignes par slot pour une reconstruction (ce que le juge ou le client demande de corriger).
         """
+        if session.phase == "chat":
+            return IN_CHAT
         if not session.profiles:
             return {"error": "Envoie d'abord les profils avec submit_constraint_plan."}
         targets = [s for s in (slots or SLOTS) if s in SLOTS]
@@ -401,9 +414,18 @@ CHAT_TASK = """Le client t'écrit après avoir vu ses portefeuilles.
 - Question sur un ou plusieurs portefeuilles: commence par `get_justifications`. Si ça ne suffit pas, interroge le
   gestionnaire (`ask_portfolio_manager`), l'agent Risque (`ask_risk_manager`) ou le juge (`ask_judge`), puis réponds
   avec tes mots, en citant les faits qu'ils t'ont donnés. Ne recopie pas leur jargon.
-- Demande de changer un portefeuille (« sans la techno », « plus prudent »): tu peux réécrire les profils avec
-  `submit_constraint_plan` puis reconstruire (`build_portfolios`, `judge_portfolios`), ou ajuster le risque avec
-  `adjust_risk_position`. Explique ce que tu as changé. Si c'est impossible, dis pourquoi.
+- Demande de changer ses portefeuilles ou les placements permis (« sans la techno », « plus prudent », « plus de
+  Canada »): tu ne reconstruis rien pendant le chat (les outils de construction sont bloqués). Tu poses des questions
+  jusqu'à ce que la demande soit claire et se traduise en contraintes du catalogue: quel portefeuille (ou les trois),
+  quelles classes d'actifs, régions ou thématiques, exclure ou seulement réduire, à peu près combien, FNB seulement ou
+  aussi des titres individuels, plus ou moins de risque. Une ou deux questions courtes par message, sans reposer une
+  question déjà répondue. Si la demande est claire dès le départ, ne pose pas de question. Si un changement est
+  impossible (limites de sécurité, rien d'équivalent dans le catalogue), dis-le et propose ce qui s'en rapproche.
+  Quand c'est clair: récapitule les changements dans une courte liste <ul>, puis termine par
+  « <strong>On y va?</strong> Je relance mes agents avec ces changements. », avec `ready_to_rebuild` à true et
+  `rebuild_request` rempli. Si le client confirme par écrit (« oui », « go »), refais le même récapitulatif court
+  avec `ready_to_rebuild` à true.
+- Dans tous les autres cas, `ready_to_rebuild` reste false et `rebuild_request` vide.
 - Question de finance générale: explique la notion simplement, avec un exemple, sans conseil personnalisé.
 - Autre sujet, ou demande de conseil (« j'achète quoi? »): refuse poliment et ramène le client vers ses portefeuilles.
 
@@ -422,6 +444,18 @@ Sois bref: une centaine de mots au plus, hors chiffres et barres. Commence par l
 """
 
 
+REBUILD_TASK = """Le client a confirmé les changements dont vous avez parlé dans le chat. Reconstruis ses portefeuilles.
+1. Pars de son questionnaire et des changements déjà appliqués, puis ajoute les nouveaux. S'ils parlent du risque
+   qu'il veut prendre, utilise `adjust_risk_position`. La cohérence du profil ne change pas.
+2. Réécris les 3 profils et envoie-les avec `submit_constraint_plan`, avec les mêmes règles qu'à la construction.
+   Corrige et renvoie si le code les refuse.
+3. `build_portfolios` (les trois), puis `judge_portfolios`. Si le juge demande de reconstruire et qu'il reste des
+   relances: `build_portfolios` avec ces `slots` et leurs `instructions`, puis `judge_portfolios` de nouveau.
+4. Réponds au client en 2 phrases, en texte simple sans balises: ce qui a changé dans ses portefeuilles.
+
+"""
+
+
 def _snapshot(session: Session) -> dict:
     return {
         "profil_coherent": session.coherent,
@@ -433,7 +467,7 @@ def _snapshot(session: Session) -> dict:
 
 
 async def check_turn(session: Session, bus: EventBus) -> PepiteReview:
-    session.bus = bus
+    session.bus, session.phase = bus, "check"
     payload = {"profile": session.profile, "constraints": session.prefs}
     return await ensure_pepite(session).run(
         bus, CHECK_TASK + json.dumps(payload, ensure_ascii=False, indent=2), PepiteReview,
@@ -442,7 +476,7 @@ async def check_turn(session: Session, bus: EventBus) -> PepiteReview:
 
 
 async def build_turn(session: Session, bus: EventBus, adjustment: str) -> PepiteReply:
-    session.bus = bus
+    session.bus, session.phase = bus, "build"
     payload = {"questionnaire": {"profile": session.profile, "constraints": session.prefs},
                "verification": session.review.model_dump(mode="json") if session.review else None,
                "ajustement_du_client": adjustment or None}
@@ -453,9 +487,19 @@ async def build_turn(session: Session, bus: EventBus, adjustment: str) -> Pepite
 
 
 async def chat_turn(session: Session, bus: EventBus, message: str) -> PepiteReply:
-    session.bus = bus
+    session.bus, session.phase = bus, "chat"
     payload = {"message_du_client": message, "etat_actuel": _snapshot(session)}
     return await ensure_pepite(session).run(
         bus, CHAT_TASK + json.dumps(payload, ensure_ascii=False, indent=2), PepiteReply,
         start_text="Je lis ton message", done_text="Réponse prête", step=CHAT_STEP,
+    )
+
+
+async def rebuild_turn(session: Session, bus: EventBus, request: str) -> PepiteReply:
+    session.bus, session.phase = bus, "rebuild"
+    payload = {"questionnaire": {"profile": session.profile, "constraints": session.prefs},
+               "changements_deja_appliques": session.requests, "nouveaux_changements": request}
+    return await ensure_pepite(session).run(
+        bus, REBUILD_TASK + json.dumps(payload, ensure_ascii=False, indent=2), PepiteReply,
+        start_text="Je relance la construction", done_text="Prêt",
     )

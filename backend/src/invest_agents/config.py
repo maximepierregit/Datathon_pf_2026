@@ -55,6 +55,10 @@ VALID_ASSET_CLASSES = frozenset({
     "Commodities", "Alternative",
 })
 VALID_INSTRUMENT_TYPES = frozenset({"Stock", "ETF", "Cryptocurrency"})
+# Exposition inconnue (ETF sans look-through...) face à un plafond de secteur/région/pays :
+# "strict" = l'instrument est rejeté (défaut, mode AGENT) ; "flag" = plafond appliqué aux
+# expositions connues, instrument conservé et signalé (mode BASE).
+UNKNOWN_EXPOSURE_POLICIES = frozenset({"strict", "flag"})
 PREFERENCE_LEVELS = frozenset({"exclude", "less", "neutral", "more", "require"})
 PREFERENCE_DIMENSIONS = frozenset({
     "asset_class", "instrument_type", "region", "country",
@@ -380,22 +384,72 @@ REGIMES = {
 }
 
 
-# ---------------------------------------------------------------------------
-# VERSION 1 — PROFIL BASE : SIMULATIONS MANUELLES / TESTS (HARDCODÉ ET ÉDITABLE)
-# ---------------------------------------------------------------------------
-# Tous les paramètres utilisateur modifiables pour les simulations sont ici.
-# Changer UNE valeur de ce dictionnaire, puis get_settings(mode="base").
-# Contraintes techniques fixes (min 1 %, long-only, etc.) restent plus haut.
-# Aucune de ces valeurs ne doit servir de profil implicite d'un client réel.
-BASE_PROFILE = {
-    "risk_aversion_A": 5.0,
-    "etf_only": False,
-    "min_cash_weight": 0.0,
-    "max_cash_weight": 1.0,  # 100 % exprimé en fraction (NE PAS écrire 100.0)
-    "max_weight_per_asset": None,  # None = aucun plafond général ajouté
+# ============================================================
+# BASE_CONSTRAINTS — SIMULATIONS MANUELLES UNIQUEMENT
+# ============================================================
+# Source UNIQUE de toutes les contraintes du mode BASE : modifier les valeurs
+# ici pour tester l'optimiseur. get_settings(mode="base") copie ce dictionnaire
+# dans settings["constraints"].
+#
+# Le mode AGENT n'utilise JAMAIS ce dictionnaire : il part de CONSTRAINTS
+# (plus haut), complété par les contraintes du questionnaire.
+#
+# Tous les poids sont des fractions : 0.05 = 5 %, 0.10 = 10 %, 1.0 = 100 %.
+#
+# NOMENCLATURE RÉELLE (vérifiée sur universe.parquet, 801 actifs) :
+#   asset_class      : Equity, Fixed Income, Multi-Asset, Real Estate, Commodities, Alternative
+#   instrument_type  : Stock, ETF, Cryptocurrency
+#   sector (actions) : Information Technology, Financials, Energy, Industrials, Materials,
+#                      Health Care, Consumer Discretionary, Consumer Staples, Utilities,
+#                      Real Estate, Communication Services
+#   region (actions) : usa, canada, europe, asie  (+ "emergents" : nom du frontend et de
+#                      monport.py, aucun titre du Parquet n'y est rattaché aujourd'hui)
+#
+# LIMITES AGRÉGÉES ET ETF : le Parquet n'a PAS de look-through. Pour un ETF,
+# secteur et pays valent « Non classé » ; une limite de secteur ou de région ne
+# s'applique donc qu'aux expositions CONNUES (actions, ou look-through fourni
+# explicitement). Les ETF et cryptos à exposition inconnue restent investissables,
+# ne sont PAS comptés dans ces plafonds et sont signalés (voir unknown_exposure_policy).
+BASE_CONSTRAINTS = {
+    # --------------------------------------------------------
+    # 1. RÈGLES FONDAMENTALES
+    # --------------------------------------------------------
+    "long_only": True,
+    "fully_invested": True,
+    # Un actif doit peser 0 % ou au moins 1 %.
+    "min_held_weight": 0.01,
+    "minimum_holding_method": "prune_reoptimize",
+    "minimum_holding_max_iterations": 30,
+    "minimum_holding_tolerance": 1e-8,
+    "minimum_holding_global_optimality_guaranteed": False,
+    # --------------------------------------------------------
+    # 2. CONCENTRATION INDIVIDUELLE
+    # --------------------------------------------------------
+    # Maximum 10 % du portefeuille par titre ou ETF (le cash n'est pas concerné :
+    # il est borné par max_cash_weight).
+    "max_weight_per_asset": 0.10,
+    # Les limites agrégées sont définies dans group_limits.
+    "max_weight_by_instrument_type": {},
+    "max_weight_by_asset_class": {},
+    # --------------------------------------------------------
+    # 3. TITRES OBLIGATOIRES / EXCLUS
+    # --------------------------------------------------------
     "excluded_symbols": [],
     "required_symbols": [],
     "required_symbol_min_weights": {},
+    # False = actions, ETF et crypto autorisés.
+    "etf_only": False,
+    # --------------------------------------------------------
+    # 4. CASH — VARIABLE D'AJUSTEMENT
+    # --------------------------------------------------------
+    # Aucun minimum obligatoire.
+    "min_cash_weight": 0.0,
+    # Jusqu'à 100 % si les contraintes ou l'optimisation rendent préférable
+    # une forte allocation au cash.
+    "max_cash_weight": 1.0,
+    # --------------------------------------------------------
+    # 5. EXCLUSIONS STRICTES
+    # --------------------------------------------------------
     "excluded_asset_classes": [],
     "excluded_instrument_types": [],
     "excluded_sectors": [],
@@ -403,13 +457,74 @@ BASE_PROFILE = {
     "excluded_regions": [],
     "excluded_themes": [],
     "excluded_factors": [],
+    # --------------------------------------------------------
+    # 6. LIMITES AGRÉGÉES DE DIVERSIFICATION (somme des poids du groupe)
+    # --------------------------------------------------------
     "group_limits": {
-        "asset_class": {}, "instrument_type": {}, "sector": {},
-        "country": {}, "region": {}, "theme": {}, "factor": {},
+        "asset_class": {
+            # Maximum 5 % en actifs alternatifs. Dans cet univers, la classe
+            # Alternative = BTC-CAD, ETH-CAD (crypto directe) + BITW (ETP crypto) :
+            # c'est donc le plafond TOTAL crypto, directe et ETP confondues.
+            "Alternative": {"max": 0.05},
+            # Maximum 10 % en matières premières.
+            "Commodities": {"max": 0.10},
+            # Maximum 15 % en FNB immobiliers. ATTENTION : les 45 actions du secteur
+            # « Real Estate » sont classées Equity et ne sont PAS dans ce groupe ;
+            # voir group_limits["sector"] pour les plafonner.
+            "Real Estate": {"max": 0.15},
+            # Pas de plafond Equity / Fixed Income : Markowitz décide.
+        },
+        "instrument_type": {
+            # Maximum 5 % en cryptomonnaies directes (BTC et ETH combinés).
+            # Imbriqué dans Alternative ci-dessus : BITW est compté UNE seule fois,
+            # dans Alternative. Ne jamais cumuler ces deux plafonds (5 % + 5 %).
+            "Cryptocurrency": {"max": 0.05},
+        },
+        "sector": {
+            # Plafonds appliqués aux ACTIONS (secteur connu) ; les ETF ne sont pas comptés.
+            "Information Technology": {"max": 0.25},
+            "Financials": {"max": 0.30},
+            "Energy": {"max": 0.20},
+            # Autres secteurs : pas de plafond supplémentaire pour les simulations.
+        },
+        "country": {},
+        "region": {
+            # Maximum 15 % en marchés émergents. « emergents » est le nom du frontend
+            # (catalog.ts) et de monport.py ; « Emerging Markets » n'existe pas dans
+            # les métadonnées. AUCUN titre du Parquet n'est rattaché à cette région
+            # (aucune action émergente ; 7 ETF ont category = "Emerging Markets" mais
+            # sans look-through) : ce plafond est inerte tant qu'aucune exposition n'est
+            # fournie (exposure_overrides) et il est signalé comme tel.
+            "emergents": {"max": 0.15},
+        },
+        # Thèmes : aucun plafond automatique (ils traversent plusieurs secteurs).
+        "theme": {},
+        "factor": {},
     },
+    # --------------------------------------------------------
+    # 7. RÈGLES DE VALIDATION
+    # --------------------------------------------------------
+    "cash_is_exception_to_etf_only": True,
+    "reject_conflicting_hard_constraints": True,
+    # "flag" : les plafonds de secteur/région/pays s'appliquent aux expositions
+    # connues ; les instruments à exposition inconnue (ETF, crypto) sont conservés
+    # et signalés. "strict" (défaut de constraints.py, et mode AGENT) : ils sont rejetés.
+    "unknown_exposure_policy": "flag",
+}
+# ---------------------------------------------------------------------------
+# VERSION 1 — PROFIL BASE : SIMULATIONS MANUELLES / TESTS (HARDCODÉ ET ÉDITABLE)
+# ---------------------------------------------------------------------------
+# Ne contient QUE ce qui n'est pas une contrainte : l'aversion au risque A et les
+# préférences. TOUTES les contraintes (cash, plafonds, exclusions, group_limits...)
+# sont dans BASE_CONSTRAINTS : aucune clé de contrainte ne doit être dupliquée ici
+# (get_settings(mode="base") lève une erreur si c'est le cas).
+# Aucune de ces valeurs ne doit servir de profil implicite d'un client réel.
+BASE_PROFILE = {
+    "risk_aversion_A": 5.0,
     # Les niveaux less/more ne sont PAS convertis en poids arbitraires.
     "preferences": {},
 }
+BASE_PROFILE_ALLOWED_KEYS = frozenset({"risk_aversion_A", "preferences"})
 
 # ---------------------------------------------------------------------------
 # VERSION 2 — PROFIL AGENT : INPUT DYNAMIQUE DU QUESTIONNAIRE UTILISATEUR
@@ -485,8 +600,10 @@ def get_settings(
 ) -> dict[str, Any]:
     """Fournir une configuration ISOLÉE pour un run de simulation ou utilisateur.
 
-    MODE BASE  : utilise uniquement BASE_PROFILE, valeurs modifiables ici.
-    MODE AGENT : utilise UNIQUEMENT la requête utilisateur reçue à l'exécution;
+    MODE BASE  : contraintes = BASE_CONSTRAINTS (source unique), aversion A et
+                 préférences = BASE_PROFILE ; valeurs modifiables ici.
+    MODE AGENT : part de CONSTRAINTS (jamais de BASE_CONSTRAINTS) et utilise
+                 UNIQUEMENT la requête utilisateur reçue à l'exécution;
                  requiert risk_aversion_A pour éviter tout repli implicite
                  sur le profil BASE. Ne modifie jamais les constantes globales.
 
@@ -499,6 +616,9 @@ def get_settings(
     if mode == "base":
         if agent_request is not None:
             raise ValueError("Le mode BASE n'accepte pas de requête agent.")
+        _check_base_sources()
+        # Seule source des contraintes BASE : le mode AGENT, lui, garde CONSTRAINTS.
+        cfg["constraints"] = copy.deepcopy(BASE_CONSTRAINTS)
         profile_request = BASE_PROFILE
     else:
         if not isinstance(agent_request, Mapping):
@@ -509,6 +629,55 @@ def get_settings(
     cfg = apply_portfolio_request(profile_request, settings=cfg)
     cfg["execution_mode"] = mode
     return cfg
+
+
+def _check_base_sources() -> None:
+    """Garantir que BASE_CONSTRAINTS est la SEULE source des contraintes du mode BASE.
+
+    - BASE_PROFILE ne peut contenir que l'aversion A et les préférences ;
+    - BASE_CONSTRAINTS a au moins toutes les clés de CONSTRAINTS (aucune oubliée,
+      donc aucun repli silencieux) et aucune clé inconnue (faute de frappe) ;
+    - les noms de classes d'actifs / types d'instruments des limites existent.
+    """
+    duplicated = sorted(set(BASE_PROFILE) - BASE_PROFILE_ALLOWED_KEYS)
+    if duplicated:
+        raise ValueError(
+            f"BASE_PROFILE ne doit contenir aucune contrainte : {duplicated}. "
+            "Les déplacer dans BASE_CONSTRAINTS (source unique du mode BASE).")
+    missing = sorted(set(CONSTRAINTS) - set(BASE_CONSTRAINTS))
+    if missing:
+        raise ValueError(f"BASE_CONSTRAINTS incomplet, clés absentes : {missing}")
+    unknown = sorted(set(BASE_CONSTRAINTS) - set(CONSTRAINTS) - {"unknown_exposure_policy"})
+    if unknown:
+        raise ValueError(f"Clés inconnues dans BASE_CONSTRAINTS : {unknown}")
+    limits = BASE_CONSTRAINTS["group_limits"]
+    unknown_dims = sorted(set(limits) - set(CONSTRAINTS["group_limits"]))
+    if unknown_dims:
+        raise ValueError(f"Dimensions de group_limits inconnues dans BASE_CONSTRAINTS : {unknown_dims}")
+    for dimension, valid in (("asset_class", VALID_ASSET_CLASSES), ("instrument_type", VALID_INSTRUMENT_TYPES)):
+        valid_keys = {v.casefold() for v in valid}
+        bad = sorted(g for g in limits.get(dimension, {}) if str(g).strip().casefold() not in valid_keys)
+        if bad:
+            raise ValueError(f"group_limits.{dimension} : groupes inexistants {bad} (valides : {sorted(valid)}).")
+
+
+def _validate_group_limits(group_limits: Mapping[str, Any]) -> None:
+    """Structure des plafonds agrégés : bornes min/max dans [0, 1], min <= max."""
+    if not isinstance(group_limits, Mapping):
+        raise TypeError("group_limits doit être un mapping par dimension.")
+    for dimension, groups in group_limits.items():
+        if dimension not in CONSTRAINTS["group_limits"]:
+            raise ValueError(f"Dimension de limite inconnue : {dimension}")
+        if not isinstance(groups, Mapping):
+            raise TypeError(f"group_limits.{dimension} doit être un mapping.")
+        for group, bounds in groups.items():
+            if not str(group).strip() or not isinstance(bounds, Mapping) or not bounds:
+                raise ValueError(f"Limites invalides : {dimension}/{group}.")
+            if set(bounds) - {"min", "max"}:
+                raise ValueError(f"Bornes inconnues : {dimension}/{group}.")
+            values = {k: _weight(v, f"group_limits.{dimension}.{group}.{k}") for k, v in bounds.items()}
+            if "min" in values and "max" in values and values["min"] > values["max"]:
+                raise ValueError(f"Min > max pour {dimension}/{group}.")
 
 
 def get_base_settings() -> dict[str, Any]:
@@ -722,6 +891,9 @@ def validate_settings(settings: Mapping[str, Any] | None = None) -> None:
     cap = _weight(constraints["max_weight_per_asset"], "max_weight_per_asset", allow_none=True)
     if cap is not None and cap < floor:
         raise ValueError("Le poids maximum par titre est inférieur au minimum détenu.")
+    if constraints.get("unknown_exposure_policy", "strict") not in UNKNOWN_EXPOSURE_POLICIES:
+        raise ValueError(f"unknown_exposure_policy doit valoir {sorted(UNKNOWN_EXPOSURE_POLICIES)}.")
+    _validate_group_limits(constraints["group_limits"])
     min_cash = _weight(constraints["min_cash_weight"], "min_cash_weight")
     max_cash = _weight(constraints["max_cash_weight"], "max_cash_weight")
     if min_cash > max_cash:

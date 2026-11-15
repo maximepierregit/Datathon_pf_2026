@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { checkProfile } from '../api'
-import { PepiteSays } from '../components/Pepite'
+import { Pepite, PepiteSays } from '../components/Pepite'
 import { Arrow, Button, Card, Separator } from '../components/ui'
 import { riskScore } from '../lib/engine'
 import { useApp } from '../store'
@@ -22,19 +22,32 @@ export default function Verification() {
   const [draft, setDraft] = useState(useApp.getState().adjustment)
   const [answers, setAnswers] = useState('')
   const [loading, setLoading] = useState(true)
+  const [stage, setStage] = useState(0)
 
   useEffect(() => {
     const ctrl = new AbortController()
     setCheck(null)
     setSession(null)
-    checkProfile({ score: riskScore(profile), profile, constraints }, ctrl.signal)
+    // Les étapes avancent avec ce que Pépite annonce, et au moins au rythme de la minuterie : on voit qu'elle avance.
+    const reach = (i: number) => setStage((s) => Math.max(s, i))
+    const timer = setInterval(() => setStage((s) => (s < THINKING_STEPS.length - 1 ? s + 1 : s)), 2600)
+    checkProfile({ score: riskScore(profile), profile, constraints }, ctrl.signal, (text) => {
+      const i = THINKING_STEPS.findIndex((st) => st.match?.test(text))
+      if (i >= 0) reach(i)
+    })
       .then(({ check: c, session }) => {
+        clearInterval(timer)
+        setStage(THINKING_STEPS.length)
         setCheck(c)
         setSession(session)
-        setLoading(false)
+        // Un court instant pour voir toutes les étapes cochées.
+        setTimeout(() => !ctrl.signal.aborted && setLoading(false), 700)
       })
       .catch(() => {})
-    return () => ctrl.abort()
+    return () => {
+      clearInterval(timer)
+      ctrl.abort()
+    }
     // La vérification ne se lance qu'une fois par visite.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -58,9 +71,7 @@ export default function Verification() {
       </div>
 
       {loading || !check ? (
-        <PepiteSays pose="thinking">
-          <span aria-live="polite">Je vérifie que ton profil et tes préférences vont dans le même sens…</span>
-        </PepiteSays>
+        <Thinking stage={stage} />
       ) : check.coherent ? (
         <>
           <PepiteSays pose="thumbsup">{check.summary}</PepiteSays>
@@ -144,6 +155,61 @@ export default function Verification() {
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+/** Ce que Pépite vérifie, dans l'ordre. `match` reconnaît l'annonce correspondante du backend. */
+const THINKING_STEPS: { text: string; match?: RegExp }[] = [
+  { text: 'Je relis tes réponses' },
+  { text: 'Je calcule ton profil de risque', match: /profil de risque/i },
+  { text: 'Je compare tes préférences à ton profil', match: /contradiction/i },
+  { text: 'Je prépare mon verdict' },
+]
+
+/** Pépite qui réfléchit : grande mascotte, bulle de pensée et étapes qui se cochent. */
+function Thinking({ stage }: { stage: number }) {
+  const current = THINKING_STEPS[Math.min(stage, THINKING_STEPS.length - 1)]
+  return (
+    <div className="fade-in flex flex-col items-center gap-6 rounded-[var(--radius-card)] bg-sky px-6 py-10 text-center">
+      <div className="relative">
+        <span className="halo absolute inset-4 rounded-full bg-white" aria-hidden />
+        <Pepite pose="thinking" size={200} className="relative" />
+        <span className="absolute -right-6 top-2 flex items-end gap-1.5" aria-hidden>
+          {[10, 14, 20].map((d, i) => (
+            <span key={d} className="think-dot rounded-full bg-navy" style={{ width: d, height: d, animationDelay: `${i * 0.2}s` }} />
+          ))}
+        </span>
+      </div>
+      <div className="flex flex-col gap-1">
+        <p className="m-0 text-xl font-semibold text-navy" aria-live="polite">
+          {stage >= THINKING_STEPS.length ? 'C’est tout bon, j’ai mon verdict!' : `${current.text}…`}
+        </p>
+        <p className="m-0 text-sm text-ink-soft">Je vérifie que ton profil et tes préférences vont dans le même sens. Ça prend une dizaine de secondes.</p>
+      </div>
+      <ol className="m-0 flex w-full max-w-[380px] list-none flex-col gap-2.5 p-0 text-left">
+        {THINKING_STEPS.map((st, i) => {
+          const state = i < stage ? 'done' : i === stage ? 'running' : 'pending'
+          return (
+            <li key={st.text} className={`flex items-center gap-3 text-[15px] transition-opacity ${state === 'pending' ? 'opacity-45' : ''}`}>
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center">
+                {state === 'done' ? (
+                  <span className="fade-in flex h-6 w-6 items-center justify-center rounded-full bg-navy text-white">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <path d="M5 12l5 5L20 7" />
+                    </svg>
+                  </span>
+                ) : state === 'running' ? (
+                  <span className="h-5 w-5 rounded-full border-2 border-line border-t-navy motion-safe:animate-spin" aria-hidden />
+                ) : (
+                  <span className="h-2 w-2 rounded-full bg-slate-light" aria-hidden />
+                )}
+              </span>
+              <span className={state === 'running' ? 'font-semibold text-navy' : 'text-ink'}>{st.text}</span>
+            </li>
+          )
+        })}
+      </ol>
     </div>
   )
 }

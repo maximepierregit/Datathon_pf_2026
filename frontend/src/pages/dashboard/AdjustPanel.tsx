@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { askPepite, proposeAdjustment } from '../../api'
 import { Pepite, type Pose } from '../../components/Pepite'
 import { RichText } from '../../components/RichText'
@@ -6,23 +7,7 @@ import { Alert, Button } from '../../components/ui'
 import { riskScore } from '../../lib/engine'
 import { pct, points } from '../../lib/format'
 import { useApp } from '../../store'
-import type { AdjustProposal, AgentId, Portfolio } from '../../types'
-
-/** Ce que Pépite a fait pour répondre : ses propres étapes et celles des agents qu'elle a sollicités. */
-interface Step {
-  agent: AgentId
-  text: string
-  done: boolean
-}
-
-interface Msg {
-  from: 'user' | 'pepite' | 'info'
-  text: string
-  steps?: Step[]
-  proposal?: AdjustProposal
-  request?: string
-  status?: 'open' | 'applied' | 'dismissed'
-}
+import type { AgentId, ChatMsg as Msg, ChatStep as Step, Portfolio } from '../../types'
 
 const SUGGESTIONS = ['Plus de tech', 'Pas de pétrole', 'Plus de crypto', 'Moins de risque']
 const LIVE_SUGGESTIONS = ['Pourquoi ce portefeuille?', 'C’est quoi un FNB?', 'Pas de pétrole', 'Moins de risque']
@@ -48,13 +33,16 @@ function track(steps: Step[], agent: AgentId, text: string, done: boolean): Step
 
 /**
  * Chat avec Pépite, toujours visible à droite sur grand écran (tiroir sur mobile). Avec le backend (session
- * ouverte), elle répond elle-même : elle interroge au besoin ses gestionnaires, ses agents Risque et le juge, et peut
- * reconstruire les portefeuilles. Sans backend, le moteur d'exemple propose des ajustements simulés.
+ * ouverte), elle répond elle-même : elle interroge au besoin ses gestionnaires, ses agents Risque et le juge. Pour un
+ * changement, elle pose des questions jusqu'à ce qu'il soit clair, le récapitule et demande si on y va : la page de
+ * construction relance alors les agents. Sans backend, le moteur d'exemple propose des ajustements simulés.
  */
 export function AdjustPanel({ p, open, onClose }: { p: Portfolio; open: boolean; onClose: () => void }) {
+  const navigate = useNavigate()
   const state = useApp()
   const live = Boolean(state.session)
-  const [msgs, setMsgs] = useState<Msg[]>([])
+  const msgs = state.chat
+  const setMsgs = state.setChat
   const [steps, setSteps] = useState<Step[]>([])
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
@@ -97,7 +85,7 @@ export function AdjustPanel({ p, open, onClose }: { p: Portfolio; open: boolean;
       if (e.type === 'agent_status') step(e.agent, e.message.replace(/…$/, ''), e.status === 'done')
       if (e.type === 'pepite' && e.final) {
         answered = true
-        reply({ text: e.text })
+        reply({ text: e.text, confirm: e.ready ? 'open' : undefined })
       }
       if (e.type === 'portfolios') {
         state.setPortfolios(e.portfolios)
@@ -120,7 +108,8 @@ export function AdjustPanel({ p, open, onClose }: { p: Portfolio; open: boolean;
     const t = text.trim()
     if (!t || busy) return
     setDraft('')
-    setMsgs((m) => [...m, { from: 'user', text: t }])
+    // Un nouveau message remplace le récapitulatif en attente : Pépite en refera un si besoin.
+    setMsgs((m) => [...m.map((x) => (x.confirm === 'open' ? { ...x, confirm: 'stale' as const } : x)), { from: 'user', text: t }])
     setBusy(true)
     trace.current = []
     try {
@@ -137,9 +126,21 @@ export function AdjustPanel({ p, open, onClose }: { p: Portfolio; open: boolean;
     setMsgs((m) => m.map((x, j) => (j === i ? { ...x, status: apply ? 'applied' : 'dismissed' } : x)))
   }
 
+  function confirm(i: number, go: boolean) {
+    setMsgs((m) => [
+      ...m.map((x, j) => (j === i ? { ...x, confirm: go ? ('accepted' as const) : ('dismissed' as const) } : x)),
+      ...(go ? [] : [{ from: 'pepite' as const, text: '<p>Pas de souci! Dis-moi ce que tu veux changer d’autre, ou pose-moi une question.</p>' }]),
+    ])
+    if (!go) return
+    state.setRebuild(true)
+    navigate('/construction')
+  }
+
+  // Profil cohérent : le portefeuille s'appelle déjà « Ton portefeuille ».
+  const which = /^ton portefeuille$/i.test(p.name) ? '<strong>ton portefeuille</strong>' : `le portefeuille <strong>${esc(p.name)}</strong>`
   const greeting = live
-    ? `<p>Salut! Je connais ton portefeuille <strong>${esc(p.name)}</strong> sur le bout des doigts.</p><ul><li>Pose-moi une question dessus</li><li>Demande-moi un changement</li><li>Fais-toi expliquer une notion de finance</li></ul>`
-    : `<p>Que veux-tu changer dans le portefeuille <strong>${esc(p.name)}</strong>? Je te montre l’effet avant d’appliquer quoi que ce soit.</p><attention>Mode exemple : mes agents ne sont pas joignables. Je réponds avec quelques règles simples (plus de tech, pas de pétrole, plus de crypto, moins de risque).</attention>`
+    ? `<p>Salut! Je connais ${which} sur le bout des doigts.</p><ul><li>Pose-moi une question dessus</li><li>Demande-moi un changement : je te pose quelques questions, puis je relance mes agents</li><li>Fais-toi expliquer une notion de finance</li></ul>`
+    : `<p>Que veux-tu changer dans ${which}? Je te montre l’effet avant d’appliquer quoi que ce soit.</p><attention>Mode exemple : mes agents ne sont pas joignables. Je réponds avec quelques règles simples (plus de tech, pas de pétrole, plus de crypto, moins de risque).</attention>`
 
   return (
     <div
@@ -189,6 +190,7 @@ export function AdjustPanel({ p, open, onClose }: { p: Portfolio; open: boolean;
                   <RichText text={m.text} />
                 </Bubble>
                 {m.proposal && m.proposal.changes.length > 0 && <Proposal m={m} onDecide={(apply) => decide(i, apply)} />}
+                {m.confirm && m.confirm !== 'stale' && <Confirm status={m.confirm} disabled={busy} onDecide={(go) => confirm(i, go)} />}
               </div>
             ),
           )}
@@ -311,6 +313,31 @@ function Trace({ steps }: { steps: Step[] }) {
         ))}
       </ol>
     </details>
+  )
+}
+
+/** Pépite a récapitulé un changement : on relance ses agents, ou on continue à en parler. */
+function Confirm({ status, disabled, onDecide }: { status: Msg['confirm']; disabled: boolean; onDecide: (go: boolean) => void }) {
+  if (status !== 'open')
+    return (
+      <p className="m-0 flex items-center gap-1.5 text-xs font-semibold text-slate">
+        {status === 'accepted' && <Check />}
+        {status === 'accepted' ? 'Changements envoyés à mes agents.' : 'On continue d’en parler.'}
+      </p>
+    )
+  return (
+    <div className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-navy p-3.5">
+      <span className="text-sm font-semibold text-navy">Je relance mes agents avec ces changements?</span>
+      <span className="text-xs text-ink-soft">Tu verras chaque agent travailler, puis tes nouveaux portefeuilles. Ça prend environ une minute.</span>
+      <div className="flex gap-2">
+        <Button className="min-w-0 flex-1 px-4 py-1.5 text-sm" disabled={disabled} onClick={() => onDecide(true)}>
+          Oui, on y va
+        </Button>
+        <Button variant="tertiary" className="min-w-0 flex-1 px-4 py-1.5 text-sm" disabled={disabled} onClick={() => onDecide(false)}>
+          Pas encore
+        </Button>
+      </div>
+    </div>
   )
 }
 

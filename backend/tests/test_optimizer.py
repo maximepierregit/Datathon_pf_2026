@@ -454,6 +454,11 @@ def test_38_markowitz_analytic_one_asset_plus_cash():
     meta = meta.loc[["NVDA"]]
     cfg = cfg_hist()
     cfg["risk_aversion"]["default"] = 5.0
+    # Solution analytique SANS contrainte : on retire les limites de BASE_CONSTRAINTS (10 % par
+    # titre ; 25 % en Information Technology, secteur de NVDA). Les cas plafonnés sont testés
+    # dans test_base_constraints.py.
+    cfg["constraints"]["max_weight_per_asset"] = None
+    cfg["constraints"]["group_limits"] = copy.deepcopy(config.CONSTRAINTS["group_limits"])
     p = plan_for(meta, cfg)
     mu, cov = manual_mu_cov(meta, [0.1], sigma_value=0.04)
     result = optimizer.optimize_weights(mu, cov, p, cfg)
