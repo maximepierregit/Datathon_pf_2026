@@ -1,4 +1,5 @@
 import { Link, Outlet, useLocation } from 'react-router-dom'
+import { DemoBanner } from './DemoBanner'
 import { Pepite } from './Pepite'
 
 const STEPS = [
@@ -53,6 +54,7 @@ export function Layout() {
   return (
     <div className="flex min-h-screen flex-col">
       <Header />
+      <DemoBanner />
       <main className="flex flex-1 flex-col">
         <Outlet />
       </main>
