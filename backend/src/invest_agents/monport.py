@@ -73,7 +73,7 @@ TRIO = {
 VARIANT_NAMES = {"prudent": "Variante prudente", "equilibre": "Variante fidèle", "conviction": "Variante audacieuse"}
 WINNER_NAME = "Ton portefeuille"
 
-# Valeurs possibles dans le dataset (synthétique et réel). Seules celles présentes servent.
+# Libellés acceptés pour chaque élément du questionnaire. Seuls ceux présents dans le dataset servent.
 CLASS_TARGETS = {
     "actions": ["Equity", "Equities"],
     "obligations": ["Fixed Income", "Bonds"],
@@ -440,7 +440,7 @@ def validate_profile(constraints: list[Constraint], exclusions: list[Constraint]
 
 def ensure_feasible(market: Market, constraints: list[Constraint]) -> tuple[list[Constraint], Optional[str]]:
     """Relève le plafond de volatilité quand l'univers ne permet pas de descendre aussi bas: sans ça, le gestionnaire
-    et son repli échouent tous les deux (fréquent sur le dataset synthétique pour un profil prudent)."""
+    et son repli échouent tous les deux (possible pour un profil très prudent)."""
     hard = [c for c in constraints if c.hard]
     caps = [c.value for c in hard if c.type is T.MAX_VOLATILITY and c.value]
     if not caps:

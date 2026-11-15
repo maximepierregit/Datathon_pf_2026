@@ -14,8 +14,6 @@ cp .env.example .env            # puis exporter les variables (ou laisser les va
 #   export DATASET_PATH=s3://monport-datasets-381491955506/universe/universe.parquet
 # b) réel, reconstruit en local depuis la racine du dépôt (Wikipedia + yfinance, cache dans backend/data/raw/):
 #   pip install -r data-prep/requirements.txt && python data-prep/build_universe.py
-# c) SYNTHÉTIQUE, pour le développement:
-.venv/bin/python scripts/make_sample_dataset.py
 
 .venv/bin/python scripts/run_local.py                          # parcours initial (appelle Bedrock)
 .venv/bin/python scripts/run_local.py --refine "exclus la techno"  # relance
@@ -119,7 +117,6 @@ redémarrage, sans redéployer. `WSParticipantRole` (local, EC2) lit déjà le b
 
 ## Limites connues
 
-- Le dataset fourni par `make_sample_dataset.py` est synthétique. Les résultats chiffrés n'ont aucune valeur réelle.
 - Rendements et volatilités sont historiques (moyenne et covariance sur la période du dataset).
 - La réflexion du modèle est résumée et arrive surtout en anglais malgré la consigne en français.
 - Un nouvel essai (`MAX_PM_RETRIES`) ne se déclenche que si aucun portefeuille n'est conforme.

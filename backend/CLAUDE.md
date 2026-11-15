@@ -14,10 +14,8 @@ Schéma de référence: `../architecture-workflow.md`. Les numéros d'étape (`s
 # Installation (Python 3.12 en local; le runtime AgentCore utilise 3.13)
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .
 
-# Dataset réel depuis S3 (pas dans le repo):
+# Dataset réel depuis S3 (pas dans le repo), ou une copie locale dans data/universe.parquet:
 export DATASET_PATH=s3://monport-datasets-381491955506/universe/universe.parquet
-# ou synthétique, sans AWS:
-.venv/bin/python scripts/make_sample_dataset.py
 
 # Pipeline complet en local (appelle Bedrock, ~1 min)
 .venv/bin/python scripts/run_local.py
@@ -91,7 +89,7 @@ Une ambiguïté (extraction) ou un conflit (fusion, ou contraintes du formulaire
 
 ## Optimiseur
 
-- Objectifs: `min_volatility`, `max_sharpe`, `max_return`, `mean_variance`. `max_return` exige un `vol_cap`, sinon il concentre. `mean_variance` maximise μᵀw − (A/2)·wᵀΣw et exige `risk_aversion` (A, de 1 très audacieux à 25 très prudent); c'est l'objectif des gestionnaires MonPort, A étant calculé par `monport.risk_aversion`. Sur le dataset synthétique, A = 25 donne environ 4 % de volatilité et A = 1 environ 15 %.
+- Objectifs: `min_volatility`, `max_sharpe`, `max_return`, `mean_variance`. `max_return` exige un `vol_cap`, sinon il concentre. `mean_variance` maximise μᵀw − (A/2)·wᵀΣw et exige `risk_aversion` (A, de 1 très audacieux à 25 très prudent); c'est l'objectif des gestionnaires MonPort, A étant calculé par `monport.risk_aversion`.
 - Chaque titre retenu pèse au moins `MIN_POSITION_WEIGHT = 1 %`. Taille max: `MAX_ASSETS_PER_PORTFOLIO` (40) et `max_positions`.
 - Statuts: `optimal`, `feasible` (non convergé mais valide), `infeasible`, `invalid_selection`. Les messages sont en français et rédigés pour que le PM puisse corriger sa sélection.
 - Le résidu d'arrondi est placé là où il reste de la marge sous le plafond (sinon un titre dépasse sa limite de 0,01 %).
@@ -130,8 +128,8 @@ Changer le format d'un événement casse le frontend: mettre à jour le README e
 - Format long issu de `create_opt_inputs` (`../Universe_Cleaned.ipynb`). Obligatoires: `date`, `symbol`, `total_return_cad`. Optionnelles: `name`, `sector`, `industry`, `country`, `currency`, `asset_class`, `instrument_type`, `market`, `is_included_universe`.
 - Actifs avec moins de 120 observations écartés. Secteur, pays et classe manquants deviennent `Non classé`.
 - `get_market()` est en cache (`lru_cache`); appelé via `asyncio.to_thread` dans l'orchestrateur.
-- Le dataset réel (S3, 1,2 M lignes) est lu par `_read_dataset`: seulement les colonnes utiles, métadonnées texte en catégories. Pic mémoire ~440 Mo au lieu de ~850 Mo avec `pd.read_parquet`, utile sur l'EC2 (t3.small, 2 Go). Le jeu synthétique (`make_sample_dataset.py`, symboles `SYN*`, `SETF*`, `SCRY*`) reste pour le développement sans AWS; ses chiffres n'ont aucune valeur réelle.
-- Comme dans l'univers réel, l'`asset_class` d'un FNB reprend sa catégorie (`Equities`, `Fixed Income`, `Money Market`, `Commodities`, `Real Estate`); les actions sont `Equity`, les cryptos `Crypto`. Le jeu synthétique compte 6 FNB d'obligations: un profil prudent doit tenir sous la limite de 40 % par ligne.
+- Le dataset réel (S3, 1,2 M lignes) est lu par `_read_dataset`: seulement les colonnes utiles, métadonnées texte en catégories. Pic mémoire ~440 Mo au lieu de ~850 Mo avec `pd.read_parquet`, utile sur l'EC2 (t3.small, 2 Go).
+- `asset_class` est normalisée par `build_universe.normalize_asset_class`: `Equity`, `Fixed Income`, `Multi-Asset`, `Real Estate`, `Commodities`, `Alternative` (crypto et BITW). Le détail d'un FNB reste dans `category_group` / `category`.
 
 ## Déploiement AgentCore
 

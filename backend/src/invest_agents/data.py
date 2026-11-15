@@ -198,8 +198,8 @@ def get_market() -> Market:
     path = _resolve_path(get_settings().dataset_path)
     if not Path(path).exists():
         raise FileNotFoundError(
-            f"Dataset introuvable: {path}. Exportez le DataFrame de `create_opt_inputs` en Parquet "
-            "ou générez un jeu de test avec scripts/make_sample_dataset.py."
+            f"Dataset introuvable: {path}. Pointez DATASET_PATH sur "
+            "s3://monport-datasets-381491955506/universe/universe.parquet ou lancez data-prep/build_universe.py."
         )
     return build_market(_read_dataset(path))
 
