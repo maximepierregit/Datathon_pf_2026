@@ -15,6 +15,11 @@ dependencies = [
     "boto3>=1.40",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+# Traces OpenTelemetry vers CloudWatch (AgentCore Observability), installé dans le zip du runtime.
+otel = ["aws-opentelemetry-distro>=0.18.0"]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

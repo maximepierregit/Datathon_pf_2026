@@ -383,7 +383,7 @@ def make_pepite_tools(session: Session) -> list:
 
 def ensure_pepite(session: Session) -> AgentHandle:
     if session.pepite is None:
-        session.pepite = AgentHandle(label="Pépite", step="4", kind="strong", system_prompt=system_prompt(session),
+        session.pepite = AgentHandle(label="Pépite", step="4", kind="pepite", system_prompt=system_prompt(session),
                                      tools=make_pepite_tools(session), persistent=True)
     return session.pepite
 

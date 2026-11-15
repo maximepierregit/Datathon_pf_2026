@@ -15,7 +15,7 @@ from typing import Optional
 from strands import tool
 
 from ..agents.base import AgentError, AgentHandle
-from ..agents.cro import diagnostics
+from ..diagnostics import diagnostics
 from ..agents.portfolio_manager import make_pm_worker, run_pm_worker
 from ..catalog import describe, evaluate, excluded_mask
 from ..mandates import Mandate
@@ -31,6 +31,7 @@ from ..monport import (
     pick_winner,
     status,
 )
+from .. import gateway
 from ..tools import MACRO_PROMPT, make_macro_tools
 from ..schemas import (
     ConstraintPlan,
@@ -251,12 +252,9 @@ def _judge_tools(session: Session) -> list:
         p = session.portfolios.get(slot)
         if p is None or p.status != "ok":
             return {"error": f"Aucun portefeuille construit pour « {slot} »."}
-        checks = evaluate(session.market, {x.symbol: x.weight for x in p.positions}, session.investors[slot].constraints)
-        return {
-            "all_hard_respected": all(c.passed for c in checks if c.constraint.hard),
-            "checks": [{"label": c.label, "hard": c.constraint.hard, "passed": c.passed, "actual": c.actual,
-                        "limit": c.limit} for c in checks],
-        }
+        return gateway.run("check_portfolio_constraints", market=session.market,
+                           weights={x.symbol: x.weight for x in p.positions},
+                           constraints=session.investors[slot].constraints)
 
     return [check_portfolio_constraints, *make_macro_tools()]
 
