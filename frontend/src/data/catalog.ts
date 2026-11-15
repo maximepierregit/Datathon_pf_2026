@@ -102,6 +102,55 @@ export const FACTOR_VIEW: Record<FactorId, { label: string; high: string; low: s
 }
 export const FACTOR_IDS = Object.keys(FACTOR_VIEW) as FactorId[]
 
+/**
+ * Modèle des scores, tel que data-prep/factors_model.ipynb le calcule (voir data-prep/FACTORS.md) : chaque sous-mesure
+ * est orientée « plus haut = mieux », puis les sous-mesures disponibles sont moyennées à poids égaux.
+ */
+export const FACTOR_MODEL: Record<FactorId, { idea: string; group: 'marche-secteur' | 'marche'; metrics: { label: string }[] }> = {
+  qualite: {
+    idea: 'Une entreprise rentable, peu endettée, qui transforme ses ventes en argent comptant.',
+    group: 'marche-secteur',
+    metrics: [
+      { label: 'Rendement des actifs' },
+      { label: 'Marge d’exploitation' },
+      { label: 'Faible endettement' },
+      { label: 'Marge de flux de trésorerie' },
+    ],
+  },
+  value: {
+    idea: 'Ce qu’on paie pour chaque dollar de bénéfices, de ventes ou d’actifs.',
+    group: 'marche-secteur',
+    metrics: [
+      { label: 'Bénéfice prévu / prix' },
+      { label: 'Valeur comptable / prix' },
+      { label: 'Ventes / prix' },
+      { label: 'BAIIA / valeur d’entreprise' },
+    ],
+  },
+  momentum: {
+    idea: 'Les titres qui montent ont tendance à continuer de monter quelque temps.',
+    group: 'marche-secteur',
+    metrics: [
+      { label: 'Variation sur 12 mois' },
+      { label: 'Écart à la moyenne 200 jours' },
+    ],
+  },
+  croissance: {
+    idea: 'Des ventes et des profits qui augmentent plus vite que ceux des concurrents.',
+    group: 'marche-secteur',
+    metrics: [
+      { label: 'Croissance des revenus' },
+      { label: 'Croissance des bénéfices' },
+      { label: 'Croissance prévue du BPA' },
+    ],
+  },
+  taille: {
+    idea: 'Les plus petites entreprises de leur marché, souvent plus agiles et plus risquées.',
+    group: 'marche',
+    metrics: [{ label: 'Capitalisation boursière' }],
+  },
+}
+
 /** Seuil visé par niveau (mêmes valeurs que FACTOR_LEVELS de backend/src/invest_agents/monport.py). */
 export const FACTOR_TARGETS: Record<Exclude<Level, 0>, number> = { 2: 0.5, 1: 0.2, [-1]: -0.2, [-2]: -0.5 }
 
