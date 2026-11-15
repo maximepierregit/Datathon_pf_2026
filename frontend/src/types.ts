@@ -66,11 +66,36 @@ export interface Metrics {
   es95: number
 }
 
-/** Mise en garde du responsable des risques : un titre court, une ou deux phrases simples. */
+/**
+ * Une preuve chiffrée, calculée par le code et jamais par un modèle (`evidence.py` du backend). Le responsable des
+ * risques en cite une à trois sous chaque mise en garde.
+ */
+export interface Evidence {
+  /** Identifiant stable : `pire_baisse`, `crypto`, `inflation_ca`… */
+  id: string
+  label: string
+  value: number
+  unit: 'pct' | 'nombre' | 'ans'
+  source: string
+  /** Le repère auquel on compare : la baisse que tu acceptes, la limite par ligne, la moyenne sur 5 ans… */
+  limit?: { label: string; value: number }
+  /** Début et fin des données (AAAA-MM-JJ). */
+  period?: [string, string]
+  /** `pire_baisse` : valeur du portefeuille (base 100), par semaine. Macro : même unité que `value`, par mois. */
+  series?: { date: string; value: number }[]
+  /** `pire_baisse` : le sommet et le creux. */
+  span?: [string, string]
+}
+
+/** Mise en garde du responsable des risques : un titre court, une ou deux phrases simples, et ses preuves. */
 export interface RiskNote {
   title: string
   detail: string
   severity: 'medium' | 'high'
+  /** Absent d'un ancien backend. */
+  sources?: Evidence[]
+  /** Moteur d'exemple : identifiants des preuves, résolus par evidenceOf() à l'affichage. */
+  cites?: string[]
 }
 
 /** Identifiants des facteurs (préférences et tableau de bord). */
@@ -124,6 +149,11 @@ export interface ProfileCheck {
   issues: { title: string; detail: string }[]
   /** Questions de Pépite quand le profil est incohérent : les réponses du client lui reviennent à la construction. */
   questions?: string[]
+  /** Pépite : ce qui a le plus pesé sur ton niveau de risque. */
+  risk_explanation?: string
+  /** Calculés par le code (`assess`) : S de 0 à 1 et l'aversion A donnée aux gestionnaires. */
+  risk_position?: number
+  risk_aversion?: number
   [field: string]: unknown
 }
 

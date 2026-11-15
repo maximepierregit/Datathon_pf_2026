@@ -44,7 +44,7 @@ SESSION_TTL_SECONDS = 2 * 3600
 
 def review_of(check: PepiteCheck) -> PepiteReview:
     """Le texte et la cohérence d'une vérification (le profil de risque, lui, se recalcule)."""
-    return PepiteReview(**check.model_dump(include={"summary", "key_points", "flags", "coherent", "issues", "questions"}))
+    return PepiteReview(**check.model_dump(include={"summary", "key_points", "flags", "coherent", "issues", "questions", "risk_explanation"}))
 
 
 @dataclass

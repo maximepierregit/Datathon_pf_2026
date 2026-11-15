@@ -1,10 +1,16 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Pepite } from '../../components/Pepite'
-import type { Portfolio, RiskNote } from '../../types'
+import { evidenceOf } from '../../lib/engine'
+import { useApp } from '../../store'
+import type { Evidence, Portfolio, RiskNote } from '../../types'
+import { EvidenceCard } from './Evidence'
 
 /** Les mises en garde du responsable des risques : colonne de gauche sur grand écran, au-dessus du portefeuille sinon. */
 export function RiskNotes({ p }: { p: Portfolio }) {
   const notes = p.warnings
+  const profile = useApp((s) => s.profile)
+  // Moteur d'exemple : les preuves citées sont calculées ici, sur le portefeuille affiché.
+  const example = useMemo(() => (notes.some((n) => !n.sources && n.cites) ? evidenceOf(p, profile) : {}), [notes, p, profile])
   return (
     <section aria-label="Le responsable des risques" className="flex flex-col gap-3">
       <div className="flex items-center gap-2.5">
@@ -17,7 +23,7 @@ export function RiskNotes({ p }: { p: Portfolio }) {
       {notes.length ? (
         <ul className="m-0 grid list-none gap-2.5 p-0 sm:grid-cols-2 xl:grid-cols-1">
           {notes.map((n) => (
-            <Note key={n.title} note={n} />
+            <Note key={n.title} note={n} sources={n.sources ?? (n.cites ?? []).map((id) => example[id]).filter(Boolean)} />
           ))}
         </ul>
       ) : (
@@ -34,8 +40,9 @@ export function RiskNotes({ p }: { p: Portfolio }) {
 
 const LONG = 140
 
-function Note({ note }: { note: RiskNote }) {
+function Note({ note, sources }: { note: RiskNote; sources: Evidence[] }) {
   const [open, setOpen] = useState(false)
+  const [proofs, setProofs] = useState(false)
   const high = note.severity === 'high'
   const long = note.detail.length > LONG
   return (
@@ -52,6 +59,28 @@ function Note({ note }: { note: RiskNote }) {
         <button onClick={() => setOpen((o) => !o)} aria-expanded={open} className="self-start text-[13px] font-medium text-blue hover:text-blue-dark">
           {open ? 'Réduire' : 'Lire la suite'}
         </button>
+      )}
+      {sources.length > 0 && (
+        <>
+          <button
+            onClick={() => setProofs((o) => !o)}
+            aria-expanded={proofs}
+            className="group -ml-1 flex items-center gap-1.5 self-start rounded-full py-0.5 pl-1 pr-2.5 text-[13px] font-medium text-blue hover:bg-sky hover:text-blue-dark"
+          >
+            <Pepite pose="binoculars" size={24} className={`transition-transform motion-safe:group-hover:-rotate-6 ${proofs ? '-rotate-6' : ''}`} />
+            {proofs ? 'Cacher les preuves' : `Voir les preuves (${sources.length})`}
+          </button>
+          {proofs && (
+            <div className="fade-in flex flex-col gap-2">
+              <p className="m-0 text-xs italic leading-4 text-ink-soft">Ces chiffres viennent des données, calculés par le code. Aucun n’est écrit par un agent.</p>
+              <ul className="m-0 flex list-none flex-col gap-2 p-0">
+                {sources.map((e) => (
+                  <EvidenceCard key={e.id} e={e} />
+                ))}
+              </ul>
+            </div>
+          )}
+        </>
       )}
     </li>
   )

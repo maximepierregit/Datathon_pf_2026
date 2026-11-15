@@ -26,6 +26,7 @@ from ..monport import (
     direct_types,
     front,
     pepite as pepite_event,
+    risk_breakdown,
     status,
     tolerance,
 )
@@ -86,6 +87,20 @@ Les autres outils: `adjust_risk_position`, `set_coherence`, `build_portfolios`, 
 `ask_portfolio_manager`, `ask_risk_manager`, `ask_judge`.
 
 {legend}
+
+EXPLIQUER LE RISQUE
+Le client peut te demander comment tu as mesuré son niveau de risque et ce qui va se passer ensuite. Explique avec
+`calcul_pas_a_pas` de `compute_risk_profile`, sans rien recalculer:
+- Capacité C (ce qu'il peut se permettre: horizon, âge) et tolérance T (ce qu'il est prêt à vivre: réaction à une
+  baisse, objectif, aisance), entre 0 et 1. Sa position S en fait la moyenne, mais la tolérance ne dépasse jamais la
+  capacité de plus de 0,125: on ne prend pas plus de risque que sa situation le permet.
+- L'aversion au risque A (25 très prudent … 1 très audacieux) vient de S. Les gestionnaires cherchent le meilleur
+  compromis « rendement moins A/2 fois le risque »: plus A est grand, plus chaque point de risque doit rapporter.
+- Ses choix (`tes_choix`): un pourcentage devient une règle dure à ± 2 points que les gestionnaires ne peuvent pas
+  contourner; une exclusion vaut 0 dans les 3 portefeuilles. Ce qu'il a laissé neutre, l'optimiseur le répartit
+  lui-même avec A, sous les garde-fous du profil (part d'obligations minimale, limite par ligne, plafond de variations).
+- La suite: ce que reçoit chaque gestionnaire, puis les juges et le responsable des risques.
+Dis quelle réponse a le plus pesé. Pas de formule à l'écran sauf s'il la demande.
 
 PROFIL INCOHÉRENT OU COHÉRENT
 Le profil est incohérent quand les préférences contredisent nettement la tolérance au risque, l'horizon ou l'objectif.
@@ -164,6 +179,7 @@ def _risk(session: Session) -> dict:
         "poids_max_par_titre_direct": c.suggested_max_position_weight,
         "plancher_obligations_du_profil": BOND_FLOOR.get(c.risk_label, 0.0),
         "ajustement_en_crans": session.adjust_steps,
+        "calcul_pas_a_pas": risk_breakdown(session.profile, session.adjust_steps, session.form.constraints),
     }
 
 
@@ -397,6 +413,9 @@ CHECK_TASK = """Vérifie ce questionnaire.
 3. Si le profil est incohérent, écris dans `questions` une à trois questions précises pour le client, qui l'aident à
    clarifier ce qu'il veut vraiment. Sinon, `questions` reste vide.
 4. `summary` et `key_points`: ce que tu retiens du profil.
+5. `risk_explanation`: 2 ou 3 phrases tirées de `calcul_pas_a_pas`, sur ce qui a le plus pesé sur son niveau de risque
+   et ce que ça change pour ses gestionnaires. Par exemple: « Ton long horizon te permet du risque, mais ta réaction à
+   une baisse me retient: tes gestionnaires chercheront un rendement solide sans grosses secousses. »
 Tout texte destiné au client est tutoyé, sans jargon.
 
 """

@@ -5,6 +5,7 @@ import { Pepite, PepiteSays } from '../components/Pepite'
 import { Arrow, Button, Card, Separator } from '../components/ui'
 import { riskScore } from '../lib/engine'
 import { useApp } from '../store'
+import { RiskNotebook } from './RiskNotebook'
 
 /**
  * Pépite relit le questionnaire avant tout envoi aux gestionnaires.
@@ -75,6 +76,7 @@ export default function Verification() {
       ) : check.coherent ? (
         <>
           <PepiteSays pose="thumbsup">{check.summary}</PepiteSays>
+          <RiskNotebook profile={profile} constraints={constraints} check={check} />
           <div className="flex flex-col gap-2">
             <label htmlFor="adjustment" className="font-semibold text-navy">
               Un ajustement avant que j’envoie tes consignes aux gestionnaires? <span className="font-normal text-ink-soft">(facultatif)</span>
@@ -104,6 +106,7 @@ export default function Verification() {
       ) : (
         <>
           <PepiteSays pose="question">{check.summary}</PepiteSays>
+          <RiskNotebook profile={profile} constraints={constraints} check={check} />
           <ul className="m-0 flex list-none flex-col gap-3 p-0">
             {check.issues.map((issue) => (
               <li key={issue.title + issue.detail}>
