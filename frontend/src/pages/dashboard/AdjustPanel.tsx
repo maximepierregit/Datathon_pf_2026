@@ -137,9 +137,11 @@ export function AdjustPanel({ p, open, onClose }: { p: Portfolio; open: boolean;
     setMsgs((m) => m.map((x, j) => (j === i ? { ...x, status: apply ? 'applied' : 'dismissed' } : x)))
   }
 
+  // Profil cohérent : le portefeuille s'appelle déjà « Ton portefeuille ».
+  const which = /^ton portefeuille$/i.test(p.name) ? '<strong>ton portefeuille</strong>' : `le portefeuille <strong>${esc(p.name)}</strong>`
   const greeting = live
-    ? `<p>Salut! Je connais ton portefeuille <strong>${esc(p.name)}</strong> sur le bout des doigts.</p><ul><li>Pose-moi une question dessus</li><li>Demande-moi un changement</li><li>Fais-toi expliquer une notion de finance</li></ul>`
-    : `<p>Que veux-tu changer dans le portefeuille <strong>${esc(p.name)}</strong>? Je te montre l’effet avant d’appliquer quoi que ce soit.</p><attention>Mode exemple : mes agents ne sont pas joignables. Je réponds avec quelques règles simples (plus de tech, pas de pétrole, plus de crypto, moins de risque).</attention>`
+    ? `<p>Salut! Je connais ${which} sur le bout des doigts.</p><ul><li>Pose-moi une question dessus</li><li>Demande-moi un changement</li><li>Fais-toi expliquer une notion de finance</li></ul>`
+    : `<p>Que veux-tu changer dans ${which}? Je te montre l’effet avant d’appliquer quoi que ce soit.</p><attention>Mode exemple : mes agents ne sont pas joignables. Je réponds avec quelques règles simples (plus de tech, pas de pétrole, plus de crypto, moins de risque).</attention>`
 
   return (
     <div

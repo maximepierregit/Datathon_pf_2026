@@ -11,6 +11,12 @@ INSTANCE_TYPE="${INSTANCE_TYPE:-t3.small}"
 
 log() { echo "› $*" >&2; }
 
+# Sans identifiants valides, chaque appel AWS échoue en silence : la clé passerait pour absente.
+aws sts get-caller-identity >/dev/null 2>&1 || {
+  echo "Identifiants AWS absents ou expirés : recopie le bloc export AWS_ACCESS_KEY_ID=… de la page de l'événement." >&2
+  exit 1
+}
+
 # Clé SSH : la partie privée ne vit que sur cette machine.
 if ! aws ec2 describe-key-pairs --key-names "$NAME" >/dev/null 2>&1; then
   [ -e "$KEY_PATH" ] && { echo "$KEY_PATH existe mais pas la clé AWS $NAME : supprime l'un ou l'autre." >&2; exit 1; }
