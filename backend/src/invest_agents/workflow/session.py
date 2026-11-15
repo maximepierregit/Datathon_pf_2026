@@ -16,7 +16,7 @@ from typing import Optional
 
 from ..agents.base import AgentHandle
 from ..agents.portfolio_manager import PMWorker
-from ..data import Market
+from ..market import Market
 from ..events import EventBus
 from ..monport import SLOTS, Translator, assess
 from ..schemas import (

@@ -15,11 +15,69 @@ from typing import Optional
 
 from strands import tool
 
-from .config import get_settings
-from .constraints import evaluate, excluded_mask
-from .data import Market
-from .optimizer import Objective, OptimizationResult, optimize
+from .runtime import get_runtime_settings
+from .catalog import evaluate, excluded_mask
+from .macro import get_macro, history, latest_snapshot
+from .market import Market
+from .allocator import Objective, OptimizationResult, optimize
 from .schemas import Constraint
+
+
+# --------------------------------------------------------------------------- #
+# Contexte macro (gestionnaires, agents Risque, juge)
+# --------------------------------------------------------------------------- #
+MACRO_PROMPT = """CONTEXTE MACRO (États-Unis et Canada)
+`get_latest_macro_snapshot` donne la dernière valeur de chaque série (taux 10 ans et 2 ans, écart 10 ans-2 ans, taux
+directeur, inflation sur un an, chômage) avec ses z-scores. `get_macro_history` donne l'historique, pour comparer le
+régime actuel à des régimes passés. Commence par le premier; n'appelle le second que s'il éclaire ta décision.
+- Précise la fenêtre de chaque z-score cité: `z_5y` (5 ans glissants) ou `z_full` (tout l'historique).
+- Tiens compte de `days_stale` et de `ref_period`: l'inflation et le chômage décrivent un mois passé.
+- Le contexte macro éclaire ton analyse. Il ne change ni les contraintes du client ni les chiffres calculés par le code,
+  et il ne prédit rien: présente une direction possible comme une hypothèse.
+- Si l'outil retourne une erreur, poursuis sans contexte macro et ne l'invente pas."""
+
+
+def make_macro_tools() -> list:
+    """Outils en lecture seule sur la table macro. Une source indisponible donne une erreur lisible, pas un plantage."""
+
+    @tool
+    def get_latest_macro_snapshot() -> dict:
+        """Dernière valeur de chaque pays (US, CA) et indicateur (yield_10y, yield_2y, spread_10y_2y, policy_rate,
+        inflation_yoy, unemployment_rate), en %. Chaque ligne donne metric_value, z_5y (z-score sur 5 ans glissants),
+        z_full (z-score sur tout l'historique), history_start_date, ref_period (période décrite par la valeur) et
+        days_stale (jours entre cette ligne et la date la plus récente du fichier). À appeler en premier pour situer
+        le régime macro actuel."""
+        try:
+            return latest_snapshot(get_macro())
+        except Exception as exc:  # noqa: BLE001  (S3 inaccessible, fichier absent...)
+            return {"error": f"Contexte macro indisponible: {exc}"}
+
+    @tool
+    def get_macro_history(
+        country: str = "",
+        metric: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        frequency: str = "monthly",
+        max_rows: int = 600,
+    ) -> dict:
+        """Historique de la table macro, pour comparer des régimes passés avec le présent.
+
+        Args:
+            country: "US" ou "CA". Vide pour les deux.
+            metric: yield_10y, yield_2y, spread_10y_2y, policy_rate, inflation_yoy ou unemployment_rate. Vide pour tous.
+            start_date: Borne inférieure incluse, AAAA-MM-JJ. Vide pour le début des données.
+            end_date: Borne supérieure incluse, AAAA-MM-JJ. Vide pour la fin des données.
+            frequency: "monthly" (dernière valeur de chaque mois, recommandé) ou "native" (quotidien pour les taux,
+                mensuel pour l'inflation et le chômage).
+            max_rows: Nombre maximal de lignes (au plus 1000). Au-delà, les lignes les plus récentes sont retournées.
+        """
+        try:
+            return history(get_macro(), country, metric, start_date, end_date, frequency, max_rows)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"Historique macro indisponible: {exc}"}
+
+    return [get_latest_macro_snapshot, get_macro_history]
 
 
 # --------------------------------------------------------------------------- #
@@ -143,14 +201,14 @@ def make_pm_tools(market: Market, state: PMState) -> list:
             }
         return out
 
-    return [describe_universe, screen_assets, optimize_portfolio]
+    return [describe_universe, screen_assets, optimize_portfolio, *make_macro_tools()]
 
 
 def fallback_selection(market: Market, constraints: list[Constraint], objective: Objective) -> list[str]:
     """Sélection de repli si le PM n'a produit aucun portefeuille valide (garde le pipeline en marche)."""
     hard = [c for c in constraints if c.hard]
     a = market.assets[~excluded_mask(market, hard)]
-    n = min(15, get_settings().max_assets_per_portfolio)
+    n = min(15, get_runtime_settings().max_assets_per_portfolio)
     key, asc = ("ann_vol", True) if objective == "min_volatility" else ("sharpe", False)
     return a.sort_values(key, ascending=asc).head(n).index.tolist()
 
@@ -178,4 +236,4 @@ def make_judge_tools(market: Market, weights: dict[str, float], constraints: lis
             ],
         }
 
-    return [check_portfolio_constraints]
+    return [check_portfolio_constraints, *make_macro_tools()]

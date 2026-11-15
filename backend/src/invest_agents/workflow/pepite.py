@@ -11,10 +11,11 @@ from __future__ import annotations
 import json
 from typing import Optional
 
+from pydantic import ValidationError
 from strands import tool
 
 from ..agents.base import AgentHandle
-from ..constraints import catalog_prompt, describe
+from ..catalog import catalog_prompt, describe
 from ..events import EventBus
 from ..monport import (
     BOND_FLOOR,
@@ -237,6 +238,11 @@ def make_pepite_tools(session: Session) -> list:
         """
         if not (session.risk_computed and session.facts_read):
             return {"error": "Appelle d'abord compute_risk_profile et get_coherence_facts."}
+        try:  # Strands transmet les objets imbriqués en JSON brut: le code les valide lui-même
+            profiles = [ConstraintProfile.model_validate(p) for p in profiles]
+        except ValidationError as exc:
+            return {"error": "Profils invalides: " + "; ".join(
+                f"{'.'.join(str(x) for x in e['loc'])}: {e['msg']}" for e in exc.errors()[:8])}
         if sorted(p.slot for p in profiles) != sorted(SLOTS):
             return {"error": "Il faut exactement 3 profils: prudent, equilibre et conviction, un de chaque."}
         if session.portfolios and session.rebuilds_left <= 0:
@@ -270,6 +276,8 @@ def make_pepite_tools(session: Session) -> list:
         if rebuild:
             if session.rebuilds_left <= 0:
                 return {"error": "Limite de relances atteinte: garde les portefeuilles actuels."}
+            if session.judged_round != session.build_round:
+                return {"error": "Fais d'abord juger les portefeuilles actuels avec judge_portfolios."}
             session.rebuilds_left -= 1
             _say(session, "Je demande de reconstruire : " + ", ".join(session.portfolios[s].mandate for s in rebuild))
         else:
@@ -286,8 +294,9 @@ def make_pepite_tools(session: Session) -> list:
         réoptimisation. Retourne la conformité, le gagnant (profil cohérent) et ce qu'il faut reconstruire."""
         if not all(s in session.portfolios for s in SLOTS) or not session.built():
             return {"error": "Construis d'abord les portefeuilles avec build_portfolios."}
-        _say(session, "Je demande au juge de comparer les portefeuilles…")
-        await judge_round(session)
+        if session.judged_round != session.build_round:  # sinon le juge a déjà parlé sur ces portefeuilles
+            _say(session, "Je demande au juge de comparer les portefeuilles…")
+            await judge_round(session)
         return {
             "conformite": {s: {"conforme": v.compliant, "limites_non_respectees": v.hard_violations,
                                "note_du_juge": v.fit_score} for s, v in session.verdicts.items()},
@@ -401,6 +410,7 @@ def _snapshot(session: Session) -> dict:
         "gagnant": session.portfolios[session.winner].mandate if session.winner else None,
         "portefeuilles": {s: _summary(session, s) for s in SLOTS if s in session.portfolios},
         "relances_restantes": session.rebuilds_left,
+        "justification_du_juge": session.justification,
     }
 
 

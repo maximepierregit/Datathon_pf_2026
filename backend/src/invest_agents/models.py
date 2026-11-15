@@ -7,7 +7,7 @@ from typing import Literal, Optional
 from botocore.config import Config
 from strands.models import BedrockModel
 
-from .config import get_settings
+from .runtime import get_runtime_settings
 
 
 def build_model(kind: Literal["strong", "fast"] = "strong", *, max_tokens: Optional[int] = None) -> BedrockModel:
@@ -17,7 +17,7 @@ def build_model(kind: Literal["strong", "fast"] = "strong", *, max_tokens: Optio
     (low, medium, high, xhigh, max) dans `output_config.effort`, et non dans `thinking`. ENABLE_THINKING=true
     demande en plus le résumé de la réflexion, que le frontend affiche (sans lui, les blocs arrivent vides).
     """
-    s = get_settings()
+    s = get_runtime_settings()
     fields: dict = {"output_config": {"effort": s.effort}}
     if s.thinking:
         fields["thinking"] = {"type": "adaptive", "display": "summarized"}

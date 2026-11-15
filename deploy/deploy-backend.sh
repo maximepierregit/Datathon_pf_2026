@@ -24,9 +24,9 @@ fi
 SSH_OPTS="-i $KEY_PATH -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$HOME/.ssh/bas-de-laine-front.known_hosts -o ConnectTimeout=10"
 remote() { ssh $SSH_OPTS "ec2-user@$HOST" "$@"; }
 
-# Le dataset est lu depuis S3 (DATASET_PATH dans monport-backend.service) : rien à envoyer, on vérifie seulement
+# Le dataset est lu depuis S3 (MONPORT_UNIVERSE_PARQUET_URI dans monport-backend.service) : rien à envoyer, on vérifie seulement
 # qu'il est publié. Pour le mettre à jour : python data-prep/build_universe.py --upload s3://monport-datasets-381491955506
-DATASET_URI=$(sed -n 's/^Environment=DATASET_PATH=//p' "$ROOT/deploy/monport-backend.service")
+DATASET_URI=$(sed -n 's/^Environment=MONPORT_UNIVERSE_PARQUET_URI=//p' "$ROOT/deploy/monport-backend.service")
 if ! aws s3api head-object --bucket "$(cut -d/ -f3 <<<"$DATASET_URI")" --key "$(cut -d/ -f4- <<<"$DATASET_URI")" >/dev/null; then
   echo "Dataset introuvable ou illisible : $DATASET_URI" >&2
   exit 1

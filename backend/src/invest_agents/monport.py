@@ -15,11 +15,11 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Iterable, Optional
 
 from pydantic import ValidationError
 
-from .config import get_settings
-from .constraints import DIMENSION_COLUMN, detect_conflicts, excluded_mask, validate_all
-from .data import Market
+from .runtime import get_runtime_settings
+from .catalog import DIMENSION_COLUMN, detect_conflicts, excluded_mask, validate_all
+from .market import Market
 from .events import EventBus
-from .optimizer import optimize
+from .allocator import optimize
 from .schemas import (
     CoherenceIssue,
     Constraint,
@@ -435,7 +435,7 @@ def ensure_feasible(market: Market, constraints: list[Constraint]) -> tuple[list
         if c.type.value.startswith("min_") and c.target and column:
             group = eligible[eligible[column].str.lower() == c.target.lower()]
             picks += group.sort_values("sharpe", ascending=False).index[:3].tolist()
-    picks = list(dict.fromkeys(picks))[: get_settings().max_assets_per_portfolio]
+    picks = list(dict.fromkeys(picks))[: get_runtime_settings().max_assets_per_portfolio]
     others = [c for c in constraints if not (c.hard and c.type is T.MAX_VOLATILITY)]
     lowest = optimize(market, picks, "min_volatility", others)
     if not lowest.ok or not lowest.metrics or lowest.metrics.volatility <= min(caps):
@@ -585,6 +585,8 @@ TOOL_TEXT = {
     "describe_universe": "tour d’horizon des placements",
     "screen_assets": "recherche de placements",
     "optimize_portfolio": "calcul des poids",
+    "get_latest_macro_snapshot": "lecture du contexte économique",
+    "get_macro_history": "comparaison avec des périodes passées",
 }
 
 
