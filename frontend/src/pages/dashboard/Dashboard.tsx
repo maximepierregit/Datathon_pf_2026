@@ -87,7 +87,7 @@ export default function Dashboard() {
           </div>
 
           {p.warnings.map((w) => (
-            <Alert key={w} title="Le Vérificateur te prévient">
+            <Alert key={w} title="Le responsable des risques te prévient">
               {w}
             </Alert>
           ))}

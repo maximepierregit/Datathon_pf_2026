@@ -5,7 +5,7 @@ import { useApp } from '../store'
 
 const HOW = [
   { title: 'Parle-nous de toi', text: 'Ton profil, puis ce que tu veux (ou pas) dans ton portefeuille.' },
-  { title: 'Trois agents s’y mettent', text: 'L’Éclaireur, le Compositeur et le Vérificateur construisent trois propositions.' },
+  { title: 'Une équipe d’agents s’y met', text: 'Trois gestionnaires construisent tes portefeuilles, trois juges les vérifient, un responsable des risques les relit.' },
   { title: 'Tu choisis', text: 'Compare, ajuste avec Pépite, garde ce qui te ressemble.' },
 ]
 
@@ -20,7 +20,7 @@ export default function Home() {
             <h1 className="text-[36px] font-semibold leading-10 text-navy md:text-[50px] md:leading-[54px]">Construisons un portefeuille qui te ressemble.</h1>
             <Separator />
             <p className="m-0 max-w-[560px] text-lg text-ink-soft">
-              Quelques questions, trois agents IA, et trois propositions de portefeuille. Tu gardes toujours le dernier mot.
+              Quelques questions, une équipe d’agents IA, et trois propositions de portefeuille. Tu gardes toujours le dernier mot.
             </p>
           </div>
           <Pepite pose="wave" size={240} className="bob shrink-0" alt="Pépite, une petite montagne enneigée avec une écharpe rouge, te fait coucou" />

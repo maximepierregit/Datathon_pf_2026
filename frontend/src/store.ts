@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
-import { buildAll, emptyConstraints, riskScore } from './lib/engine'
-import type { Constraints, ConstraintBlock, Contribution, DashboardLevel, Level, Portfolio, PortfolioId, Profile, Vehicles } from './types'
+import { buildAll, emptyConstraints, PORTFOLIO_IDS, PORTFOLIO_META, riskScore } from './lib/engine'
+import type { BackendPortfolio, Constraints, ConstraintBlock, Contribution, DashboardLevel, Level, Portfolio, PortfolioId, Profile, Vehicles } from './types'
 
 export const DEFAULT_PROFILE: Profile = {
   age: 35,
@@ -36,6 +36,8 @@ export interface State {
   clearConstraints: () => void
   acceptDisclaimer: () => void
   build: () => void
+  /** Portefeuilles reçus du backend ; un portefeuille manquant vient du moteur d'exemple. */
+  setPortfolios: (received: Partial<Record<PortfolioId, BackendPortfolio>>) => void
   /** Portefeuille tel qu'il serait avec cet ajustement en plus, sans l'appliquer. */
   previewAdjustment: (a: Omit<AppliedAdjustment, 'id' | 'label'>) => Portfolio
   applyAdjustment: (a: Omit<AppliedAdjustment, 'id'>) => void
@@ -85,6 +87,15 @@ export const useApp = create<State>()(
       clearConstraints: () => set({ constraints: emptyConstraints() }),
       acceptDisclaimer: () => set({ disclaimerSeen: true }),
       build: () => set((s) => ({ adjustments: [], portfolios: rebuild(riskScore(s.profile), s.constraints, []) })),
+      setPortfolios: (received) =>
+        set((s) => {
+          const fallback = rebuild(riskScore(s.profile), s.constraints, [])
+          const entries = PORTFOLIO_IDS.map((id) => {
+            const p = received[id]
+            return [id, p ? { ...p, ...PORTFOLIO_META[id] } : fallback[id]] as const
+          })
+          return { adjustments: [], portfolios: Object.fromEntries(entries) as Record<PortfolioId, Portfolio> }
+        }),
       previewAdjustment: (a) => {
         const s = get()
         return rebuild(riskScore(s.profile), s.constraints, [...s.adjustments, { ...a, id: 'preview', label: '' }])[a.portfolio]

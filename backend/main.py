@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from bedrock_agentcore import BedrockAgentCoreApp  # noqa: E402
 
+from invest_agents.monport import stream_monport  # noqa: E402
 from invest_agents.orchestrator import stream_pipeline  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -29,7 +30,9 @@ async def invoke(payload: dict):
     if not isinstance(payload, dict):
         yield {"type": "error", "code": "invalid_request", "message": "Le corps de la requête doit être un objet JSON."}
         return
-    async for event in stream_pipeline(payload):
+    # « monport »: le frontend MonPort envoie son profil et attend ses propres événements (voir monport.py).
+    stream = stream_monport(payload) if payload.get("mode") == "monport" else stream_pipeline(payload)
+    async for event in stream:
         yield event
 
 
