@@ -1,0 +1,12 @@
+{
+  "name": "monport-proxy",
+  "private": true,
+  "type": "module",
+  "description": "Proxy de streaming Lambda Function URL vers AgentCore Runtime",
+  "scripts": {
+    "test": "node --test index.test.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-agentcore": "^3.900.0"
+  }
+}
