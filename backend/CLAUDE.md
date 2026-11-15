@@ -137,7 +137,7 @@ Vérificateur 3 Juges ▶ rerun + nouvel essai des non conformes (MAX_PM_RETRIES
 - Rendement espéré: `(1 − MU_SHRINK) × historique + MU_SHRINK × hypothèse de la classe` (0,5 par défaut). Le dataset réel couvre 2026-01-01 → 2026-11-10: la moyenne historique seule est trop bruitée.
 - Covariance annualisée, projetée semi-définie positive. `np.diag()` d'un DataFrame est en lecture seule: copier avant `fill_diagonal`.
 - Le résidu d'arrondi est placé là où il reste de la marge sous le plafond.
-- `DATASET_PATH`: défaut `data/universe.parquet`, accepte `s3://`. Le dataset réel vient de `data-prep/build_universe.py` (805 tickers, jours ouvrables depuis 2021-01-01, chaque actif commence à sa première cotation). `make_sample_dataset.py` génère un jeu synthétique de secours.
+- `DATASET_PATH`: défaut `data/universe.parquet`, accepte `s3://`. Référence: `s3://monport-datasets-381491955506/universe/universe.parquet` (bucket privé, versionné; cache `/tmp` nommé d'après le VersionId). Publication: `data-prep/build_universe.py --upload s3://monport-datasets-381491955506 [--upload-only]`. Le dataset réel vient de `data-prep/build_universe.py` (805 tickers, jours ouvrables depuis 2021-01-01, chaque actif commence à sa première cotation). `make_sample_dataset.py` génère un jeu synthétique de secours.
 
 ## Modèles Bedrock
 
@@ -149,7 +149,7 @@ Vérificateur 3 Juges ▶ rerun + nouvel essai des non conformes (MAX_PM_RETRIES
 
 - Déploiement par code (zip), **arm64 uniquement**, Python 3.13, point d'entrée `main.py`, réseau `PUBLIC`.
 - `main.py` ajoute `src/` au `sys.path`: ne pas déplacer le paquet sans adapter ce chemin.
-- Rôle d'exécution: `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream`, `s3:GetObject` si dataset sur S3.
+- Rôle d'exécution: `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream`, et la politique gérée `MonPortDatasetRead` (`s3:GetObject` sur `universe/*`). Le zip n'embarque le dataset qu'avec `EMBED_DATASET=1`.
 - Pas encore déployé. Restent à écrire: le relais sur l'EC2 (`location /api/` déjà prévu dans `deploy/nginx.conf`, avec `proxy_buffering off`) et le branchement de `frontend/src/api.ts`.
 
 ## Ce que le frontend doit encore faire

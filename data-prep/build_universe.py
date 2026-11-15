@@ -15,6 +15,8 @@ Usage (depuis la racine du dépôt):
     pip install -r data-prep/requirements.txt
     python data-prep/build_universe.py                 # réutilise le cache raw/ s'il existe
     python data-prep/build_universe.py --refresh all   # tout retélécharger (ou: catalog, prices, fx)
+    python data-prep/build_universe.py --upload s3://monport-datasets-381491955506                # construire puis publier
+    python data-prep/build_universe.py --upload s3://monport-datasets-381491955506 --upload-only  # publier l'existant
 """
 
 from __future__ import annotations
@@ -61,7 +63,8 @@ ETF_TICKERS = [
     "XAW.TO",   # remplace DAGL.TO (lancé 2026-07)
     "IOO", "EEM", "EDIV", "BKF",
     # Actions - Thèmes (AIQ couvre aussi AIBF; NICO retiré: tabac exclu, PM/MO restent dans les actions)
-    "XLK", "VGT", "DTCR", "AIQ", "ITA", "SHLD", "ESGU", "XESG.TO", "NSGE.TO",
+    # NSGE.TO retiré: peu transigé, cours inchangé 48 % des jours (ESGU et XESG.TO couvrent l'ESG)
+    "XLK", "VGT", "DTCR", "AIQ", "ITA", "SHLD", "ESGU", "XESG.TO",
     "ICLN", "TAN", "AQWA", "BETZ", "MSOS", "BOTZ", "ROBO",
     "XT",       # remplace NTHM.TO (lancé 2026-06)
     # Actions - Secteurs
@@ -79,7 +82,12 @@ CRYPTO_TICKERS = ["BTC", "ETH"]
 # Changements de ticker: l'historique yfinance a migré vers le nouveau symbole (ancien -> nouveau).
 SYMBOL_RENAMES = {"TXG.TO": "TXR.TO"}  # Torex Gold -> Torex Resources, 2026-11-03
 # Historique inutilisable avant cette date (cours pré-fusion PSA à une autre échelle: +96 % le 2021-01-18).
-HISTORY_START = {"STLAP.PA": "2021-01-18"}
+HISTORY_START = {
+    "STLAP.PA": "2021-01-18",
+    # Smurfit WestRock cote au NYSE depuis le 2024-07-08 (fusion); avant, yfinance porte une série figée
+    # (cours inchangé 33 à 59 % des jours).
+    "SW": "2024-07-08",
+}
 VALID_EQUITY_MKT_CAPS = ["Mid Cap", "Large Cap", "Mega Cap"]
 
 # Libellés de themes.csv -> identifiants de thématique du backend (classify.THEMES).
@@ -94,7 +102,7 @@ THEME_IDS = {
     "energie fossile": "fossiles", "fossiles": "fossiles",
 }
 
-COLUMNS = ["date", "symbol", "total_return_cad", "close_price_loc", "fx_rate_to_cad", "close_price_cad", "name", "sector", "industry", "country", "currency",
+COLUMNS = ["date", "symbol", "total_return_cad", "total_return_cad_fwd_1d", "close_price_loc", "fx_rate_to_cad", "close_price_cad", "name", "sector", "industry", "country", "currency",
            "asset_class", "instrument_type", "market", "category_group", "category", "market_cap",
            "theme", "is_included_universe"]
 
@@ -150,6 +158,23 @@ def _fd_select(db) -> pd.DataFrame:
 
     kwargs = {"exclude_exchanges": False} if "exclude_exchanges" in inspect.signature(db.select).parameters else {}
     return db.select(**kwargs).reset_index()
+
+
+ETF_ASSET_CLASSES = {"Fixed Income": "Fixed Income", "Real Estate": "Real Estate", "Commodities": "Commodities",
+                     "Alternative": "Alternative"}
+
+
+def normalize_asset_class(cat: pd.DataFrame) -> pd.Series:
+    """Classe d'actifs brute homogène: Equity, Fixed Income, Multi-Asset, Real Estate, Commodities, Alternative.
+
+    Le notebook reprend le `category_group` des FNB, qui mélange classes d'actifs et secteurs (« Energy »,
+    « Information Technology ») et écrit « Equities » au lieu de « Equity ». Le détail reste dans
+    `category_group` / `category`."""
+    etf = cat["instrument_type"] == "ETF"
+    out = cat["asset_class"].copy()
+    out[etf] = cat.loc[etf, "category_group"].map(ETF_ASSET_CLASSES).fillna("Equity")
+    out[etf & (cat["category"] == "Allocation")] = "Multi-Asset"  # AOK, AOM, AOR, AOA: actions + obligations
+    return out
 
 
 def build_catalog() -> pd.DataFrame:
@@ -286,10 +311,12 @@ def compute_returns(prices: pd.DataFrame, catalog: pd.DataFrame, fx: pd.DataFram
     df["close_price_loc"] = df.groupby("symbol")["close_price_loc"].ffill()
     df["close_price_cad"] = df["close_price_loc"] * df["fx_rate_to_cad"]
     df["total_return_cad"] = df.groupby("symbol")["close_price_cad"].pct_change()
+    df["total_return_cad_fwd_1d"] = df.groupby("symbol")["total_return_cad"].shift(-1)  # NaN au dernier jour
     # Rodage: les cours avant START_DATE ne servent qu'au premier rendement.
     df = df.dropna(subset=["total_return_cad"])
     df = df[df["date"] >= pd.Timestamp(START_DATE)]
-    return df[["date", "symbol", "total_return_cad", "close_price_loc", "fx_rate_to_cad", "close_price_cad"]]
+    return df[["date", "symbol", "total_return_cad", "total_return_cad_fwd_1d",
+               "close_price_loc", "fx_rate_to_cad", "close_price_cad"]]
 
 
 def _cached(name: str, refresh: set[str], build) -> pd.DataFrame:
@@ -304,6 +331,30 @@ def _cached(name: str, refresh: set[str], build) -> pd.DataFrame:
     return df
 
 
+def upload(dest: str, universe: Path) -> None:
+    """Publie le dataset dans S3, un dossier par table (lisible tel quel par Athena/Glue au besoin):
+
+    s3://bucket[/prefixe]/universe/universe.parquet   <- lu par le backend (DATASET_PATH)
+    s3://bucket[/prefixe]/raw/<table>/<table>.parquet <- couches brutes, pour la traçabilité
+    """
+    import boto3
+
+    if not dest.startswith("s3://"):
+        raise SystemExit(f"--upload attend une URI s3://bucket[/prefixe], reçu: {dest}")
+    bucket, _, prefix = dest[len("s3://"):].rstrip("/").partition("/")
+    prefix = f"{prefix}/" if prefix else ""
+    files = {f"{prefix}universe/universe.parquet": universe}
+    files |= {f"{prefix}raw/{p.stem}/{p.name}": p for p in sorted(RAW.glob("*.parquet"))}
+    s3 = boto3.client("s3")
+    for key, path in files.items():
+        if not path.exists():
+            raise SystemExit(f"Fichier absent: {path}")
+        s3.upload_file(str(path), bucket, key, ExtraArgs={"ContentType": "application/vnd.apache.parquet"})
+        version = s3.head_object(Bucket=bucket, Key=key).get("VersionId")
+        print(f"[upload] {path.name} -> s3://{bucket}/{key} (version {version})")
+    print(f"\nDATASET_PATH=s3://{bucket}/{prefix}universe/universe.parquet")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--refresh", nargs="*", default=[], choices=["all", "catalog", "prices", "fx"])
@@ -311,7 +362,16 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--no-pin", action="store_true",
                     help="garder les symboles du catalogue absents de themes.csv (sans thématique)")
+    ap.add_argument("--upload", metavar="S3_URI",
+                    help="publier le résultat dans S3 après la construction, ex. s3://monport-datasets-381491955506")
+    ap.add_argument("--upload-only", action="store_true",
+                    help="avec --upload: publier les fichiers existants sans reconstruire")
     args = ap.parse_args()
+    if args.upload_only:
+        if not args.upload:
+            ap.error("--upload-only exige --upload")
+        upload(args.upload, args.out)
+        return
     refresh = set(args.refresh)
     if "catalog" in refresh:
         refresh |= {"prices"}  # un nouveau catalogue peut contenir de nouveaux symboles
@@ -320,6 +380,7 @@ def main() -> None:
 
     catalog = _cached("catalog", refresh, build_catalog).copy()
     catalog["symbol"] = catalog["symbol"].replace(SYMBOL_RENAMES)
+    catalog["asset_class"] = normalize_asset_class(catalog)
     prices = _cached("prices", refresh, lambda: download_prices(catalog["symbol"].tolist()))
     # Cache incomplet (nouveaux symboles, renommages): on ne télécharge que ce qui manque.
     tried = set(prices["symbol"]) | set(pd.read_parquet(RAW / "prices_missing.parquet")["symbol"]
@@ -340,7 +401,7 @@ def main() -> None:
     themes = load_themes(args.themes).rename(index=SYMBOL_RENAMES)
     not_in_csv = sorted(set(catalog["symbol"]) - set(themes.index))
     not_in_universe = sorted(set(themes.index) - set(catalog["symbol"]))
-    # themes.csv fige la liste finale des tickers (805 en v2): les indices Wikipedia évoluent (ajouts au TSX, etc.),
+    # themes.csv fige la liste finale des tickers (804): les indices Wikipedia évoluent (ajouts au TSX, etc.),
     # on ne garde donc que les symboles qui y figurent (sauf --no-pin).
     if not_in_csv:
         action = "conservés sans thématique" if args.no_pin else "retirés"
@@ -380,6 +441,10 @@ def main() -> None:
     if not big.empty:
         print(f"  ! {len(big)} rendements quotidiens |r| > 40 % (à vérifier):")
         print(big[["date", "symbol", "total_return_cad"]].to_string(index=False))
+
+    if args.upload:
+        print()
+        upload(args.upload, args.out)
 
 
 if __name__ == "__main__":
