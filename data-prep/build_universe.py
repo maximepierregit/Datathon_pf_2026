@@ -334,7 +334,7 @@ def _cached(name: str, refresh: set[str], build) -> pd.DataFrame:
 def upload(dest: str, universe: Path) -> None:
     """Publie le dataset dans S3, un dossier par table (lisible tel quel par Athena/Glue au besoin):
 
-    s3://bucket[/prefixe]/universe/universe.parquet   <- lu par le backend (DATASET_PATH)
+    s3://bucket[/prefixe]/universe/universe.parquet   <- lu par le backend (MONPORT_UNIVERSE_PARQUET_URI)
     s3://bucket[/prefixe]/raw/<table>/<table>.parquet <- couches brutes, pour la traçabilité
     """
     import boto3
@@ -352,7 +352,7 @@ def upload(dest: str, universe: Path) -> None:
         s3.upload_file(str(path), bucket, key, ExtraArgs={"ContentType": "application/vnd.apache.parquet"})
         version = s3.head_object(Bucket=bucket, Key=key).get("VersionId")
         print(f"[upload] {path.name} -> s3://{bucket}/{key} (version {version})")
-    print(f"\nDATASET_PATH=s3://{bucket}/{prefix}universe/universe.parquet")
+    print(f"\nMONPORT_UNIVERSE_PARQUET_URI=s3://{bucket}/{prefix}universe/universe.parquet")
 
 
 def main() -> None:

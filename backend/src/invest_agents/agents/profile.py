@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from ..constraints import describe
+from ..catalog import describe
 from ..events import EventBus
 from ..schemas import Constraint, ConstraintType as T, InvestorForm, InvestorProfile, ProfileAssessment
 from .base import run_agent

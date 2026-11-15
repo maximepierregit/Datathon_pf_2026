@@ -2,7 +2,7 @@
 
 Dans universe.parquet, `sector` et `country` sont réservés aux actions (« Non classé » pour un FNB). Sans cette
 table, une exclusion (« Exclure » les fossiles -> exclude_sector Energy) ne voit pas les pétrolières de VDY.TO.
-Le backend lit ce fichier au chargement du dataset (data.load_exposures) et compte chaque FNB au prorata.
+Le backend lit ce fichier au chargement du marché (market.load_exposures) et compte chaque FNB au prorata.
 
 - secteur : yfinance `funds_data.sector_weightings` (part de la poche actions) x `asset_classes.stockPosition`,
   libellés ramenés aux secteurs GICS des actions de l'univers. À défaut, le `category_group` du FNB s'il nomme un

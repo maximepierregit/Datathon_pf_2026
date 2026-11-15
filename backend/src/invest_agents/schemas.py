@@ -252,6 +252,11 @@ class PepiteReview(BaseModel):
     issues: list[CoherenceIssue] = Field(
         default_factory=list, description="Les enjeux à montrer au client; liste vide si le profil est cohérent"
     )
+    questions: list[str] = Field(
+        default_factory=list,
+        description="Questions tutoyées à poser au client pour clarifier une incohérence ou une réponse ambiguë. "
+        "Liste vide si le profil est cohérent.",
+    )
 
 
 class PepiteCheck(ProfileAssessment):
@@ -260,6 +265,7 @@ class PepiteCheck(ProfileAssessment):
 
     coherent: bool
     issues: list[CoherenceIssue] = Field(default_factory=list)
+    questions: list[str] = Field(default_factory=list)
     risk_position: float = Field(default=0.5, ge=0, le=1, description="0 très prudent … 1 très audacieux")
     risk_aversion: float = Field(default=7.0, ge=1, le=25, description="Coefficient A: 1 très audacieux … 25 très prudent")
 
@@ -274,20 +280,42 @@ class ConstraintProfile(BaseModel):
 
 class ConstraintPlan(BaseModel):
     profiles: list[ConstraintProfile] = Field(description="Exactement 3 profils, un par slot (prudent, equilibre, conviction)")
-    risk_adjustment: int = Field(
-        default=0, ge=-2, le=2,
-        description="Seulement si l'ajustement du client parle du risque qu'il veut prendre: -2 nettement plus prudent, "
-                    "-1 un peu plus prudent, 1 un peu plus audacieux, 2 nettement plus audacieux. 0 sinon.",
+
+
+class SlotOpinion(BaseModel):
+    """Avis du juge sur un portefeuille. La conformité n'en fait pas partie: elle est calculée par le code."""
+
+    slot: MonPortSlot
+    fit_score: int = Field(ge=0, le=10, description="Adéquation du portefeuille au profil et aux préférences, de 0 à 10")
+    comment: str = Field(description="2 à 3 phrases: ce qui va et ce qui ne va pas, rapport de risque compris")
+    suggested_fixes: list[str] = Field(default_factory=list, description="Corrections concrètes si des écarts existent")
+
+
+class ReoptimizeRequest(BaseModel):
+    slot: MonPortSlot
+    instructions: str = Field(
+        description="Ce que le gestionnaire doit corriger, précis et réalisable sans enfreindre les contraintes dures"
     )
-    risk_adjustment_reason: str = Field(
+
+
+class JudgeDecision(BaseModel):
+    """Décision du juge: avis par portefeuille, gagnant (profil cohérent seulement) et demandes de réoptimisation."""
+
+    opinions: list[SlotOpinion] = Field(description="Un avis par portefeuille construit")
+    winner: Optional[MonPortSlot] = Field(
+        default=None, description="Le meilleur portefeuille pour le client. Null si le profil est incohérent."
+    )
+    justification: str = Field(
         default="",
-        description="Si risk_adjustment n'est pas 0: une phrase tutoyée et sans jargon (ni optimiseur ni volatilité) qui dit "
-                    "au client ce que tu as changé, ex.: « Tu veux dormir tranquille : tes portefeuilles seront un peu plus prudents. »",
+        description="Deux ou trois phrases tutoyées, sans jargon, qui expliquent le choix au client. Vide sans gagnant.",
+    )
+    reoptimize: list[ReoptimizeRequest] = Field(
+        default_factory=list,
+        description="Portefeuilles à reconstruire parce que le rapport de risque ou la conformité l'exige. Vide sinon.",
     )
 
 
-class FinalPick(BaseModel):
-    """Choix du juge final quand le profil est cohérent: un seul portefeuille est présenté."""
+class PepiteReply(BaseModel):
+    """Ce que Pépite dit au client à la fin d'un tour."""
 
-    winner: MonPortSlot
-    justification: str = Field(description="Deux ou trois phrases tutoyées, sans jargon, qui expliquent le choix au client")
+    message: str = Field(description="Ta réponse au client, tutoyée, en français québécois, sans jargon")

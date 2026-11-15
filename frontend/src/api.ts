@@ -1,6 +1,6 @@
-// Seul point de contact avec le backend. checkProfile et runPipeline lisent le flux SSE des agents
-// (backend/src/invest_agents/monport.py) et rejouent un script d'exemple si le backend ne répond pas ;
-// proposeAdjustment reste simulé.
+// Seul point de contact avec le backend. checkProfile, runPipeline et askPepite lisent le flux SSE des agents
+// (backend/src/invest_agents/workflow/flow.py) ; sans backend, un script d'exemple et proposeAdjustment
+// (simulé) prennent le relais.
 import { CLASS_LABELS, UNIVERSE } from './data/catalog'
 import { coherenceWarnings, PORTFOLIO_IDS } from './lib/engine'
 import type { AdjustProposal, AgentId, AgentStatus, Constraints, Portfolio, PipelineEvent, Profile, ProfileCheck } from './types'
@@ -81,28 +81,51 @@ function exampleCheck(score: number, constraints: Constraints): ProfileCheck {
   }
 }
 
-/** Pépite relit le questionnaire avant tout envoi aux gestionnaires. */
-export async function checkProfile(input: { score: number; profile: Profile; constraints: Constraints }, signal: AbortSignal): Promise<ProfileCheck> {
+/**
+ * Pépite relit le questionnaire avant tout envoi aux gestionnaires.
+ * `session` : la conversation ouverte côté backend (null avec la vérification d'exemple).
+ */
+export async function checkProfile(
+  input: { score: number; profile: Profile; constraints: Constraints },
+  signal: AbortSignal,
+): Promise<{ check: ProfileCheck; session: string | null }> {
   // Court délai : en mode strict, React monte deux fois la page ; le premier montage est annulé avant l'appel.
   await wait(50, signal)
   const body = await openStream({ mode: 'monport_check', profile: input.profile, constraints: input.constraints }, signal)
   if (!body) {
     await wait(1200, signal)
-    return exampleCheck(input.score, input.constraints)
+    return { check: exampleCheck(input.score, input.constraints), session: null }
   }
   let check: ProfileCheck | null = null
-  await relay(body, (e) => { if (e.type === 'check') check = e.check }, signal)
-  return check ?? exampleCheck(input.score, input.constraints)
+  let session: string | null = null
+  await relay(body, (e) => {
+    if (e.type === 'check') {
+      check = e.check
+      session = e.session ?? null
+    }
+  }, signal)
+  return check ? { check, session } : { check: exampleCheck(input.score, input.constraints), session: null }
 }
 
-type PipelineInput = { score: number; profile: Profile; constraints: Constraints; check: ProfileCheck; adjustment: string }
+type PipelineInput = { score: number; profile: Profile; constraints: Constraints; check: ProfileCheck; adjustment: string; session: string | null }
 
 export async function runPipeline(input: PipelineInput, onEvent: (e: PipelineEvent) => void, signal: AbortSignal) {
   await wait(50, signal)
-  const { profile, constraints, check, adjustment } = input
-  const body = await openStream({ mode: 'monport', profile, constraints, check, adjustment }, signal)
+  const { profile, constraints, check, adjustment, session } = input
+  const body = await openStream({ mode: 'monport', profile, constraints, check, adjustment, session }, signal)
   if (!body) return runScript(input, onEvent, signal)
   await relay(body, onEvent, signal)
+}
+
+/**
+ * Message du client à Pépite, une fois les portefeuilles construits. Elle interroge au besoin ses agents et peut
+ * relancer une construction (nouvel événement `portfolios`). Retourne false si le backend ne répond pas.
+ */
+export async function askPepite(session: string, message: string, onEvent: (e: PipelineEvent) => void, signal: AbortSignal): Promise<boolean> {
+  const body = await openStream({ mode: 'monport_chat', session, message }, signal)
+  if (!body) return false
+  await relay(body, onEvent, signal)
+  return true
 }
 
 async function runScript(input: PipelineInput, onEvent: (e: PipelineEvent) => void, signal: AbortSignal) {

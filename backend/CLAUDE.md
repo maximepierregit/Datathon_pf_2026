@@ -15,7 +15,7 @@ Schéma de référence: `../architecture-workflow.md`. Les numéros d'étape (`s
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .
 
 # Dataset réel depuis S3 (pas dans le repo):
-export DATASET_PATH=s3://monport-datasets-381491955506/universe/universe.parquet
+export MONPORT_UNIVERSE_PARQUET_URI=s3://monport-datasets-381491955506/universe/universe.parquet
 # ou synthétique, sans AWS:
 .venv/bin/python scripts/make_sample_dataset.py
 
@@ -50,11 +50,14 @@ src/invest_agents/
   constraints.py            Catalogue, validation, fusion, conflits, evaluate() (code pur)
   optimizer.py              Moyenne-variance sous contraintes (scipy SLSQP)
   tools.py                  Outils Strands, liés par closure au contexte de chaque agent
-  data.py                   Chargement Parquet (local ou s3://), moments, métriques
+  data.py                   Chargement, validation et matrices de rendements du Parquet (local ou s3://)
+  market.py                 Market: catalogue d'actifs, mu et Sigma selon config.py, métriques de portefeuille
+  macro.py                  Table macro US/CA (taux, écart 10-2, taux directeur, inflation, chômage, z-scores), code pur
   events.py                 EventBus (asyncio.Queue) + callback handler Strands
   models.py                 Fabrique BedrockModel (strong/fast, réflexion adaptive)
   schemas.py                Tous les contrats Pydantic
-  config.py                 Variables d'environnement (voir .env.example)
+  config.py                 Réglages financiers (source Parquet, méthodes mu/Sigma, contraintes)
+  runtime.py                Variables d'environnement Bedrock/pipeline (voir .env.example)
 ```
 
 ### Flux
@@ -86,7 +89,7 @@ Une ambiguïté (extraction) ou un conflit (fusion, ou contraintes du formulaire
 - `hard=True`: imposée par l'optimiseur. `hard=False`: préférence, évaluée seulement.
 - `source`: `form`, `chat` ou `profile`. Les défauts du profil (`MAX_VOLATILITY`, `MAX_POSITION_WEIGHT`) sont des préférences; `promote_profile_defaults()` les rend dures pour les PM tant qu'elles ne créent pas de conflit.
 - Cible `*` (`constraints.ANY`): « chaque secteur » ou « chaque pays », pour `max_sector_weight` et `max_country_weight` seulement.
-- Secteurs et pays comptent **au prorata du contenu des FNB** (`Market.exposures`, voir Données): un plafond, un plancher ou la cible `*` voient les 28 % d'énergie de VDY.TO. `exclude_sector` / `exclude_country` écartent tout actif exposé à plus de `EXCLUSION_THRESHOLD` (10 %) à la cible: une action du secteur, VDY.TO ou XIC.TO pour l'énergie, mais pas SPY (4 %). La valeur observée d'une exclusion est l'exposition résiduelle du portefeuille; elle est respectée si aucune position n'est exclue. La part sans secteur (obligations, liquidités, crypto) ne compte dans aucun secteur.
+- Secteurs et pays comptent **au prorata du contenu des FNB** (`Market.exposures`, voir Données): un plafond, un plancher ou la cible `*` voient les 28 % d'énergie de VDY.TO. `exclude_sector` / `exclude_country` sont résolus en symboles par `catalog._targets` (`excluded_symbols` du moteur): tout actif exposé à plus de `catalog.EXCLUSION_THRESHOLD` (10 %) à la cible est écarté, une action du secteur, VDY.TO ou XIC.TO pour l'énergie, mais pas SPY (4 %). La valeur observée d'une exclusion est l'exposition résiduelle du portefeuille; elle est respectée si aucune position n'est exclue. La part sans secteur (obligations, liquidités, crypto) ne compte dans aucun secteur.
 - Fusion (`merge_constraints`): clé `(type, target)`; la nouvelle valeur remplace l'ancienne; `removals` retire.
 - Tolérances: `WTOL = 2e-4` sur les poids (arrondis à 4 décimales), `TOL = 1e-3` sur volatilité et rendement.
 
@@ -127,12 +130,13 @@ Changer le format d'un événement casse le frontend: mettre à jour le README e
 
 ## Données
 
-- `DATASET_PATH`: défaut `data/universe.parquet`; accepte `s3://bucket/key` (téléchargé une fois dans /tmp, sous un nom qui inclut le VersionId S3). Dataset réel (801 actifs chargés, jours ouvrables depuis 2021): `s3://monport-datasets-381491955506/universe/universe.parquet`, produit et publié par `../data-prep/build_universe.py --upload s3://monport-datasets-381491955506 [--upload-only]`.
+- `MONPORT_UNIVERSE_PARQUET_URI`: défaut le chemin de `config.DEFAULT_PARQUET_PATH`; accepte `s3://bucket/key` (lu en mémoire via boto3, sans cache disque). Dataset réel (801 actifs chargés, jours ouvrables depuis 2021): `s3://monport-datasets-381491955506/universe/universe.parquet`, produit et publié par `../data-prep/build_universe.py --upload s3://monport-datasets-381491955506 [--upload-only]`.
 - Format long issu de `create_opt_inputs` (`../Universe_Cleaned.ipynb`). Obligatoires: `date`, `symbol`, `total_return_cad`. Optionnelles: `name`, `sector`, `industry`, `country`, `currency`, `asset_class`, `instrument_type`, `market`, `is_included_universe`.
 - Actifs avec moins de 120 observations écartés. Secteur, pays et classe manquants deviennent `Non classé`.
-- Le dataset classe seulement les actions: un FNB y est `Non classé` en secteur et en pays. Son contenu vient de `src/invest_agents/etf_exposures.csv` (symbol, dimension, label, weight), produit par `../data-prep/build_etf_exposures.py`: secteurs yfinance (`funds_data`, part actions × répartition, libellés GICS), pays d'une table statique du script (ordres de grandeur). `build_exposures` en tire une matrice symbole × libellé par dimension (`Market.exposures`): 1 pour une action dans son secteur et son pays, le contenu pour un FNB de la table, 0 pour la crypto. `sector_weights` / `country_weights` des métriques en découlent et ne listent pas la part non attribuée; `allowed_values()` inclut les pays des FNB (Japan, China…), d'où des exclusions de région qui voient EWJ ou EEM. Un FNB ajouté à l'univers doit être ajouté à `COUNTRIES` du script, qui est relancé.
+- Le dataset classe seulement les actions: un FNB y est `Non classé` en secteur et en pays. Son contenu vient de `src/invest_agents/etf_exposures.csv` (symbol, dimension, label, weight), produit par `../data-prep/build_etf_exposures.py`: secteurs yfinance (`funds_data`, part actions × répartition, libellés GICS), pays d'une table statique du script (ordres de grandeur). `market.build_exposures` en tire une matrice symbole × libellé par dimension (`Market.exposures`): 1 pour une action dans son secteur et son pays, le contenu pour un FNB de la table, 0 pour la crypto. `sector_weights` / `country_weights` des métriques en découlent et ne listent pas la part non attribuée; `allowed_values()` inclut les pays des FNB (Japan, China…), d'où des exclusions de région qui voient EWJ ou EEM. Un FNB ajouté à l'univers doit être ajouté à `COUNTRIES` du script, qui est relancé.
 - `get_market()` est en cache (`lru_cache`); appelé via `asyncio.to_thread` dans l'orchestrateur.
-- Le dataset réel (S3, 1,2 M lignes) est lu par `_read_dataset`: seulement les colonnes utiles, métadonnées texte en catégories. Pic mémoire ~440 Mo au lieu de ~850 Mo avec `pd.read_parquet`, nécessaire sur l'EC2 t3.micro (1 Go). Le jeu synthétique (`make_sample_dataset.py`, symboles `SYN*`, `SETF*`, `SCRY*`) reste pour le développement sans AWS; ses chiffres n'ont aucune valeur réelle.
+- Le dataset réel (S3, 1,2 M lignes) est lu par `_read_dataset`: seulement les colonnes utiles, métadonnées texte en catégories. Pic mémoire ~440 Mo au lieu de ~850 Mo avec `pd.read_parquet`, utile sur l'EC2 (t3.small, 2 Go). Le jeu synthétique (`make_sample_dataset.py`, symboles `SYN*`, `SETF*`, `SCRY*`) reste pour le développement sans AWS; ses chiffres n'ont aucune valeur réelle.
+- Table macro: `MONPORT_MACRO_PARQUET_URI` (défaut `data/macro_long_z.parquet`; référence `s3://monport-datasets-381491955506/macro/macro_long_z.parquet`), issue de `../../macro_long_z.csv`. Format long: `date`, `country` (US, CA), `metric` (`yield_10y`, `yield_2y`, `spread_10y_2y`, `policy_rate`, `inflation_yoy`, `unemployment_rate`, en %), `metric_value`, `z_5y`, `z_full`, `history_start_date`, `ref_period`. Chargée au premier appel puis gardée en mémoire (`macro.get_macro`). Exposée par `tools.make_macro_tools()` (`get_latest_macro_snapshot`, `get_macro_history`) aux gestionnaires, aux agents Risque/CRO et aux juges, avec la consigne `tools.MACRO_PROMPT`. Une source indisponible donne `{"error": ...}`: l'agent continue sans contexte macro.
 - Comme dans l'univers réel, l'`asset_class` d'un FNB reprend sa catégorie (`Equities`, `Fixed Income`, `Money Market`, `Commodities`, `Real Estate`); les actions sont `Equity`, les cryptos `Crypto`. Le jeu synthétique compte 6 FNB d'obligations: un profil prudent doit tenir sous la limite de 40 % par ligne.
 
 ## Déploiement AgentCore

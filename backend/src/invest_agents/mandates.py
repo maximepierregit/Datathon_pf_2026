@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from .optimizer import Objective
+from .allocator import Objective
 
 
 @dataclass(frozen=True)

@@ -10,7 +10,9 @@ User=ec2-user
 WorkingDirectory=/opt/monport-backend
 Environment=PORT=8091 AWS_REGION=us-east-1
 # Dataset réel, lu avec le profil d'instance (WSParticipantRole). Publié par data-prep/build_universe.py --upload.
-Environment=DATASET_PATH=s3://monport-datasets-381491955506/universe/universe.parquet
+Environment=MONPORT_UNIVERSE_PARQUET_URI=s3://monport-datasets-381491955506/universe/universe.parquet
+# Contexte macro US/CA (outils get_latest_macro_snapshot et get_macro_history des gestionnaires, agents Risque et juge).
+Environment=MONPORT_MACRO_PARQUET_URI=s3://monport-datasets-381491955506/macro/macro_long_z.parquet
 ExecStart=/opt/monport-backend/.venv/bin/python main.py
 Restart=always
 RestartSec=3
