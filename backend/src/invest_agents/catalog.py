@@ -71,7 +71,7 @@ HELD = 5e-4  # poids à partir duquel une position est considérée comme déten
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class Spec:
-    dimension: Optional[str]  # sector | country | asset_class | symbol | None
+    dimension: Optional[str]  # sector | country | asset_class | instrument_type | symbol | None
     kind: str  # fraction | count | none
     direction: Optional[str]  # max | min | None
     description: str
@@ -87,6 +87,10 @@ SPECS: dict[T, Spec] = {
     T.EXCLUDE_SECTOR: Spec("sector", "none", None, "Exclure un secteur"),
     T.EXCLUDE_COUNTRY: Spec("country", "none", None, "Exclure un pays"),
     T.EXCLUDE_ASSET_CLASS: Spec("asset_class", "none", None, "Exclure une classe d'actifs"),
+    # Une classe d'actifs mélange titres et FNB (« Equity » = actions et FNB d'actions): « FNB seulement » passe par ici.
+    T.EXCLUDE_INSTRUMENT_TYPE: Spec("instrument_type", "none", None,
+                                    "Exclure un type d'instrument (Stock = action détenue en direct, Cryptocurrency = "
+                                    "crypto détenue en direct, ETF = FNB)"),
     T.EXCLUDE_SYMBOL: Spec("symbol", "none", None, "Exclure un titre"),
     T.MAX_SECTOR_WEIGHT: Spec("sector", "fraction", "max", "Poids maximal d'un secteur"),
     T.MIN_SECTOR_WEIGHT: Spec("sector", "fraction", "min", "Poids minimal d'un secteur"),
@@ -101,8 +105,10 @@ SPECS: dict[T, Spec] = {
 ANY = "*"  # cible générique: « chaque secteur » / « chaque pays » (plafonds seulement)
 WILDCARD_TYPES = {T.MAX_SECTOR_WEIGHT, T.MAX_COUNTRY_WEIGHT}
 
-DIMENSION_COLUMN = {"sector": "sector", "country": "country", "asset_class": "asset_class", "symbol": None}
-DIMENSION_FR = {"sector": "secteur", "country": "pays", "asset_class": "classe d'actifs", "symbol": "titre"}
+DIMENSION_COLUMN = {"sector": "sector", "country": "country", "asset_class": "asset_class",
+                    "instrument_type": "instrument_type", "symbol": None}
+DIMENSION_FR = {"sector": "secteur", "country": "pays", "asset_class": "classe d'actifs",
+                "instrument_type": "type d'instrument", "symbol": "titre"}
 
 # Types traduits en contraintes linéaires de groupe, par dimension du moteur.
 GROUP_TYPES = {
@@ -136,6 +142,7 @@ def catalog_prompt(allowed: dict[str, list[str]]) -> str:
         f"- sector: {', '.join(allowed['sector'])}",
         f"- country: {', '.join(allowed['country'])}",
         f"- asset_class: {', '.join(allowed['asset_class'])}",
+        f"- instrument_type: {', '.join(allowed['instrument_type'])}",
         "- symbol: symbole boursier exact (utiliser l'outil search_universe pour retrouver un symbole à partir d'un nom)",
     ]
     return "\n".join(lines)
@@ -348,7 +355,7 @@ def agent_request(
         spec = SPECS[c.type]
         if c.type is T.EXCLUDE_ASSET_CLASS and c.target:
             excluded_classes.add(c.target)
-        elif spec.kind == "none" and c.target:  # secteur, pays, symbole
+        elif spec.kind == "none" and c.target:  # secteur, pays, type d'instrument, symbole
             excluded_symbols.update(_targets(market, spec.dimension or "symbol", c.target))
         elif c.type is T.MIN_SYMBOL_WEIGHT and c.target and c.value:
             for s in _targets(market, "symbol", c.target):

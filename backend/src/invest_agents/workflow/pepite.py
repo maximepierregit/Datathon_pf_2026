@@ -19,11 +19,11 @@ from ..catalog import catalog_prompt, describe
 from ..events import EventBus
 from ..monport import (
     BOND_FLOOR,
-    DIRECT_CLASSES,
     SLOTS,
     assess,
     capacity,
     coherence_facts,
+    direct_types,
     front,
     pepite as pepite_event,
     status,
@@ -102,7 +102,8 @@ Règles communes
 - Le poids maximal par titre du profil passe par max_stock_weight: il ne vise que les titres détenus en direct.
   Un FNB est déjà diversifié; un FNB d'obligations peut peser jusqu'à 40 %.
 - Les exclusions du client (niveau -2) s'appliquent aux 3 profils.
-- FNB seulement: exclure dans les 3 profils les classes d'actifs des titres détenus en direct ({direct}).
+- FNB seulement: exclude_instrument_type dans les 3 profils pour les titres détenus en direct ({direct}). Jamais
+  exclude_asset_class pour ça: une classe d'actifs regroupe titres et FNB (« Equity » contient les FNB d'actions).
 - Traduction de l'échelle: Imposer -> min_*_weight dur (0.05 à 0.15); Plus -> min_*_weight préférence (hard=false);
   Moins -> max_*_weight préférence; Exclure -> exclude_*. Utilise exactement les libellés de cibles du catalogue.
   Une préférence sans équivalent dans le catalogue (ex.: facteurs, IA) est ignorée.
@@ -127,7 +128,7 @@ Le code mélangera ensuite le capital: 80 % « Ton profil » + 20 % « Tes préf
 
 def system_prompt(session: Session) -> str:
     allowed = session.market.allowed_values()
-    direct = ", ".join(v for v in allowed["asset_class"] if v in DIRECT_CLASSES) or "aucune dans cet univers"
+    direct = ", ".join(direct_types(allowed)) or "aucun dans cet univers"
     return SYSTEM.format(legend=LEGEND, catalog=catalog_prompt(allowed), direct=direct, tone=TONE)
 
 

@@ -200,6 +200,7 @@ class Market:
             "sector": sorted(a["sector"].dropna().unique().tolist()),
             "country": sorted(a["country"].dropna().unique().tolist()),
             "asset_class": sorted(a["asset_class"].dropna().unique().tolist()),
+            "instrument_type": sorted(a["instrument_type"].dropna().astype(str).unique().tolist()),
             "symbol": sorted(a.index.tolist()),
         }
 

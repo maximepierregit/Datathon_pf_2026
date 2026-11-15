@@ -24,6 +24,7 @@ class ConstraintType(str, Enum):
     EXCLUDE_SECTOR = "exclude_sector"
     EXCLUDE_COUNTRY = "exclude_country"
     EXCLUDE_ASSET_CLASS = "exclude_asset_class"
+    EXCLUDE_INSTRUMENT_TYPE = "exclude_instrument_type"
     EXCLUDE_SYMBOL = "exclude_symbol"
     MAX_SECTOR_WEIGHT = "max_sector_weight"
     MIN_SECTOR_WEIGHT = "min_sector_weight"

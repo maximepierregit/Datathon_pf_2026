@@ -82,7 +82,9 @@ THEME_SECTORS = {
     "consommation": ["Consumer Staples", "Consumer Discretionary"],
     "industrie": ["Industrials"],
 }
-DIRECT_CLASSES = ("Equity", "Crypto", "Alternative")  # titres détenus en direct, écartés par « FNB seulement »
+# Titres détenus en direct, écartés par « FNB seulement ». Par type d'instrument, pas par classe d'actifs: les FNB
+# d'actions ont la classe « Equity », comme les actions.
+DIRECT_TYPES = ("Stock", "Cryptocurrency")
 BLOCK_LABELS = {"classes": "classe", "regions": "région", "themes": "thématique", "factors": "facteur"}
 
 # Poids associés à chaque niveau: (Moins = plafond souple, Plus = plancher souple, Imposer = plancher dur)
@@ -156,6 +158,12 @@ def _dedupe(constraints: list[Constraint]) -> list[Constraint]:
     return list(unique.values())
 
 
+def direct_types(allowed: dict[str, list[str]]) -> list[str]:
+    """Les types d'instrument détenus en direct présents dans l'univers."""
+    present = {v.lower(): v for v in allowed.get("instrument_type", [])}
+    return [present[t.lower()] for t in DIRECT_TYPES if t.lower() in present]
+
+
 def preference_constraints(prefs: dict, allowed: dict[str, list[str]]) -> tuple[list[Constraint], list[str]]:
     """Traduit l'échelle Exclure … Imposer en contraintes du catalogue. Retourne aussi ce qui n'a pas pu l'être."""
     out: list[Constraint] = []
@@ -182,9 +190,8 @@ def preference_constraints(prefs: dict, allowed: dict[str, list[str]]) -> tuple[
     skipped += [f"facteur « {f} »" for f, level in (prefs.get("factors") or {}).items() if level]
 
     if prefs.get("vehicles") == "fnb":
-        present = {v.lower() for v in allowed["asset_class"]}
-        out += [Constraint(type=T.EXCLUDE_ASSET_CLASS, target=t, hard=True, note="MonPort: FNB seulement")
-                for t in DIRECT_CLASSES if t.lower() in present]
+        out += [Constraint(type=T.EXCLUDE_INSTRUMENT_TYPE, target=t, hard=True, note="MonPort: FNB seulement")
+                for t in direct_types(allowed)]
     return _dedupe(out), skipped
 
 
