@@ -20,15 +20,24 @@ export interface Contribution {
   amount: number
 }
 
-/** Échelle unique des contraintes : Exclure (−2) … Imposer (+2). */
+/** Échelle des facteurs : Exclure (−2) … Imposer (+2). */
 export type Level = -2 | -1 | 0 | 1 | 2
 
-export type ConstraintBlock = 'classes' | 'regions' | 'themes' | 'factors'
+/**
+ * Classes, régions, thématiques : « exclure » ou un pourcentage imposé (0 à 100, à ± 2 points). Une clé absente vaut
+ * neutre : libre pour les gestionnaires. Classes : % du portefeuille. Régions et thématiques : % de la part actions.
+ */
+export type Share = 'exclure' | number
 
-/** « fnb » : FNB seulement. « tous » : FNB et titres individuels. */
-export type Vehicles = 'fnb' | 'tous'
+export type ShareBlock = 'classes' | 'regions' | 'themes'
 
-export type Constraints = Record<ConstraintBlock, Record<string, Level>> & {
+export type ConstraintBlock = ShareBlock | 'factors'
+
+/** « fnb » : FNB seulement. « titres » : titres individuels seulement (actions et crypto). « tous » : les deux. */
+export type Vehicles = 'fnb' | 'titres' | 'tous'
+
+export type Constraints = Record<ShareBlock, Record<string, Share>> & {
+  factors: Record<string, Level>
   /** Indépendant des classes : un FNB peut détenir des actions, des obligations, de l'or… */
   vehicles: Vehicles
 }
@@ -64,6 +73,29 @@ export interface RiskNote {
   severity: 'medium' | 'high'
 }
 
+/** Identifiants des facteurs (préférences et tableau de bord). */
+export type FactorId = 'taille' | 'qualite' | 'momentum' | 'value' | 'croissance'
+
+/** Une action détenue en direct et ses scores (z-score dans son secteur : 0 = moyenne, +1 = un écart-type mieux). */
+export interface ScoredStock {
+  ticker: string
+  name: string
+  weight: number
+  scores: Partial<Record<FactorId, number>>
+}
+
+/**
+ * Exposition aux facteurs : moyenne des scores des actions détenues en direct, pondérée par leur poids
+ * (`factors.exposures()` du backend). Les FNB et les cryptos n'ont pas de score et ne comptent pas.
+ */
+export interface FactorView {
+  /** Part du portefeuille en actions notées, de 0 à 1. */
+  coverage: number
+  exposure: Partial<Record<FactorId, number>>
+  /** Poids décroissant. Contribution d'une action à un facteur = poids × score / coverage. */
+  stocks: ScoredStock[]
+}
+
 export interface Portfolio {
   id: PortfolioId
   name: string
@@ -74,6 +106,8 @@ export interface Portfolio {
   metrics: Metrics
   warnings: RiskNote[]
   agentNotes: string[]
+  /** Absent d'un ancien backend. */
+  factors?: FactorView
 }
 
 /** Portefeuille tel que l'envoie le backend ; sans nom ni accroche, on prend ceux de PORTFOLIO_META. */

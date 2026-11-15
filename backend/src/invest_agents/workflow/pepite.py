@@ -46,9 +46,12 @@ LEGEND = """LÉGENDE DU JSON DU QUESTIONNAIRE
 - profile.objective: securiser (protéger le capital), fructifier (faire croître), viser-haut (croissance maximale).
 - profile.lossReaction: réaction à une baisse de 20 %: 0 je vends tout, 1 je vends une partie, 2 j'attends, 3 j'investis plus.
 - profile.comfort: aisance avec les placements, de 1 (débutant) à 5 (expert).
-- constraints.vehicles: "fnb" = FNB seulement (aucun titre détenu en direct), "tous" = FNB et titres individuels.
-- constraints.classes, regions, themes, factors: échelle -2 Exclure, -1 Moins, 0 Neutre, 1 Plus, 2 Imposer.
-  Une clé absente vaut Neutre."""
+- constraints.vehicles: "fnb" = FNB seulement (aucun titre détenu en direct), "titres" = titres individuels seulement
+  (actions et crypto détenues en direct, aucun FNB, donc aucune obligation), "tous" = FNB et titres individuels.
+- constraints.classes, regions, themes: "exclure", ou un pourcentage de 0 à 100 que le client impose. Une clé absente
+  vaut Neutre: libre. Classes: % du portefeuille entier. Régions et thématiques: % des actions détenues en direct
+  (un FNB n'a ni pays ni secteur connu). Les pourcentages d'un même bloc font au plus 100.
+- constraints.factors: échelle -2 Exclure, -1 Moins, 0 Neutre, 1 Plus, 2 Imposer. Une clé absente vaut Neutre."""
 
 TONE = (
     "Dans tout texte destiné au client, tu lui parles directement: tutoiement, phrases simples, sans jargon (pas de "
@@ -102,25 +105,30 @@ Règles communes
 - max_position_weight vaut toujours 0.40 (limite de sécurité: aucune ligne au-delà de 40 %, FNB compris).
 - Le poids maximal par titre du profil passe par max_stock_weight: il ne vise que les titres détenus en direct.
   Un FNB est déjà diversifié; un FNB d'obligations peut peser jusqu'à 40 %.
-- Les exclusions du client (niveau -2) s'appliquent aux 3 profils.
-- FNB seulement: exclude_instrument_type dans les 3 profils pour les titres détenus en direct ({direct}). Jamais
-  exclude_asset_class pour ça: une classe d'actifs regroupe titres et FNB (« Equity » contient les FNB d'actions).
-- Traduction de l'échelle: Imposer -> min_*_weight dur (0.05 à 0.15); Plus -> min_*_weight préférence (hard=false);
-  Moins -> max_*_weight préférence; Exclure -> exclude_*. Utilise exactement les libellés de cibles du catalogue.
-  Une préférence sans équivalent dans le catalogue (ex.: facteurs, IA) est ignorée.
+- Les exclusions du client (« exclure ») s'appliquent aux 3 profils.
+- Le code traduit lui-même le questionnaire et l'ajoute aux profils: les exclusions dans les 3, « FNB seulement »
+  ({direct}) et « titres individuels seulement » (exclude_instrument_type), et les pourcentages saisis par le client,
+  imposés à ± 2 points dans les profils qui suivent ses préférences (min/max_asset_class_weight pour les classes,
+  min/max_country_share et min/max_sector_share pour les régions et les thématiques), et les facteurs (taille ->
+  small_cap, qualite -> quality, momentum, value, croissance -> growth: Imposer -> min_factor_exposure 0.5 dur;
+  Plus -> min_factor_exposure 0.2; Moins -> max_factor_exposure -0.2; Exclure -> max_factor_exposure -0.5 dur,
+  dans les 3 profils; aucun avec FNB seulement). Ne les réécris pas: ce que tu écris sur les mêmes cibles est
+  remplacé. Un élément neutre reste libre.
+- Utilise exactement les libellés de cibles du catalogue.
 - Le reste du profil de risque est ajouté par le code: plafond de volatilité, aversion au risque donnée à l'optimiseur,
   part d'obligations des portefeuilles qui suivent le profil. N'écris ni max_volatility ni plancher d'obligations.
 - Valeurs en fractions (0.10 = 10 %). `source` vaut "form".
 
 Profil cohérent: trois variantes qui se font concurrence, le juge garde la meilleure.
-- equilibre: EXACTEMENT les contraintes du client, ses préférences traduites telles quelles, rien de plus ni de moins.
-- prudent et conviction: des contraintes dérivées de celles du client, un peu modifiées, dans la limite du raisonnable
-  (resserrer ou élargir un poids visé de quelques points, ajouter une limite par secteur ou par pays). prudent est un
-  cran plus prudent, conviction un cran plus audacieux; le code ajuste leur niveau de risque. Jamais une exclusion
-  retirée ni une contrainte dure du client contredite.
+- equilibre: EXACTEMENT les contraintes du client, que le code ajoute: n'écris rien de plus (liste vide).
+- prudent et conviction: les contraintes du client (ajoutées par le code), plus quelques limites raisonnables sur ce
+  qu'il a laissé neutre (une limite par secteur ou par pays, un poids visé sur une classe libre). prudent est un cran
+  plus prudent, conviction un cran plus audacieux; le code ajuste leur niveau de risque. Jamais une exclusion retirée
+  ni un pourcentage du client contredit.
 Profil incohérent: trois bases, le client choisira.
 - equilibre = « Tes contraintes »: tout ce que le client a demandé, ses préférences et les limites de son profil, en dur autant que possible.
-- prudent = « Ton profil »: seulement les limites du profil de risque et les exclusions; ignore les autres préférences.
+- prudent = « Ton profil »: seulement les limites du profil de risque et les exclusions; ignore les autres préférences
+  (le code n'y ajoute pas les pourcentages du client).
 - conviction = « Tes préférences »: seulement les préférences et les exclusions (thèmes, classes d'actifs), sans plafond de volatilité du profil.
 Le code mélangera ensuite le capital: 80 % « Ton profil » + 20 % « Tes préférences », et l'inverse.
 
@@ -444,7 +452,9 @@ Sois bref: une centaine de mots au plus, hors chiffres et barres. Commence par l
 REBUILD_TASK = """Le client a confirmé les changements dont vous avez parlé dans le chat. Reconstruis ses portefeuilles.
 1. Pars de son questionnaire et des changements déjà appliqués, puis ajoute les nouveaux. S'ils parlent du risque
    qu'il veut prendre, utilise `adjust_risk_position`. La cohérence du profil ne change pas.
-2. Réécris les 3 profils et envoie-les avec `submit_constraint_plan`, avec les mêmes règles qu'à la construction.
+2. Réécris les 3 profils et envoie-les avec `submit_constraint_plan`, avec les mêmes règles qu'à la construction, à
+   une différence près: ici, le code n'ajoute plus les pourcentages du questionnaire. Écris-les toi-même dans les
+   profils qui suivent les préférences (± 2 points, en fractions), ceux que le client a changés compris.
    Corrige et renvoie si le code les refuse.
 3. `build_portfolios` (les trois), puis `judge_portfolios`. Si le juge demande de reconstruire et qu'il reste des
    relances: `build_portfolios` avec ces `slots` et leurs `instructions`, puis `judge_portfolios` de nouveau.

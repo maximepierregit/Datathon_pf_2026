@@ -21,6 +21,7 @@ import json
 env = {
     "MONPORT_UNIVERSE_PARQUET_URI": "s3://$BUCKET/universe/universe.parquet",
     "MONPORT_MACRO_PARQUET_URI": "s3://$BUCKET/macro/macro_long_z.parquet",
+    "MONPORT_FACTORS_PARQUET_URI": "s3://$BUCKET/factors/factor_scores.parquet",
     "MODEL_STRONG": "${MODEL_STRONG:-global.anthropic.claude-opus-5-5}",
     "MODEL_FAST": "${MODEL_FAST:-global.anthropic.claude-opus-5-5}",
     "MODEL_PEPITE": "${MODEL_PEPITE:-global.anthropic.claude-sonnet-5-5}",

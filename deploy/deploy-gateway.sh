@@ -15,7 +15,7 @@ if [ "${SKIP_BUILD:-0}" != 1 ]; then
   log "construction du zip du serveur MCP"
   ENTRY=mcp_server/main.py OUT=build/tools_package.zip "$ROOT/backend/scripts/build_package.sh" >&2
 fi
-ENV=$(printf '{"MONPORT_UNIVERSE_PARQUET_URI":"s3://%s/universe/universe.parquet","MONPORT_MACRO_PARQUET_URI":"s3://%s/macro/macro_long_z.parquet"}' "$BUCKET" "$BUCKET")
+ENV=$(printf '{"MONPORT_UNIVERSE_PARQUET_URI":"s3://%s/universe/universe.parquet","MONPORT_MACRO_PARQUET_URI":"s3://%s/macro/macro_long_z.parquet","MONPORT_FACTORS_PARQUET_URI":"s3://%s/factors/factor_scores.parquet"}' "$BUCKET" "$BUCKET" "$BUCKET")
 TOOLS_ARN=$(deploy_runtime monport_tools "$ROOT/backend/build/tools_package.zip" "$TOOLS_ROLE" "$ENV" '{"serverProtocol":"MCP"}')
 state_set tools-runtime-arn "$TOOLS_ARN"
 

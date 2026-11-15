@@ -47,6 +47,7 @@
       "Resource": [
         "arn:aws:s3:::monport-datasets-${ACCOUNT}/universe/*",
         "arn:aws:s3:::monport-datasets-${ACCOUNT}/macro/*",
+        "arn:aws:s3:::monport-datasets-${ACCOUNT}/factors/*",
         "arn:aws:s3:::monport-datasets-${ACCOUNT}/code/*"
       ]
     }

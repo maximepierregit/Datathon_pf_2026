@@ -6,6 +6,7 @@ import { CLASS_COLORS, CLASS_EXPLAINERS, CLASS_LABELS } from '../../data/catalog
 import { backtest, projection, returnDistribution, riskContribution } from '../../lib/engine'
 import { money, pct, signedPct } from '../../lib/format'
 import type { Portfolio } from '../../types'
+import { FactorExposure } from './Factors'
 import { AgentNotes, AllocationBar, classesOf, Donut, HoldingsTable, Kpi, Legend, SectionTitle } from './parts'
 
 const axis = { fontSize: 12, fill: '#565656' }
@@ -260,6 +261,7 @@ function RiskTab({ p, amount }: { p: Portfolio; amount: number }) {
   const contrib = riskContribution(p)
   return (
     <div className="flex flex-col gap-6">
+      <FactorExposure p={p} />
       <div className="grid gap-6 lg:grid-cols-2">
         <DistributionChart p={p} />
         <Card>

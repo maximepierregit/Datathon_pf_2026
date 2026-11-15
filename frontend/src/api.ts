@@ -183,8 +183,8 @@ export async function rebuildPipeline(session: string, onEvent: (e: PipelineEven
 }
 
 async function runScript(input: PipelineInput, onEvent: (e: PipelineEvent) => void, signal: AbortSignal) {
-  const excluded = Object.values(input.constraints.themes).filter((l) => l === -2).length
-  const classesOut = Object.values(input.constraints.classes).filter((l) => l === -2).length
+  const excluded = Object.values(input.constraints.themes).filter((v) => v === 'exclure').length
+  const classesOut = Object.values(input.constraints.classes).filter((v) => v === 'exclure').length
   const after = UNIVERSE.length * 7 - excluded * 9 - classesOut * 6
   const coherent = input.check.coherent
 
@@ -240,26 +240,26 @@ const RULES: Rule[] = [
   {
     match: /tech|technolog/i,
     reply: (p) => `<p>D’accord! J’ajoute une part de <strong>FNB technologie</strong> au portefeuille « ${p.name} », prise sur les actions régionales.</p>`,
-    patch: { themes: { tech: 2 } },
+    patch: { themes: { tech: 30 } },
     diff: [{ label: 'FNB technologie', get: tickerWeight('THM-TEC') }],
   },
   {
     match: /pétrole|petrole|fossile|énergie trad/i,
     reply: () => '<p>C’est noté : <strong>j’exclus les énergies fossiles</strong>.</p><astuce>Les FNB concernés sont retirés, et ton niveau de risque bouge à peine.</astuce>',
-    patch: { themes: { fossiles: -2 } },
+    patch: { themes: { fossiles: 'exclure' } },
     diff: [{ label: 'FNB énergie traditionnelle', get: tickerWeight('THM-ENR') }],
   },
   {
     match: /crypto|bitcoin/i,
     reply: (p) => `<p>Je peux augmenter la <strong>crypto</strong> dans le portefeuille « ${p.name} ». Voici ce que ça donnerait.</p>`,
-    patch: { classes: { crypto: 2 } },
+    patch: { classes: { crypto: 10 } },
     warning: (score) => (score < 50 ? 'ça augmente ton risque au-delà de ton profil. Tu peux quand même l’appliquer, c’est ton choix.' : undefined),
     diff: [{ label: CLASS_LABELS.crypto, get: (q) => q.allocation.crypto }],
   },
   {
     match: /moins de risque|prudent|sécur|stable/i,
     reply: () => '<p>Je réduis les placements les plus agités au profit des <strong>obligations</strong>.</p><astuce>Ton portefeuille bougera moins, mais il grandira aussi un peu moins vite.</astuce>',
-    patch: { classes: { crypto: -1, actions: -1, obligations: 1 } },
+    patch: { classes: { crypto: 'exclure' } },
     riskShift: -15,
     diff: [
       { label: CLASS_LABELS.actions, get: (q) => q.allocation.actions },

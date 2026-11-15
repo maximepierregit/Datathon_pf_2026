@@ -16,10 +16,12 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Iterable, Optional
 from pydantic import ValidationError
 
 from .runtime import get_runtime_settings
-from .catalog import DIMENSION_COLUMN, detect_conflicts, excluded_mask, validate_all
+from .catalog import DIMENSION_COLUMN, SEP, SHARE_TYPES, detect_conflicts, excluded_mask, share_targets, validate_all
 from .market import Market
 from .events import EventBus
+from . import factors
 from .allocator import optimize
+from .tools import factor_fits
 from .schemas import (
     CoherenceIssue,
     Constraint,
@@ -85,14 +87,27 @@ THEME_SECTORS = {
 # Titres détenus en direct, écartés par « FNB seulement ». Par type d'instrument, pas par classe d'actifs: les FNB
 # d'actions ont la classe « Equity », comme les actions.
 DIRECT_TYPES = ("Stock", "Cryptocurrency")
+FUND_TYPES = ("ETF",)  # écartés par « Titres individuels seulement »
+# Classes proposées au client: jamais les liquidités; seulement actions et crypto pour des titres individuels.
+SHOWN_CLASSES = {"titres": ["actions", "crypto"]}
 BLOCK_LABELS = {"classes": "classe", "regions": "région", "themes": "thématique", "factors": "facteur"}
+# Facteurs: identifiants du frontend (data/catalog.ts) -> facteurs du moteur (factors.py).
+FACTOR_TARGETS = {"taille": "small_cap", "qualite": "quality", "momentum": "momentum", "value": "value",
+                  "croissance": "growth"}
+# Exposition visée par niveau, en écarts-types: Plus/Moins = légère inclinaison, Imposer/Exclure = nette (dure).
+FACTOR_LEVELS = {2: 0.5, 1: 0.2, -1: -0.2, -2: -0.5}
+FACTOR_NOTE = "MonPort: factors."
+FRONT_FACTORS = {engine: front for front, engine in FACTOR_TARGETS.items()}
 
-# Poids associés à chaque niveau: (Moins = plafond souple, Plus = plancher souple, Imposer = plancher dur)
-LEVEL_WEIGHTS = {"classes": (0.25, 0.15, 0.10), "regions": (0.10, 0.10, 0.05), "themes": (0.10, 0.10, 0.05)}
+# Classes, régions, thématiques: « exclure », ou un pourcentage saisi (absent = neutre, libre pour l'optimiseur).
+# Classes: % du portefeuille. Régions et thématiques: % de la poche actions, tenu par les actions détenues en direct
+# (les FNB n'ont ni pays ni secteur connu, voir `catalog.SHARE_TYPES`). Imposé à ± SHARE_TOLERANCE.
+EXCLUDE = "exclure"
+SHARE_TOLERANCE = 0.02
 DIMENSION_TYPES = {
     "classes": (T.EXCLUDE_ASSET_CLASS, T.MAX_ASSET_CLASS_WEIGHT, T.MIN_ASSET_CLASS_WEIGHT),
-    "regions": (T.EXCLUDE_COUNTRY, T.MAX_COUNTRY_WEIGHT, T.MIN_COUNTRY_WEIGHT),
-    "themes": (T.EXCLUDE_SECTOR, T.MAX_SECTOR_WEIGHT, T.MIN_SECTOR_WEIGHT),
+    "regions": (T.EXCLUDE_COUNTRY, T.MAX_COUNTRY_SHARE, T.MIN_COUNTRY_SHARE),
+    "themes": (T.EXCLUDE_SECTOR, T.MAX_SECTOR_SHARE, T.MIN_SECTOR_SHARE),
 }
 
 LOSS_BY_REACTION = {0: 10.0, 1: 15.0, 2: 25.0, 3: 35.0}  # baisse de 20 %: je vends tout … j'investis plus
@@ -164,34 +179,86 @@ def direct_types(allowed: dict[str, list[str]]) -> list[str]:
     return [present[t.lower()] for t in DIRECT_TYPES if t.lower() in present]
 
 
+def fund_types(allowed: dict[str, list[str]]) -> list[str]:
+    """Les types d'instrument des FNB présents dans l'univers."""
+    present = {v.lower(): v for v in allowed.get("instrument_type", [])}
+    return [present[t.lower()] for t in FUND_TYPES if t.lower() in present]
+
+
+def share_of(choice: Any) -> Optional[float]:
+    """Le pourcentage saisi, en fraction; None pour « exclure », neutre ou une valeur illisible."""
+    if isinstance(choice, bool) or not isinstance(choice, (int, float)):
+        return None
+    return _clamp(float(choice) / 100)
+
+
+def shown_classes(prefs: dict) -> list[str]:
+    return SHOWN_CLASSES.get(str(prefs.get("vehicles")), [k for k in CLASSES if k != "liquidites"])
+
+
+def factor_constraints(prefs: dict, allowed: dict[str, list[str]]) -> tuple[list[Constraint], list[str]]:
+    """Échelle des facteurs -> exposition minimale ou maximale (z-score moyen des actions détenues en direct)."""
+    chosen = {f: level for f, level in (prefs.get("factors") or {}).items() if level}
+    if not chosen:
+        return [], []
+    if prefs.get("vehicles") == "fnb":
+        return [], ["facteurs (ils ne visent que les actions détenues en direct, et tu as choisi FNB seulement)"]
+    present = set(allowed.get("factor", []))
+    out, skipped = [], []
+    for item, level in chosen.items():
+        factor = FACTOR_TARGETS.get(item)
+        if factor not in present:
+            skipped.append(f"facteur « {item} »")
+            continue
+        kind = T.MIN_FACTOR_EXPOSURE if level > 0 else T.MAX_FACTOR_EXPOSURE
+        out.append(Constraint(type=kind, target=factor, value=FACTOR_LEVELS[level], hard=abs(level) == 2,
+                              note=f"{FACTOR_NOTE}{item} = {level}"))
+    return out, skipped
+
+
+def is_exclusion(c: Constraint) -> bool:
+    """Une exclusion du client, appliquée aux 3 profils: exclude_*, ou un facteur au niveau Exclure."""
+    return c.type.value.startswith("exclude_") or (
+        c.type is T.MAX_FACTOR_EXPOSURE and c.hard and (c.note or "").startswith(FACTOR_NOTE))
+
+
 def preference_constraints(prefs: dict, allowed: dict[str, list[str]]) -> tuple[list[Constraint], list[str]]:
-    """Traduit l'échelle Exclure … Imposer en contraintes du catalogue. Retourne aussi ce qui n'a pas pu l'être."""
+    """Traduit les exclusions et les pourcentages saisis en contraintes dures. Retourne aussi ce qui n'a pas pu l'être."""
     out: list[Constraint] = []
     skipped: list[str] = []
     for block, (exclude, cap, floor) in DIMENSION_TYPES.items():
-        moins, plus, impose = LEVEL_WEIGHTS[block]
-        for item, level in (prefs.get(block) or {}).items():
-            if not level:
+        for item, choice in (prefs.get(block) or {}).items():
+            share = share_of(choice)
+            if choice != EXCLUDE and share is None:
+                continue
+            if block == "classes" and item not in shown_classes(prefs):
                 continue
             targets = _targets(block, item, allowed)
-            # Une région de plusieurs pays ne s'exprime qu'en exclusion: les poids sont par pays.
-            if not targets or (level != -2 and len(targets) > 1 and block == "regions"):
+            if not targets:
                 skipped.append(f"{BLOCK_LABELS[block]} « {item} »")
                 continue
-            for t in targets[:1] if level > 0 else targets:
-                note = f"MonPort: {block}.{item} = {level}"
-                if level == -2:
-                    out.append(Constraint(type=exclude, target=t, hard=True, note=note))
-                elif level == -1:
-                    out.append(Constraint(type=cap, target=t, value=moins, hard=False, note=note))
-                else:
-                    out.append(Constraint(type=floor, target=t, value=impose if level == 2 else plus,
-                                          hard=level == 2, note=note))
-    skipped += [f"facteur « {f} »" for f, level in (prefs.get("factors") or {}).items() if level]
+            note = f"MonPort: {block}.{item} = {choice}"
+            if choice == EXCLUDE:
+                out += [Constraint(type=exclude, target=t, hard=True, note=note) for t in targets]
+                continue
+            # Une classe vise une seule classe du dataset; une région ou une thématique, tous ses pays ou secteurs.
+            target = targets[0] if block == "classes" else SEP.join(targets)
+            low, high = share - SHARE_TOLERANCE, share + SHARE_TOLERANCE
+            if low > 0:
+                out.append(Constraint(type=floor, target=target, value=round(low, 4), hard=True, note=note))
+            if high < 1:
+                out.append(Constraint(type=cap, target=target, value=round(high, 4), hard=True, note=note))
+    factors_out, factors_skipped = factor_constraints(prefs, allowed)
+    out += factors_out
+    skipped += factors_skipped
 
-    if prefs.get("vehicles") == "fnb":
+    vehicles = prefs.get("vehicles")
+    if vehicles == "fnb":
         out += [Constraint(type=T.EXCLUDE_INSTRUMENT_TYPE, target=t, hard=True, note="MonPort: FNB seulement")
                 for t in direct_types(allowed)]
+    elif vehicles == "titres":
+        out += [Constraint(type=T.EXCLUDE_INSTRUMENT_TYPE, target=t, hard=True, note="MonPort: titres individuels seulement")
+                for t in fund_types(allowed)]
     return _dedupe(out), skipped
 
 
@@ -271,17 +338,20 @@ def front_score(s: float) -> int:
 
 def coherence_facts(profile: dict, prefs: dict) -> list[str]:
     score, classes = risk_score(profile), prefs.get("classes") or {}
-    crypto, actions = classes.get("crypto", 0), classes.get("actions", 0)
+    crypto, actions = share_of(classes.get("crypto")), share_of(classes.get("actions"))
     out = []
-    if score < 40 and crypto >= 1:
-        out.append("Tu cherches plutôt de la stabilité, mais tu demandes plus de crypto-actifs. Les deux se marient mal : "
+    if score < 40 and crypto:
+        out.append("Tu cherches plutôt de la stabilité, mais tu demandes des crypto-actifs. Les deux se marient mal : "
                    "la crypto peut perdre la moitié de sa valeur en quelques mois.")
-    if score < 40 and actions == 2:
-        out.append("Imposer beaucoup d’actions avec un profil prudent peut te faire vivre des baisses difficiles à supporter.")
-    if score > 65 and actions <= -1:
+    if score < 40 and actions is not None and actions >= 0.7:
+        out.append("Mettre autant d’actions avec un profil prudent peut te faire vivre des baisses difficiles à supporter.")
+    if score > 65 and (classes.get("actions") == EXCLUDE or (actions is not None and actions <= 0.3)):
         out.append("Ton profil est dynamique, mais tu limites les actions : le rendement attendu sera plus faible que ce "
                    "que ton horizon permet.")
-    kept = [k for k in CLASSES if classes.get(k, 0) != -2]
+    if score < 77 and prefs.get("vehicles") == "titres":  # sous « agressif », le profil prévoit des obligations
+        out.append("Avec des titres individuels seulement, ton portefeuille n’aura pas d’obligations : ton profil en "
+                   "prévoit pourtant une part pour amortir les baisses.")
+    kept = [k for k in shown_classes(prefs) if classes.get(k) != EXCLUDE and share_of(classes.get(k)) != 0]
     if len(kept) == 1:
         out.append(f"Tu n’as gardé qu’un seul type de placement ({CLASS_LABELS[kept[0]].lower()}) : ton portefeuille sera "
                    "très peu diversifié.")
@@ -335,15 +405,20 @@ def _limits(vol: float, weight: float) -> list[Constraint]:
 
 
 def follow_profile(constraints: list[Constraint], floor: float, risk_label: str,
-                   allowed: dict[str, list[str]]) -> list[Constraint]:
+                   allowed: dict[str, list[str]], fixed: Iterable[str] = ()) -> list[Constraint]:
     """Impose la répartition du profil: la part d'obligations et, pour un profil prudent, pas de crypto.
     Ces règles remplacent les poids que les préférences visaient sur les mêmes classes; une exclusion des
-    obligations par le client l'emporte sur le plancher."""
+    obligations par le client l'emporte sur le plancher, comme une classe dont il a fixé le pourcentage (`fixed`)."""
     present = {v.lower(): v for v in allowed["asset_class"]}
+    fixed = {t.lower() for t in fixed}
     bonds = next((present[t.lower()] for t in BOND_TARGETS if t.lower() in present), None)
     cryptos = [present[t.lower()] for t in CRYPTO_TARGETS if t.lower() in present] if risk_label in NO_CRYPTO else []
+    cryptos = [t for t in cryptos if t.lower() not in fixed]
     excluded = {(c.target or "").lower() for c in constraints if c.type is T.EXCLUDE_ASSET_CLASS}
-    if bonds and (floor <= 0 or bonds.lower() in excluded):
+    # Le plancher se loge dans la place que les pourcentages du client laissent libre.
+    floor = min(floor, 1 - sum(c.value or 0 for c in constraints if c.type is T.MIN_ASSET_CLASS_WEIGHT and c.hard
+                                and (c.target or "").lower() in fixed))
+    if bonds and (floor <= 0 or bonds.lower() in excluded or bonds.lower() in fixed):
         bonds = None
     managed = {t.lower() for t in [bonds, *cryptos] if t}
     out = [c for c in constraints if not (c.type in (T.MIN_ASSET_CLASS_WEIGHT, T.MAX_ASSET_CLASS_WEIGHT)
@@ -369,10 +444,21 @@ def promote_preferences(constraints: list[Constraint]) -> list[Constraint]:
     return out
 
 
+def _family(c: Constraint) -> str:
+    """« sector_share », « asset_class_weight »…: le plancher et le plafond d'une même cible forment une famille."""
+    return c.type.value.removeprefix("min_").removeprefix("max_")
+
+
+def impose_targets(constraints: list[Constraint], targets: list[Constraint]) -> list[Constraint]:
+    """Les pourcentages saisis par le client remplacent ce que Pépite a écrit sur les mêmes cibles."""
+    keys = {(_family(c), (c.target or "").lower()) for c in targets}
+    return [c for c in constraints if (_family(c), (c.target or "").lower()) not in keys] + targets
+
+
 def fallback_plan(check: PepiteCheck, prefs: list[Constraint]) -> dict[str, tuple[str, list[Constraint]]]:
     """Profils écrits par le code si Pépite échoue ou si l'un des siens est inutilisable."""
     vol, weight = check.suggested_max_volatility, check.suggested_max_position_weight
-    exclusions = [c for c in prefs if c.type.value.startswith("exclude_")]
+    exclusions = [c for c in prefs if is_exclusion(c)]
     if check.coherent:
         return {
             "prudent": ("Un cran plus prudent que tes réponses.", prefs + _limits(slot_volatility(check, "prudent"), weight)),
@@ -441,13 +527,19 @@ def drop_unreachable_floors(market: Market, constraints: list[Constraint]) -> tu
     hard = [c for c in constraints if c.hard]
     eligible = market.assets[~excluded_mask(market, hard)]
     dropped = []
+    stocks = eligible[eligible["instrument_type"].astype(str).str.lower() == "stock"]
     for c in hard:
         column = _floor_column(c)
         if column and not (eligible[column].astype(str).str.lower() == c.target.lower()).any():
             dropped.append(c)
+        elif c.type in SHARE_TYPES and SHARE_TYPES[c.type][1] == "min" and (c.value or 0) > 0:
+            share_column = DIMENSION_COLUMN[SHARE_TYPES[c.type][0]]
+            members = {t.lower() for t in share_targets(c)}
+            if not stocks[share_column].astype(str).str.lower().isin(members).any():
+                dropped.append(c)
     if not dropped:
         return constraints, None
-    names = ", ".join(f"« {c.target} »" for c in dropped)
+    names = ", ".join(f"« {', '.join(share_targets(c))} »" for c in dropped)
     note = f"Avec tes choix, aucun placement ne correspond à {names} : je n’ai pas pu en garantir une part."
     return [c for c in constraints if c not in dropped], note
 
@@ -467,10 +559,17 @@ def _raise_volatility_cap(market: Market, constraints: list[Constraint]) -> tupl
     if not caps:
         return constraints, None
     eligible = market.assets[~excluded_mask(market, hard)]
-    picks = eligible.sort_values("ann_vol").index[:30].tolist()
+    picks = eligible.sort_values("ann_vol").index[:24].tolist()
+    # Les contraintes de facteurs exigent des actions qui les respectent: les moins volatiles d'entre elles.
+    picks += eligible.loc[factor_fits(eligible, hard)].sort_values("ann_vol").index[:8].tolist()
     for c in hard:  # les poids minimaux exigent des titres de leur groupe
         if column := _floor_column(c):
             group = eligible[eligible[column].astype(str).str.lower() == c.target.lower()]
+            picks += group.sort_values("sharpe", ascending=False).index[:3].tolist()
+        elif c.type in SHARE_TYPES and SHARE_TYPES[c.type][1] == "min":
+            members = {t.lower() for t in share_targets(c)}
+            group = eligible[(eligible["instrument_type"].astype(str).str.lower() == "stock")
+                             & eligible[DIMENSION_COLUMN[SHARE_TYPES[c.type][0]]].astype(str).str.lower().isin(members)]
             picks += group.sort_values("sharpe", ascending=False).index[:3].tolist()
     picks = list(dict.fromkeys(picks))[: get_runtime_settings().max_assets_per_portfolio]
     others = [c for c in constraints if not (c.hard and c.type is T.MAX_VOLATILITY)]
@@ -483,16 +582,24 @@ def _raise_volatility_cap(market: Market, constraints: list[Constraint]) -> tupl
 
 
 def build_profiles(plan: Optional[ConstraintPlan], check: PepiteCheck, prefs: list[Constraint],
-                   allowed: dict[str, list[str]]) -> tuple[dict[str, tuple[str, list[Constraint]]], int]:
-    """Retourne les 3 profils par slot et le nombre de profils remplacés par ceux du code."""
+                   allowed: dict[str, list[str]], impose: bool = True) -> tuple[dict[str, tuple[str, list[Constraint]]], int]:
+    """Retourne les 3 profils par slot et le nombre de profils remplacés par ceux du code.
+
+    `impose`: les pourcentages du questionnaire remplacent ceux de Pépite dans les profils qui suivent les préférences.
+    Faux pour une relance du chat, où Pépite réécrit elle-même ce que le client a changé."""
     fallback = fallback_plan(check, prefs)
     floors = bond_floors(check)
-    exclusions = [c for c in prefs if c.type.value.startswith("exclude_")]
+    exclusions = [c for c in prefs if is_exclusion(c)]
+    # Tout le reste du questionnaire: pourcentages et facteurs, imposés tels quels.
+    targets = [c for c in prefs if not is_exclusion(c)]
     proposed = {p.slot: p for p in (plan.profiles if plan else [])}
     out, replaced = {}, 0
     for slot in SLOTS:
         p = proposed.get(slot)
-        constraints = validate_profile(p.constraints, exclusions, allowed) if p else None
+        # « Ton profil » (incohérent) ignore les préférences; partout ailleurs, elles comptent pour de vrai.
+        follows = check.coherent or slot != "prudent"
+        raw = impose_targets(p.constraints, targets) if p and impose and follows else p.constraints if p else None
+        constraints = validate_profile(raw, exclusions, allowed) if raw is not None else None
         rationale = p.rationale if p else ""
         if constraints is None:
             replaced += 1
@@ -502,11 +609,12 @@ def build_profiles(plan: Optional[ConstraintPlan], check: PepiteCheck, prefs: li
         if (check.coherent or slot != "conviction") and not any(c.type is T.MAX_STOCK_WEIGHT for c in constraints):
             cap = min(check.suggested_max_position_weight, LINE_CAP)
             constraints = constraints + [Constraint(type=T.MAX_STOCK_WEIGHT, value=cap, hard=True, note="Limite du profil")]
-        # « Ton profil » (incohérent) ignore les préférences; partout ailleurs, elles comptent pour de vrai.
-        if check.coherent or slot != "prudent":
+        if follows:
             constraints = promote_preferences(constraints)
         if slot in floors:
-            constraints = follow_profile(constraints, floors[slot], check.risk_label, allowed)
+            # Une classe dont le client a fixé le pourcentage garde son pourcentage, plancher d'obligations compris.
+            fixed = [c.target for c in targets if c.target and _family(c) == "asset_class_weight"] if follows else []
+            constraints = follow_profile(constraints, floors[slot], check.risk_label, allowed, fixed)
         # Le plafond de volatilité vient du code, à la position du gestionnaire (filet de sécurité sous A).
         constraints = [c for c in constraints if c.type is not T.MAX_VOLATILITY]
         if (vol := slot_volatility(check, slot)) is not None:
@@ -619,7 +727,20 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
         },
         "warnings": warnings,
         "agentNotes": agent_notes,
+        "factors": factor_view(p),
     }
+
+
+def factor_view(p: Portfolio) -> dict:
+    """Expositions aux facteurs et actions notées (FactorView de frontend/src/types.ts), identifiants du frontend."""
+    weights = {pos.symbol: pos.weight for pos in p.positions}
+    exposure, coverage = factors.exposures(weights)
+    scores = factors.scores_for(weights)
+    names = {pos.symbol: pos.name for pos in p.positions}
+    stocks = [{"ticker": s, "name": names[s], "weight": weights[s],
+               "scores": {FRONT_FACTORS[f]: round(float(scores.at[s, f]), 2) for f in factors.FACTORS}}
+              for s in sorted(scores.index, key=lambda s: -weights[s])]
+    return {"coverage": coverage, "exposure": {FRONT_FACTORS[f]: v for f, v in exposure.items()}, "stocks": stocks}
 
 
 # --------------------------------------------------------------------------- #
@@ -628,6 +749,7 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
 TOOL_TEXT = {
     "describe_universe": "tour d’horizon des placements",
     "screen_assets": "recherche de placements",
+    "screen_factor": "recherche d’actions selon tes styles",
     "optimize_portfolio": "calcul des poids",
     "get_latest_macro_snapshot": "lecture du contexte économique",
     "get_macro_history": "comparaison avec des périodes passées",

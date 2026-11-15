@@ -1,4 +1,4 @@
-import type { AssetClass, ConstraintBlock, Holding, Level } from '../types'
+import type { AssetClass, ConstraintBlock, FactorId, Holding, Level, Share, Vehicles } from '../types'
 
 export interface CatalogItem {
   id: string
@@ -42,15 +42,20 @@ export const CLASS_EXPLAINERS: Record<AssetClass, string> = {
   liquidites: 'À l’abri et disponible en tout temps. Ton coussin pour les passages difficiles.',
 }
 
+/** Classes proposées au client : jamais les liquidités ; hors FNB, il ne reste que les actions et la crypto. */
+export function shownClasses(vehicles: Vehicles): AssetClass[] {
+  return vehicles === 'titres' ? ['actions', 'crypto'] : ['actions', 'obligations', 'immobilier', 'or', 'crypto']
+}
+
 export const BLOCKS: Record<ConstraintBlock, { title: string; hint: string; items: CatalogItem[] }> = {
   classes: {
     title: 'Quels types de placements veux-tu dans ton portefeuille?',
-    hint: 'Laisse « Neutre » si tu n’as pas d’avis : les agents choisiront pour toi.',
-    items: (Object.keys(CLASS_LABELS) as AssetClass[]).map((id) => ({ id, label: CLASS_LABELS[id] })),
+    hint: 'Exclus ce que tu ne veux pas, fixe un pourcentage du portefeuille, ou laisse « Neutre » : les agents choisiront pour toi.',
+    items: shownClasses('tous').map((id) => ({ id, label: CLASS_LABELS[id] })),
   },
   regions: {
     title: 'Des régions du monde à privilégier ou à éviter?',
-    hint: 'Par défaut, ton portefeuille est diversifié dans le monde entier.',
+    hint: 'Les pourcentages visent la part actions de ton portefeuille. Ce que tu laisses « Neutre » reste libre.',
     items: [
       { id: 'canada', label: 'Canada' },
       { id: 'usa', label: 'États-Unis' },
@@ -61,7 +66,7 @@ export const BLOCKS: Record<ConstraintBlock, { title: string; hint: string; item
   },
   themes: {
     title: 'Des thématiques qui te tiennent à cœur… ou pas?',
-    hint: 'Mets « Exclure » sur ce que tu ne veux pas financer.',
+    hint: 'Pars d’un modèle, puis ajuste. Les pourcentages visent la part actions de ton portefeuille.',
     items: [
       { id: 'tech', label: 'Technologie' },
       { id: 'ia', label: 'Intelligence artificielle' },
@@ -84,15 +89,151 @@ export const BLOCKS: Record<ConstraintBlock, { title: string; hint: string; item
       { id: 'qualite', label: 'Qualité', hint: 'Des entreprises rentables, peu endettées.' },
       { id: 'momentum', label: 'Momentum', hint: 'Des titres qui montent depuis plusieurs mois.' },
       { id: 'value', label: 'Value', hint: 'Des titres jugés bon marché par rapport à leurs résultats.' },
+      { id: 'croissance', label: 'Croissance', hint: 'Des entreprises dont les ventes et les profits augmentent vite.' },
     ],
   },
 }
+
+/**
+ * Lecture des facteurs au tableau de bord. `low` décrit une exposition négative : « Value » négatif veut dire des
+ * titres plutôt chers, pas un mauvais portefeuille.
+ */
+export const FACTOR_VIEW: Record<FactorId, { label: string; high: string; low: string; ends: [string, string] }> = {
+  qualite: { label: 'Qualité', high: 'plus rentables, moins endettées', low: 'moins rentables ou plus endettées', ends: ['Fragiles', 'Solides'] },
+  value: { label: 'Value', high: 'plutôt bon marché', low: 'plutôt chères', ends: ['Chères', 'Bon marché'] },
+  momentum: { label: 'Momentum', high: 'en hausse depuis des mois', low: 'en retard sur leur groupe', ends: ['En retard', 'En hausse'] },
+  croissance: { label: 'Croissance', high: 'ventes et profits en forte hausse', low: 'croissance plus lente', ends: ['Lente', 'Rapide'] },
+  taille: { label: 'Petites capitalisations', high: 'plus petites entreprises', low: 'plus grandes entreprises', ends: ['Grandes', 'Petites'] },
+}
+export const FACTOR_IDS = Object.keys(FACTOR_VIEW) as FactorId[]
+
+/**
+ * Modèle des scores, tel que data-prep/factors_model.ipynb le calcule (voir data-prep/FACTORS.md) : chaque sous-mesure
+ * est orientée « plus haut = mieux », puis les sous-mesures disponibles sont moyennées à poids égaux.
+ */
+export const FACTOR_MODEL: Record<FactorId, { idea: string; group: 'marche-secteur' | 'marche'; metrics: { label: string }[] }> = {
+  qualite: {
+    idea: 'Une entreprise rentable, peu endettée, qui transforme ses ventes en argent comptant.',
+    group: 'marche-secteur',
+    metrics: [
+      { label: 'Rendement des actifs' },
+      { label: 'Marge d’exploitation' },
+      { label: 'Faible endettement' },
+      { label: 'Marge de flux de trésorerie' },
+    ],
+  },
+  value: {
+    idea: 'Ce qu’on paie pour chaque dollar de bénéfices, de ventes ou d’actifs.',
+    group: 'marche-secteur',
+    metrics: [
+      { label: 'Bénéfice prévu / prix' },
+      { label: 'Valeur comptable / prix' },
+      { label: 'Ventes / prix' },
+      { label: 'BAIIA / valeur d’entreprise' },
+    ],
+  },
+  momentum: {
+    idea: 'Les titres qui montent ont tendance à continuer de monter quelque temps.',
+    group: 'marche-secteur',
+    metrics: [
+      { label: 'Variation sur 12 mois' },
+      { label: 'Écart à la moyenne 200 jours' },
+    ],
+  },
+  croissance: {
+    idea: 'Des ventes et des profits qui augmentent plus vite que ceux des concurrents.',
+    group: 'marche-secteur',
+    metrics: [
+      { label: 'Croissance des revenus' },
+      { label: 'Croissance des bénéfices' },
+      { label: 'Croissance prévue du BPA' },
+    ],
+  },
+  taille: {
+    idea: 'Les plus petites entreprises de leur marché, souvent plus agiles et plus risquées.',
+    group: 'marche',
+    metrics: [{ label: 'Capitalisation boursière' }],
+  },
+}
+
+/** Seuil visé par niveau (mêmes valeurs que FACTOR_LEVELS de backend/src/invest_agents/monport.py). */
+export const FACTOR_TARGETS: Record<Exclude<Level, 0>, number> = { 2: 0.5, 1: 0.2, [-1]: -0.2, [-2]: -0.5 }
+
+/** Somme des pourcentages saisis, et s'il reste un élément neutre (libre) parmi `ids`. */
+export function shareTotal(values: Record<string, Share>, ids: string[]) {
+  const entered = ids.map((id) => values[id]).filter((v): v is number => typeof v === 'number')
+  return { total: entered.reduce((a, b) => a + b, 0), entered: entered.length, free: ids.filter((id) => values[id] === undefined).length }
+}
+
+/** Les pourcentages d'un bloc font au plus 100 %, et exactement 100 % quand plus rien n'est libre. */
+export function sharesValid(values: Record<string, Share>, ids: string[]): boolean {
+  const { total, entered, free } = shareTotal(values, ids)
+  return total <= 100 && (free > 0 || entered === 0 || total === 100)
+}
+
+/** Parts égales et entières qui font 100 : les premiers reçoivent le reste de la division. */
+function equalShares(ids: string[]): Record<string, number> {
+  const base = Math.floor(100 / ids.length)
+  return Object.fromEntries(ids.map((id, i) => [id, base + (i < 100 - base * ids.length ? 1 : 0)]))
+}
+
+export interface ThemePreset {
+  id: string
+  label: string
+  desc: string
+  /** Les thématiques après le choix du modèle ; les exclusions déjà faites sont gardées. */
+  apply: (current: Record<string, Share>) => Record<string, Share>
+}
+
+const exclusions = (current: Record<string, Share>) => Object.fromEntries(Object.entries(current).filter(([, v]) => v === 'exclure'))
+
+const keep = (current: Record<string, Share>, values: Record<string, Share>) => ({
+  ...Object.fromEntries(Object.entries(exclusions(current)).filter(([id]) => !(id in values))),
+  ...values,
+})
+
+export const THEME_PRESETS: ThemePreset[] = [
+  {
+    id: 'neutre',
+    label: 'Neutre',
+    desc: 'Toutes les thématiques que tu n’exclus pas, à parts égales.',
+    apply: (current) => {
+      const ids = BLOCKS.themes.items.map((t) => t.id).filter((id) => current[id] !== 'exclure')
+      return { ...exclusions(current), ...(ids.length ? equalShares(ids) : {}) }
+    },
+  },
+  {
+    id: 'tech',
+    label: 'Techno d’abord',
+    desc: '45 % en technologie, le reste libre.',
+    apply: (current) => keep(current, { tech: 45 }),
+  },
+  {
+    id: 'esg',
+    label: 'Responsable (ESG)',
+    desc: 'Sans énergies fossiles, armement ni alcool et tabac.',
+    apply: (current) => keep(current, { fossiles: 'exclure', armement: 'exclure', 'alcool-tabac': 'exclure' }),
+  },
+  {
+    id: 'defensif',
+    label: 'Défensif',
+    desc: 'Santé et consommation, 25 % chacune : des secteurs qui résistent mieux aux crises.',
+    apply: (current) => keep(current, { sante: 25, consommation: 25 }),
+  },
+  {
+    id: 'revenus',
+    label: 'Revenus',
+    desc: 'Banques et assurances 30 %, immobilier 15 % : des entreprises qui versent souvent des dividendes.',
+    apply: (current) => keep(current, { finance: 30, immobilier: 15 }),
+  },
+]
 
 /** Univers d'exemple : à remplacer par l'univers réel de l'équipe. */
 export interface UniverseLine extends Omit<Holding, 'weight'> {
   region?: string
   theme?: string
-  factor?: string
+  /** Seulement pour une action détenue en direct (les FNB n'ont pas de score). */
+  scores?: Partial<Record<FactorId, number>>
   fee: number
 }
 
@@ -110,10 +251,15 @@ export const UNIVERSE: UniverseLine[] = [
   { ticker: 'THM-FIN', name: 'FNB banques canadiennes', assetClass: 'actions', theme: 'finance', fee: 0.3 },
   { ticker: 'THM-CON', name: 'FNB consommation', assetClass: 'actions', theme: 'consommation', fee: 0.35 },
   { ticker: 'THM-IND', name: 'FNB infrastructures', assetClass: 'actions', theme: 'industrie', fee: 0.4 },
-  { ticker: 'FAC-PC', name: 'FNB petites capitalisations', assetClass: 'actions', factor: 'taille', fee: 0.3 },
-  { ticker: 'FAC-QL', name: 'FNB qualité', assetClass: 'actions', factor: 'qualite', fee: 0.25 },
-  { ticker: 'FAC-MO', name: 'FNB momentum', assetClass: 'actions', factor: 'momentum', fee: 0.28 },
-  { ticker: 'FAC-VA', name: 'FNB value', assetClass: 'actions', factor: 'value', fee: 0.25 },
+  // Actions détenues en direct (fictives), avec leurs scores de facteurs : seules elles en ont, comme dans l'univers réel.
+  { ticker: 'TIT-BNQ', name: 'Banque Laurentides (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: 0.6, value: 0.9, momentum: 0.2, croissance: -0.3, taille: -1.1 } },
+  { ticker: 'TIT-RAI', name: 'Rail Boréal (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: 1.2, value: -0.4, momentum: 0.5, croissance: 0.3, taille: -0.9 } },
+  { ticker: 'TIT-LOG', name: 'Logiciels Nordik (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: 0.9, value: -1.3, momentum: 1.1, croissance: 1.6, taille: -0.4 } },
+  { ticker: 'TIT-EPI', name: 'Épiceries du Fleuve (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: 0.7, value: 0.1, momentum: -0.3, croissance: -0.2, taille: 0.2 } },
+  { ticker: 'TIT-MIN', name: 'Mines Abitibi (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: -0.8, value: 1.4, momentum: -0.6, croissance: 0.4, taille: 0.9 } },
+  { ticker: 'TIT-SAN', name: 'Biotech Saint-Laurent (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: -1.1, value: -0.7, momentum: 0.8, croissance: 1.2, taille: 1.3 } },
+  { ticker: 'TIT-ENE', name: 'Hydro Laurentie (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: 0.4, value: 0.5, momentum: -0.1, croissance: -0.5, taille: -0.2 } },
+  { ticker: 'TIT-DET', name: 'Détail Prairie (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: -0.3, value: 0.8, momentum: -0.9, croissance: -0.6, taille: 1.0 } },
   { ticker: 'OBL-GV', name: 'FNB obligations gouvernementales canadiennes', assetClass: 'obligations', fee: 0.09 },
   { ticker: 'OBL-SO', name: 'FNB obligations de sociétés', assetClass: 'obligations', fee: 0.15 },
   { ticker: 'IMM-CA', name: 'FNB fiducies immobilières (FPI)', assetClass: 'immobilier', fee: 0.3 },

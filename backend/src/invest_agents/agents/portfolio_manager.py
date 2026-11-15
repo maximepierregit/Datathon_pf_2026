@@ -28,7 +28,12 @@ Style: {guidance}
 
 DÉMARCHE
 1. Appelle `get_latest_macro_snapshot` pour situer le régime macro, puis `describe_universe` et `screen_assets`
-   (plusieurs fois, avec des filtres différents) pour repérer des candidats.
+   (plusieurs fois, avec des filtres différents) pour repérer des candidats. Si tes contraintes contiennent
+   min_factor_exposure ou max_factor_exposure, appelle `screen_factor` sur ce facteur et garde au moins 10 % du
+   portefeuille en actions détenues en direct bien notées: l'exposition est la moyenne de leurs scores, pondérée par
+   leur poids (les FNB ne comptent pas). Les mieux notées sont souvent très volatiles: sous un plafond de
+   volatilité, passe `min_score` au seuil du profil et `sort_by="ann_vol"`. Pour plusieurs facteurs, préfère des
+   actions qui respectent chaque seuil. `optimize_portfolio` te rend l'exposition obtenue (`factor_exposure`).
 2. Choisis entre {low} et {high} titres. Diversifie par secteur, pays et classe d'actifs. Le régime macro peut orienter
    tes choix (par exemple la part d'obligations selon le niveau des taux), dans le respect de ton mandat.
 3. Appelle `optimize_portfolio` avec ta sélection. Les contraintes dures de l'utilisateur sont appliquées par l'outil;
