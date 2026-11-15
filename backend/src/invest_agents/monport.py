@@ -1,18 +1,9 @@
-"""Pont entre le frontend MonPort et les agents.
+"""Règles déterministes de MonPort et traduction des événements pour le frontend.
 
-Deux appels, un par écran (`frontend/src/api.ts`):
-
-    {"mode": "monport_check", "profile": {...}, "constraints": {...}}
-        Pépite lit le questionnaire (JSON) et juge sa cohérence -> {"type": "check", "check": PepiteCheck}
-
-    {"mode": "monport", "profile": ..., "constraints": ..., "check": PepiteCheck, "adjustment": "texte libre"}
-        Pépite écrit 3 profils de contraintes (JSON) -> 3 gestionnaires en parallèle -> 3 juges
-        profil incohérent: 3 portefeuilles, « Tes contraintes » et deux mélanges 80/20 calculés par le code
-        profil cohérent:   le juge final désigne un seul portefeuille
-        -> responsable des risques (CRO) -> {"type": "portfolios"}
-
-Les événements suivent `PipelineEvent` de `frontend/src/types.ts`: une carte par agent. Le pipeline de
-`orchestrator.py` n'est pas utilisé ici, seulement ses agents, l'optimiseur et `constraints`.
+L'orchestration est dans `workflow/` (Pépite pilote les agents). Ce module garde ce que le code garantit:
+le profil de risque (capacité, tolérance, aversion A), la cohérence calculée, la traduction des préférences en
+contraintes, les profils de contraintes validés, le mélange 80/20, le choix du gagnant et la forme des
+portefeuilles que lit le frontend (`frontend/src/types.ts`).
 """
 
 from __future__ import annotations
@@ -24,17 +15,10 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Iterable, Optional
 
 from pydantic import ValidationError
 
-from .agents.base import AgentError
-from .agents.cro import run_cro
-from .agents.final_judge import run_final_judge
-from .agents.judge import run_judge
-from .agents.pepite import run_check, run_plan
-from .agents.portfolio_manager import run_portfolio_manager
 from .config import get_settings
-from .constraints import DIMENSION_COLUMN, detect_conflicts, evaluate, excluded_mask, validate_all
-from .data import Market, get_market
+from .constraints import DIMENSION_COLUMN, detect_conflicts, excluded_mask, validate_all
+from .data import Market
 from .events import EventBus
-from .mandates import Mandate
 from .optimizer import optimize
 from .schemas import (
     CoherenceIssue,
@@ -42,7 +26,6 @@ from .schemas import (
     ConstraintPlan,
     ConstraintType as T,
     InvestorForm,
-    InvestorProfile,
     JudgeVerdict,
     PepiteCheck,
     PepiteReview,
@@ -619,7 +602,8 @@ def pepite(text: str) -> dict:
 
 class Translator:
     """Les statuts des agents deviennent des cartes: gestionnaire-<slot>, juge-<slot>, juge-final, risques.
-    Les événements « front » sont émis tels quels par l'orchestration (carte Pépite, portefeuilles…)."""
+    Les événements « front » sont émis tels quels par l'orchestration (carte Pépite, portefeuilles…). Pépite décrit
+    elle-même ce qu'elle fait (événements « front »): ses propres événements d'agent ne passent pas ici."""
 
     def __init__(self) -> None:
         self.slots: dict[str, str] = {}  # nom de mandat -> slot, rempli quand les profils sont prêts
@@ -630,10 +614,12 @@ class Translator:
             yield e["event"]
         elif kind == "heartbeat":
             yield {"type": "heartbeat"}
+        elif e.get("step") == "chat":  # une question posée après coup ne touche pas aux cartes du pipeline
+            return
         elif agent == "Juge final":
             if state == "start":
                 yield status("juge-final", "running", "Comparaison des 3 portefeuilles…")
-        elif agent == "CRO":
+        elif agent.startswith("Risque "):
             if state == "start":
                 yield status("risques", "running", "Recherche des incohérences avec ton profil…")
         elif agent.startswith("PM ") and (slot := self.slots.get(agent.removeprefix("PM "))):
@@ -646,11 +632,6 @@ class Translator:
                 yield status(card, "running", "Sélection de secours en cours…")
             elif state == "done":
                 yield status(card, "done", "Portefeuille prêt.")
-        elif agent.startswith("Juge ") and (slot := self.slots.get(agent.removeprefix("Juge "))):
-            if state == "start":
-                yield status(f"juge-{slot}", "running", "Vérification de tes limites…")
-            elif state in ("done", "warning"):
-                yield status(f"juge-{slot}", "done", "Évaluation terminée.")
 
 
 def front(bus: EventBus, event: dict) -> None:
@@ -665,153 +646,8 @@ def _questionnaire(payload: dict) -> tuple[dict, dict]:
     return payload.get("profile") or {}, payload.get("constraints") or {}
 
 
-async def _check(bus: EventBus, profile: dict, prefs: dict) -> PepiteCheck:
-    facts = coherence_facts(profile, prefs)
-    try:
-        review = await run_check(bus, {"profile": profile, "constraints": prefs}, computed_profile(profile), facts)
-        return assess(profile, review)
-    except AgentError:
-        logger.exception("Vérification de Pépite en échec, repli sur les règles du code")
-        return fallback_check(profile, facts)
-
-
-async def check_questionnaire(payload: dict, bus: EventBus) -> None:
-    profile, prefs = _questionnaire(payload)
-    market = await asyncio.to_thread(get_market)
-    to_form(profile, prefs, market)  # valide le profil avant d'appeler le modèle
-    check = await _check(bus, profile, prefs)
-    front(bus, {"type": "check", "check": check.model_dump(mode="json")})
-    front(bus, {"type": "done"})
-
-
-async def _judge(bus: EventBus, market: Market, investor: InvestorProfile, p: Portfolio) -> JudgeVerdict:
-    try:
-        return await run_judge(bus, market, investor, p, investor.constraints)
-    except Exception as exc:  # noqa: BLE001  même repli que orchestrator._judge_portfolios
-        logger.exception("Juge %s en échec", p.id)
-        checks = evaluate(market, {x.symbol: x.weight for x in p.positions}, investor.constraints)
-        hard = sum(1 for c in checks if c.constraint.hard and not c.passed)
-        soft = sum(1 for c in checks if not c.constraint.hard and not c.passed)
-        return JudgeVerdict(portfolio_id=p.id, compliant=hard == 0, hard_violations=hard, soft_violations=soft,
-                            checks=checks, fit_score=0, comment=f"Avis indisponible ({type(exc).__name__}).")
-
-
-async def build_portfolios(payload: dict, bus: EventBus, translator: Translator) -> None:
-    profile, prefs = _questionnaire(payload)
-    market = await asyncio.to_thread(get_market)
-    form, skipped = to_form(profile, prefs, market)
-    try:  # le profil de risque est recalculé: seuls le texte et la cohérence de Pépite sont repris
-        check = assess(profile, PepiteCheck.model_validate(payload.get("check")))
-    except ValidationError:
-        check = await _check(bus, profile, prefs)
-    coherent = check.coherent
-    adjustment = str(payload.get("adjustment") or "").strip()[:MAX_ADJUSTMENT] if coherent else ""
-
-    # Pépite écrit les 3 profils de contraintes
-    front(bus, pepite("C’est parti! J’écris les consignes de tes trois gestionnaires."))
-    front(bus, status("pepite", "running", "J’écris les 3 profils de contraintes…"))
-    allowed = market.allowed_values()
-    direct = [v for v in allowed["asset_class"] if v in DIRECT_CLASSES]
-    try:
-        plan = await run_plan(bus, {"profile": profile, "constraints": prefs}, check, adjustment, allowed, direct)
-    except AgentError:
-        logger.exception("Plan de Pépite en échec, repli sur les profils du code")
-        plan = None
-    if plan and adjustment and plan.risk_adjustment:  # « je veux dormir tranquille »: au plus une demi-catégorie
-        check = assess(profile, check, plan.risk_adjustment)
-        if plan.risk_adjustment_reason:
-            front(bus, pepite(plan.risk_adjustment_reason))
-    profiles, replaced = build_profiles(plan, check, list(form.constraints), allowed)
-    if replaced:
-        logger.info("%d profil(s) de Pépite remplacé(s) par ceux du code", replaced)
-    notes: dict[str, list[str]] = {s: [] for s in SLOTS}
-    for slot in SLOTS:
-        constraints, note = await asyncio.to_thread(ensure_feasible, market, profiles[slot][1])
-        profiles[slot] = (profiles[slot][0], constraints)
-        if note:
-            notes[slot].append(note)
-    hard = [c for c in profiles["equilibre"][1] if c.hard]
-    before, after = len(market.assets), int((~excluded_mask(market, hard)).sum())
-    front(bus, {"type": "universe", "before": before, "after": after})
-    front(bus, status("pepite", "done", "3 profils de contraintes envoyés aux gestionnaires."))
-
-    # 3 gestionnaires en parallèle, un profil chacun
-    names = VARIANT_NAMES if coherent else BASE_NAMES
-    translator.slots = {names[s]: s for s in SLOTS}
-    investors = {s: InvestorProfile(form=form, assessment=check, constraints=profiles[s][1]) for s in SLOTS}
-
-    async def manage(slot: str) -> Portfolio:
-        objective, aversion = objective_for(slot, check)
-        mandate = Mandate(id=slot, name=names[slot], objective=objective, description=profiles[slot][0],
-                          guidance=guidance_for(aversion), vol_cap_factor=None, risk_aversion=aversion)
-        try:
-            return await run_portfolio_manager(bus, market, mandate, investors[slot], investors[slot].constraints)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Gestionnaire %s en échec", slot)
-            return Portfolio(id=slot, mandate=mandate.name, mandate_description=mandate.description,
-                             status="failed", failure_reason=type(exc).__name__)
-
-    front(bus, pepite("Mes trois gestionnaires construisent leur portefeuille en parallèle."))
-    built = [p for p in await asyncio.gather(*(manage(s) for s in SLOTS)) if p.status == "ok"]
-    if not built:
-        front(bus, {"type": "error", "message": "Aucun portefeuille n’a pu être construit. Réessaie dans un instant."})
-        return
-    verdicts = dict(zip([p.id for p in built], await asyncio.gather(*(_judge(bus, market, investors[p.id], p) for p in built))))
-    for slot in SLOTS:
-        v = verdicts.get(slot)
-        text = ("Pas de portefeuille à vérifier." if v is None else "Toutes tes limites sont respectées." if v.compliant
-                else f"{v.hard_violations} limite(s) non respectée(s).")
-        front(bus, status(f"juge-{slot}", "done", text))
-
-    # Cohérent: un gagnant. Incohérent: tes contraintes + deux mélanges 80/20.
-    if coherent:
-        choice, justification = None, ""
-        if len(built) > 1:
-            try:
-                pick = await run_final_judge(bus, investors["equilibre"], built, verdicts)
-                choice, justification = pick.winner, pick.justification
-            except AgentError:
-                logger.exception("Juge final en échec, choix par le code")
-        winner = pick_winner(built, verdicts, choice)
-        if winner.id != choice:
-            justification = f"La {winner.mandate.lower()} respecte le mieux tes limites, avec la meilleure note du juge."
-        front(bus, status("juge-final", "done", f"La {winner.mandate.lower()} l’emporte."))
-        presented = [(winner, verdicts.get(winner.id), WINNER_NAME, justification)]
-    else:
-        by = {p.id: p for p in built}
-        presented = []
-        for slot, p in (("prudent", blend(market, "prudent", by.get("prudent"), by.get("conviction"))),
-                        ("equilibre", by.get("equilibre")),
-                        ("conviction", blend(market, "conviction", by.get("conviction"), by.get("prudent")))):
-            if p is not None:
-                p = p.model_copy(update={"mandate": TRIO[slot][0]})
-                # Les juges ont vérifié les bases; seul « Tes contraintes » est présenté tel quel.
-                presented.append((p, verdicts.get(slot) if slot == "equilibre" else None, *TRIO[slot]))
-        front(bus, status("pepite", "done", "Mélanges 80/20 prêts : profil d’abord, préférences d’abord."))
-
-    # Responsable des risques, puis les portefeuilles
-    report = None
-    try:
-        rr = await run_cro(bus, investors["equilibre"], [p for p, *_ in presented],
-                           {p.id: v for p, v, *_ in presented if v})
-        report = rr.model_dump(mode="json")
-    except AgentError:
-        logger.exception("CRO en échec")
-    n = sum(1 for w in (report or {}).get("warnings", []) if w.get("severity") in ("medium", "high"))
-    # Les incohérences du profil, Pépite les a déjà montrées avant l'envoi: on ne garde que les mises en garde
-    # sur les portefeuilles.
-    front(bus, status("risques", "done", f"{n} mise(s) en garde à lire." if n else "Rien de particulier à signaler."))
-    front(bus, {"type": "portfolios", "portfolios": {
-        p.id: to_portfolio(p, v, market, report, check.risk_position, skipped, notes[p.id], name, tagline)
-        for p, v, name, tagline in presented
-    }})
-    front(bus, pepite("Voilà! Ton portefeuille t’attend." if coherent
-                      else "Voilà! Trois propositions t’attendent. C’est toi qui choisis."))
-    front(bus, {"type": "done"})
-
-
 # --------------------------------------------------------------------------- #
-# Points d'entrée (main.py)
+# Flux SSE (les points d'entrée sont dans workflow/flow.py)
 # --------------------------------------------------------------------------- #
 async def _stream(work: Callable[[EventBus], Awaitable[None]], translator: Translator) -> AsyncIterator[dict]:
     bus = EventBus()
@@ -832,12 +668,3 @@ async def _stream(work: Callable[[EventBus], Awaitable[None]], translator: Trans
     async for event in bus.stream(task):
         for out in translator.translate(event):
             yield out
-
-
-def stream_check(payload: dict) -> AsyncIterator[dict]:
-    return _stream(lambda bus: check_questionnaire(payload, bus), Translator())
-
-
-def stream_monport(payload: dict) -> AsyncIterator[dict]:
-    translator = Translator()
-    return _stream(lambda bus: build_portfolios(payload, bus, translator), translator)

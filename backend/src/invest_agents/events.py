@@ -68,6 +68,13 @@ class AgentStreamHandler:
         self._thinking: list[str] = []
         self._seen_tools: set[str] = set()
 
+    def bind(self, bus: EventBus, step: Optional[str] = None, ignore_tools: Iterable[str] = ()) -> None:
+        """Rattache le handler au bus d'une nouvelle requête (les agents persistants vivent plus longtemps qu'elle)."""
+        self.flush()
+        self._bus, self._ignore = bus, set(ignore_tools)
+        if step is not None:
+            self._step = step
+
     def __call__(self, **kwargs: Any) -> None:
         try:
             text = kwargs.get("reasoningText")
