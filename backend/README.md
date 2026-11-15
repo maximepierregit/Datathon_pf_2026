@@ -9,8 +9,12 @@ cd backend
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .
 cp .env.example .env            # puis exporter les variables (ou laisser les valeurs par défaut)
 
-# Dataset: exporter le DataFrame de create_opt_inputs (Universe_Cleaned.ipynb), ou générer un jeu SYNTHÉTIQUE
-#   df.to_parquet("backend/data/universe.parquet")
+# Dataset, au choix:
+# a) réel, depuis S3 (exige des identifiants AWS avec s3:GetObject, ex. WSParticipantRole):
+#   export DATASET_PATH=s3://monport-datasets-381491955506/universe/universe.parquet
+# b) réel, reconstruit en local depuis la racine du dépôt (Wikipedia + yfinance, cache dans backend/data/raw/):
+#   pip install -r data-prep/requirements.txt && python data-prep/build_universe.py
+# c) SYNTHÉTIQUE, pour le développement:
 .venv/bin/python scripts/make_sample_dataset.py
 
 .venv/bin/python scripts/run_local.py                          # parcours initial (appelle Bedrock)
@@ -80,11 +84,28 @@ Tous les événements ont `type`, `step` et `agent`.
 Puis créer le runtime (console, CLI `agentcore` ou `create_agent_runtime`, voir la
 [documentation](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-get-started-code-deploy-python.html)).
 Point d'entrée `main.py`, runtime `PYTHON_3_13`, réseau `PUBLIC`. Variables d'environnement: `MODEL_STRONG`, `MODEL_FAST`,
-`DATASET_PATH` (par défaut `data/universe.parquet`, inclus dans le zip si présent).
+`DATASET_PATH=s3://monport-datasets-381491955506/universe/universe.parquet`. Le zip n'inclut le dataset qu'avec
+`EMBED_DATASET=1 ./scripts/build_package.sh`.
 
 Le rôle d'exécution doit autoriser `bedrock:InvokeModel` et `bedrock:InvokeModelWithResponseStream` sur les profils
-d'inférence utilisés (et sur les modèles sous-jacents dans les régions concernées), ainsi que `s3:GetObject` si le dataset
-est lu depuis S3. Pour l'appel depuis l'EC2: `bedrock-agentcore:InvokeAgentRuntime` sur l'ARN du runtime.
+d'inférence utilisés (et sur les modèles sous-jacents dans les régions concernées). Pour le dataset, attacher la politique
+gérée `arn:aws:iam::381491955506:policy/MonPortDatasetRead` (`s3:GetObject` sur `universe/*` seulement). Pour l'appel
+depuis l'EC2: `bedrock-agentcore:InvokeAgentRuntime` sur l'ARN du runtime.
+
+## Dataset sur S3
+
+Bucket `monport-datasets-381491955506` (us-east-1): privé (Block Public Access), chiffré SSE-S3, TLS obligatoire,
+versionné (versions remplacées expirées après 30 jours, 3 gardées). Un dossier par table:
+
+```text
+universe/universe.parquet                                 lu par le backend (DATASET_PATH)
+raw/{catalog,prices,fx,prices_missing}/<table>.parquet    couches brutes de data-prep, pour la traçabilité
+```
+
+Publication (depuis la racine du dépôt): `python data-prep/build_universe.py --upload s3://monport-datasets-381491955506`
+(ajouter `--upload-only` pour publier les fichiers existants sans reconstruire). Le backend télécharge le fichier une fois
+par démarrage dans `/tmp`, sous un nom qui inclut la version S3: un nouvel objet est pris en compte au prochain
+redémarrage, sans redéployer. `WSParticipantRole` (local, EC2) lit déjà le bucket.
 
 ## Principes de conception
 
