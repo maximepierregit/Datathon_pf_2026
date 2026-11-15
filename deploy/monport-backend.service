@@ -1,0 +1,17 @@
+# Backend MonPort (agents Strands) sur l'EC2 du front. Installé par deploy-backend.sh.
+# Écoute seulement 127.0.0.1:8091 : nginx le publie sous /api/.
+[Unit]
+Description=MonPort backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ec2-user
+WorkingDirectory=/opt/monport-backend
+Environment=PORT=8091 AWS_REGION=us-east-1
+ExecStart=/opt/monport-backend/.venv/bin/python main.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
