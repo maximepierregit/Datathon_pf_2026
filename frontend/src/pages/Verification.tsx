@@ -14,6 +14,7 @@ import { useApp } from '../store'
 export default function Verification() {
   const navigate = useNavigate()
   const profile = useApp((s) => s.profile)
+  const contribution = useApp((s) => s.contribution)
   const constraints = useApp((s) => s.constraints)
   const check = useApp((s) => s.check)
   const setCheck = useApp((s) => s.setCheck)
@@ -31,7 +32,7 @@ export default function Verification() {
     // Les étapes avancent avec ce que Pépite annonce, et au moins au rythme de la minuterie : on voit qu'elle avance.
     const reach = (i: number) => setStage((s) => Math.max(s, i))
     const timer = setInterval(() => setStage((s) => (s < THINKING_STEPS.length - 1 ? s + 1 : s)), 2600)
-    checkProfile({ score: riskScore(profile), profile, constraints }, ctrl.signal, (text) => {
+    checkProfile({ score: riskScore(profile, contribution), profile, contribution, constraints }, ctrl.signal, (text) => {
       const i = THINKING_STEPS.findIndex((st) => st.match?.test(text))
       if (i >= 0) reach(i)
     })

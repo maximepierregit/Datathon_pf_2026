@@ -1,7 +1,7 @@
 // Moteur d'exemple côté front : il imite ce que feront les agents Strands et l'optimiseur Python,
 // pour que l'interface fonctionne avant le branchement du backend.
 import { CLASS_ASSUMPTIONS, CLASS_LABELS, BLOCKS, FACTOR_IDS, UNIVERSE, type UniverseLine } from '../data/catalog'
-import type { AssetClass, ConstraintBlock, Constraints, FactorView, Holding, Level, Metrics, Portfolio, PortfolioId, Profile, RiskNote, ScoredStock } from '../types'
+import type { AssetClass, ConstraintBlock, Constraints, Contribution, ContributionFrequency, FactorView, Holding, Level, Metrics, Portfolio, PortfolioId, Profile, RiskNote, ScoredStock } from '../types'
 
 const CLASSES = Object.keys(CLASS_LABELS) as AssetClass[]
 const LINE_CAP = 0.4
@@ -36,22 +36,35 @@ export function emptyConstraints(): Constraints {
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 
-// Mêmes règles que risk_position() de backend/src/invest_agents/monport.py, qui en tire l'aversion au risque A
+// Mêmes règles (V2) que risk_position() de backend/src/invest_agents/monport.py, qui en tire l'aversion au risque A
 // donnée à l'optimiseur. Une catégorie par tranche de 0,2 de S.
-const OBJECTIVE_TOLERANCE = { securiser: 0, fructifier: 0.5, 'viser-haut': 1 }
+const OBJECTIVE_TOLERANCE: Record<string, number> = { securiser: 0, fructifier: 0.5, croissance: 0.5, 'viser-haut': 1 }
+const PER_YEAR: Record<ContributionFrequency, number> = { aucune: 0, 'deux-semaines': 26, mensuelle: 12, annuelle: 1 }
 const RISK_LABELS = ['Très prudent', 'Prudent', 'Équilibré', 'Audacieux', 'Très audacieux']
 
-/** S, de 0 (très prudent) à 1 (très audacieux) : capacité (horizon, âge) et tolérance (baisse, objectif, aisance). */
-export function riskPosition(p: Profile): number {
-  const capacity = 0.6 * clamp((Math.min(p.horizon, 20) - 1) / 19, 0, 1) + 0.4 * clamp((75 - p.age) / 50, 0, 1)
-  const tolerance = 0.5 * clamp(p.lossReaction / 3, 0, 1) + 0.3 * OBJECTIVE_TOLERANCE[p.objective] + 0.2 * clamp((p.comfort - 1) / 4, 0, 1)
-  // La tolérance ne dépasse pas la capacité de plus de 3 crans sur 24.
-  return clamp(Math.min((capacity + tolerance) / 2, capacity + 0.125), 0, 1)
+/** Ajouts prévus, de 0 à 1 : 60 % montant absolu (500 $ par mois = 1), 40 % relatif au capital (25 % par an = 1). */
+function contributionScore(p: Profile, c: Contribution): number {
+  const annual = Math.max(0, c.amount) * PER_YEAR[c.frequency]
+  const absolute = clamp(annual / 12 / 500, 0, 1)
+  const relative = p.amount > 0 ? clamp(annual / p.amount / 0.25, 0, 1) : 0
+  return 0.6 * absolute + 0.4 * relative
+}
+
+/** S, de 0 (très prudent) à 1 (très audacieux) : capacité (âge, horizon, ajouts) et tolérance (baisse, objectif, aisance). */
+export function riskPosition(p: Profile, c: Contribution): number {
+  const capacity = clamp(
+    0.45 * clamp((75 - p.age) / 50, 0, 1) + 0.3 * clamp((Math.min(p.horizon, 20) - 1) / 19, 0, 1) + 0.25 * contributionScore(p, c),
+    0,
+    1,
+  )
+  const tolerance = 0.5 * clamp(p.lossReaction / 3, 0, 1) + 0.3 * (OBJECTIVE_TOLERANCE[p.objective] ?? 0.5) + 0.2 * clamp((p.comfort - 1) / 4, 0, 1)
+  // Aucune des deux dimensions ne compense l'autre de plus de 3 crans sur 24.
+  return clamp(Math.min((capacity + tolerance) / 2, capacity + 0.125, tolerance + 0.125), 0, 1)
 }
 
 /** Score de risque 5–95 tiré du profil. */
-export function riskScore(p: Profile): number {
-  return Math.round(5 + 90 * riskPosition(p))
+export function riskScore(p: Profile, c: Contribution): number {
+  return Math.round(5 + 90 * riskPosition(p, c))
 }
 
 export function riskLabel(score: number): string {

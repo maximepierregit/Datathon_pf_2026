@@ -28,7 +28,7 @@ export default function Transition() {
         <Pepite pose="thumbsup" size={150} className="bob" />
         <div className="flex flex-col items-center">
           <span className="text-sm font-semibold text-slate">Étape 1 terminée</span>
-          <h1 className="text-[30px] font-semibold leading-9 text-navy md:text-[38px] md:leading-[44px]">Ton profil est {riskLabel(riskScore(profile)).toLowerCase()}.</h1>
+          <h1 className="text-[30px] font-semibold leading-9 text-navy md:text-[38px] md:leading-[44px]">Ton profil est {riskLabel(riskScore(profile, state.contribution)).toLowerCase()}.</h1>
           <Separator />
         </div>
         <dl className="m-0 grid w-full grid-cols-2 gap-2 sm:grid-cols-3">

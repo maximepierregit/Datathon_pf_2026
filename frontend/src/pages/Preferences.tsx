@@ -44,7 +44,7 @@ export default function Preferences() {
   if (!(step >= 1 && step <= steps.length)) return <Navigate to="/preferences/1" replace />
   const s = steps[step - 1]
   const def = s === 'vehicles' ? VEHICLES : BLOCKS[s]
-  const warnings = s === 'classes' ? coherenceWarnings(riskScore(state.profile), state.constraints) : []
+  const warnings = s === 'classes' ? coherenceWarnings(riskScore(state.profile, state.contribution), state.constraints) : []
   const fnbOnly = s === 'vehicles' && state.constraints.vehicles === 'fnb'
   const last = step === steps.length
   return (

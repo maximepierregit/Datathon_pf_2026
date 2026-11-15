@@ -13,7 +13,7 @@ export interface Profile {
 
 export type ContributionFrequency = 'aucune' | 'deux-semaines' | 'mensuelle' | 'annuelle'
 
-/** Ajouts prévus. Jamais envoyé aux agents : sert seulement aux projections du tableau de bord. */
+/** Ajouts prévus. Comptent dans la capacité du profil de risque (riskPosition) et servent aux projections. */
 export interface Contribution {
   frequency: ContributionFrequency
   /** Montant par versement, ignoré si la fréquence est « aucune ». */

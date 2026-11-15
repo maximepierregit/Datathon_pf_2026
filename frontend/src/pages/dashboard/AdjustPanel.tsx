@@ -70,7 +70,7 @@ export function AdjustPanel({ p, open, onClose }: { p: Portfolio; open: boolean;
   async function simulated(t: string) {
     // Sans backend, aucun agent n'est consulté : on ne montre que ce que fait le moteur d'exemple.
     step('pepite', 'Je cherche ta demande dans mes règles d’exemple')
-    const proposal = await proposeAdjustment(p, t, riskScore(state.profile), (patch, riskShift) =>
+    const proposal = await proposeAdjustment(p, t, riskScore(state.profile, state.contribution), (patch, riskShift) =>
       state.previewAdjustment({ portfolio: p.id, patch, riskShift }),
     )
     if (proposal.changes.length) step('pepite', `Je recalcule « ${p.name} » avec le moteur d’exemple`)

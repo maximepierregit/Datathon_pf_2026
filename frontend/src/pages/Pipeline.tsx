@@ -78,7 +78,7 @@ function AgentCard({ agent, st, children }: { agent: Agent; st: AgentState; chil
 export default function Pipeline() {
   const navigate = useNavigate()
   const state = useApp()
-  const score = riskScore(state.profile)
+  const score = riskScore(state.profile, state.contribution)
   const coherent = state.check?.coherent ?? false
   const steps = stepsFor(coherent)
   const [agents, setAgents] = useState<Record<AgentId, AgentState>>(
@@ -140,7 +140,7 @@ export default function Pipeline() {
         setDone(true)
       }
     }
-    const input = { score, profile: state.profile, constraints: state.constraints, check: state.check, adjustment: state.adjustment, session: state.session }
+    const input = { score, profile: state.profile, contribution: state.contribution, constraints: state.constraints, check: state.check, adjustment: state.adjustment, session: state.session }
     const run = rebuild
       ? rebuildPipeline(state.session!, onEvent, ctrl.signal).then((ok) => {
           if (ok) return

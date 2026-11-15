@@ -126,7 +126,7 @@ export const useApp = create<State>()(
       acceptDisclaimer: () => set({ disclaimerSeen: true }),
       build: () =>
         set((s) => {
-          const all = buildAll(riskScore(s.profile), s.constraints)
+          const all = buildAll(riskScore(s.profile, s.contribution), s.constraints)
           const base: Portfolios = s.check?.coherent ? { equilibre: { ...all.equilibre, ...WINNER_META } } : all
           return { adjustments: [], base, portfolios: base }
         }),
@@ -139,15 +139,15 @@ export const useApp = create<State>()(
       },
       previewAdjustment: (a) => {
         const s = get()
-        return withAdjustments(s.base ?? {}, riskScore(s.profile), s.constraints, [...s.adjustments, { ...a, label: '' }])[a.portfolio]!
+        return withAdjustments(s.base ?? {}, riskScore(s.profile, s.contribution), s.constraints, [...s.adjustments, { ...a, label: '' }])[a.portfolio]!
       },
       applyAdjustment: (a) => {
         const adjustments = [...get().adjustments, { ...a, id: crypto.randomUUID() }]
-        set((s) => ({ adjustments, portfolios: withAdjustments(s.base ?? {}, riskScore(s.profile), s.constraints, adjustments) }))
+        set((s) => ({ adjustments, portfolios: withAdjustments(s.base ?? {}, riskScore(s.profile, s.contribution), s.constraints, adjustments) }))
       },
       undoAdjustment: (id) => {
         const adjustments = get().adjustments.filter((a) => a.id !== id)
-        set((s) => ({ adjustments, portfolios: withAdjustments(s.base ?? {}, riskScore(s.profile), s.constraints, adjustments) }))
+        set((s) => ({ adjustments, portfolios: withAdjustments(s.base ?? {}, riskScore(s.profile, s.contribution), s.constraints, adjustments) }))
       },
       reset: () =>
         set({

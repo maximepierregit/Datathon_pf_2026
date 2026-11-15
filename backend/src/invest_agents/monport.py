@@ -120,11 +120,19 @@ CRYPTO_TARGETS = ("Crypto", "Alternative")
 NO_CRYPTO = {"conservateur", "modere"}  # pas de crypto dans un portefeuille qui suit un profil prudent
 PROFILE_NOTE = "Répartition du profil"
 
-# Aversion au risque. Le questionnaire donne une position S (0 très prudent … 1 très audacieux), convertie en
-# coefficient A (1 très audacieux … 25 très prudent) pour l'objectif moyenne-variance de l'optimiseur.
-# Mêmes règles que riskPosition() et riskAversion() de frontend/src/lib/engine.ts.
-OBJECTIVE_TOLERANCE = {"securiser": 0.0, "fructifier": 0.5, "viser-haut": 1.0}
-CAPACITY_MARGIN = 0.125  # la tolérance ne dépasse pas la capacité de plus de 3 crans sur 24
+# Aversion au risque (V2). Le questionnaire donne une capacité C et une tolérance T, combinées en une position S
+# (0 très prudent … 1 très audacieux), convertie en coefficient A (1 très audacieux … 25 très prudent) pour
+# l'objectif moyenne-variance de l'optimiseur. Pondérations: hypothèses de calibration du prototype, pas des
+# standards CFA. Mêmes règles que riskPosition() de frontend/src/lib/engine.ts.
+AGE_WEIGHT, HORIZON_WEIGHT, CONTRIBUTION_WEIGHT = 0.45, 0.30, 0.25
+ABSOLUTE_CONTRIBUTION_WEIGHT, RELATIVE_CONTRIBUTION_WEIGHT = 0.60, 0.40
+MONTHLY_CONTRIBUTION_REFERENCE = 500.0  # 500 $ par mois = score absolu maximal
+ANNUAL_RATIO_REFERENCE = 0.25  # ajouts annuels de 25 % du capital de départ = score relatif maximal
+# Versements par an. Identifiants du frontend (types.ts) et libellés anglais.
+CONTRIBUTION_FREQUENCIES = {"aucune": 0, "deux-semaines": 26, "mensuelle": 12, "annuelle": 1,
+                            "none": 0, "biweekly": 26, "monthly": 12, "yearly": 1}
+OBJECTIVE_TOLERANCE = {"securiser": 0.0, "fructifier": 0.5, "croissance": 0.5, "viser-haut": 1.0}
+CAPACITY_MARGIN = 0.125  # aucune des deux dimensions ne compense l'autre de plus de 3 crans sur 24
 ADJUSTMENT_STEP = 0.05  # un cran d'ajustement de Pépite (au plus 2 crans, une demi-catégorie)
 # Une catégorie par tranche de 0,2 de S, bornes de A du tableau des profils (interpolation logarithmique).
 AVERSION_ANCHORS = [(0.0, 25.0), (0.2, 14.0), (0.4, 7.0), (0.6, 3.5), (0.8, 1.5), (1.0, 1.0)]
@@ -258,11 +266,22 @@ def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
     return min(hi, max(lo, v))
 
 
+def contribution_score(profile: dict) -> float:
+    """Ajouts prévus, de 0 à 1: 60 % montant absolu (équivalent mensuel), 40 % relatif au capital de départ."""
+    c = profile.get("contribution") or {}
+    per_year = CONTRIBUTION_FREQUENCIES.get(str(c.get("frequency", "aucune")).strip().lower(), 0)
+    annual = max(0.0, float(c.get("amount", 0) or 0)) * per_year
+    initial = float(profile.get("amount", 10000) or 0)
+    absolute = _clamp(annual / 12 / MONTHLY_CONTRIBUTION_REFERENCE)
+    relative = _clamp(annual / initial / ANNUAL_RATIO_REFERENCE) if initial > 0 else 0.0
+    return ABSOLUTE_CONTRIBUTION_WEIGHT * absolute + RELATIVE_CONTRIBUTION_WEIGHT * relative
+
+
 def capacity(profile: dict) -> float:
-    """Ce que le client peut se permettre: horizon et âge, de 0 à 1."""
-    h = (min(float(profile.get("horizon", 10)), 20) - 1) / 19
+    """Ce que le client peut se permettre, C de 0 à 1: âge 45 %, horizon 30 %, ajouts prévus 25 %."""
     a = (75 - float(profile.get("age", 35))) / 50
-    return 0.6 * _clamp(h) + 0.4 * _clamp(a)
+    h = (min(float(profile.get("horizon", 10)), 20) - 1) / 19
+    return _clamp(AGE_WEIGHT * _clamp(a) + HORIZON_WEIGHT * _clamp(h) + CONTRIBUTION_WEIGHT * contribution_score(profile))
 
 
 def tolerance(profile: dict) -> float:
@@ -274,9 +293,9 @@ def tolerance(profile: dict) -> float:
 
 
 def risk_position(profile: dict, adjustment: int = 0) -> float:
-    """S, de 0 (très prudent) à 1 (très audacieux): moyenne des deux axes, la capacité limitant la tolérance."""
-    c = capacity(profile)
-    s = min((c + tolerance(profile)) / 2, c + CAPACITY_MARGIN)
+    """S, de 0 (très prudent) à 1 (très audacieux): moyenne des deux axes, chacun plafonnant l'autre."""
+    c, t = capacity(profile), tolerance(profile)
+    s = min((c + t) / 2, c + CAPACITY_MARGIN, t + CAPACITY_MARGIN)
     return _clamp(s + ADJUSTMENT_STEP * max(-2, min(2, adjustment)))
 
 
@@ -329,6 +348,7 @@ def computed_profile(profile: dict) -> dict:
     """Le profil de risque calculé, tel que Pépite le reçoit."""
     s = risk_position(profile)
     return {"capacite": round(capacity(profile), 2), "tolerance": round(tolerance(profile), 2),
+            "score_ajouts": round(contribution_score(profile), 2),
             "libelle": risk_label(s), "aversion_au_risque": risk_aversion(s)}
 
 
@@ -737,8 +757,11 @@ def front(bus: EventBus, event: dict) -> None:
 # Orchestration
 # --------------------------------------------------------------------------- #
 def _questionnaire(payload: dict) -> tuple[dict, dict]:
-    """Le JSON du questionnaire, sans les ajouts prévus (jamais envoyés aux agents)."""
-    return payload.get("profile") or {}, payload.get("constraints") or {}
+    """Le JSON du questionnaire. Les ajouts prévus entrent dans le profil: ils comptent dans la capacité C."""
+    profile = dict(payload.get("profile") or {})
+    if payload.get("contribution") is not None:
+        profile["contribution"] = payload["contribution"]
+    return profile, payload.get("constraints") or {}
 
 
 # --------------------------------------------------------------------------- #
