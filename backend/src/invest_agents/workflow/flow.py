@@ -49,7 +49,7 @@ from .. import gateway
 from ..guardrail import screen
 from ..schemas import PepiteCheck
 from .pepite import build_turn, chat_turn, check_turn
-from .session import SESSIONS, Session, review_of
+from .session import SESSIONS, Session, persist, review_of
 from .workers import apply_plan, build_slots, judge_round, names_for
 
 logger = logging.getLogger(__name__)
@@ -87,6 +87,7 @@ async def check_questionnaire(payload: dict, bus, translator: Translator) -> Non
         await _verify(session, bus)
         check = session.check
     front(bus, {"type": "check", "check": check.model_dump(mode="json"), "session": session.id})
+    await persist(session)
     front(bus, {"type": "done"})
 
 
@@ -171,7 +172,7 @@ async def build_portfolios(payload: dict, bus, translator: Translator) -> None:
     profile, prefs = _questionnaire(payload)
     gateway.prewarm()
     market = await asyncio.to_thread(get_market)
-    session = SESSIONS.get(payload.get("session"))
+    session = await SESSIONS.get_or_restore(payload.get("session"), market)
     if session and (session.profile != profile or session.prefs != prefs):
         session = None  # le client a changé son questionnaire depuis la vérification: nouvelle conversation
     if session is None:  # pas de session (ou perdue): on repart du questionnaire et de la vérification renvoyés
@@ -210,11 +211,13 @@ async def build_portfolios(payload: dict, bus, translator: Translator) -> None:
         if present(session, bus):
             front(bus, pepite(reply or ("Voilà! Ton portefeuille t’attend." if session.coherent
                                         else "Voilà! Trois propositions t’attendent. C’est toi qui choisis.")))
+            await persist(session)
     front(bus, {"type": "done"})
 
 
 async def chat(payload: dict, bus, translator: Translator) -> None:
-    session = SESSIONS.get(payload.get("session"))
+    market = await asyncio.to_thread(get_market)
+    session = await SESSIONS.get_or_restore(payload.get("session"), market)
     message = str(payload.get("message") or "").strip()[:MAX_ADJUSTMENT]
     if session is None or not session.portfolios:
         front(bus, {"type": "error", "message": "Cette conversation a expiré. Relance la construction de tes portefeuilles."})
@@ -244,6 +247,7 @@ async def chat(payload: dict, bus, translator: Translator) -> None:
         front(bus, {**pepite(reply), "final": True})
         if session.version != session.shown_version:
             present(session, bus)
+        await persist(session)
     front(bus, {"type": "done"})
 
 

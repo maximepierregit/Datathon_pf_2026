@@ -57,6 +57,12 @@
       "Resource": "arn:aws:bedrock-agentcore:${REGION}:${ACCOUNT}:gateway/monport-tools-*"
     },
     {
+      "Sid": "ConversationMemory",
+      "Effect": "Allow",
+      "Action": ["bedrock-agentcore:CreateEvent", "bedrock-agentcore:ListEvents", "bedrock-agentcore:GetEvent"],
+      "Resource": "arn:aws:bedrock-agentcore:${REGION}:${ACCOUNT}:memory/monport_conversations-*"
+    },
+    {
       "Sid": "Guardrails",
       "Effect": "Allow",
       "Action": "bedrock:ApplyGuardrail",

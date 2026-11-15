@@ -9,6 +9,8 @@ que le frontend renvoie (questionnaire et vérification) et les agents perdent s
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -31,7 +33,12 @@ from ..schemas import (
     RiskReport,
 )
 
+from .. import memory
+
+logger = logging.getLogger(__name__)
+
 MAX_SESSIONS = 200
+SESSION_ID_RE = re.compile(r"[0-9a-f]{32}")  # uuid4().hex, comme `SessionStore.create`
 SESSION_TTL_SECONDS = 2 * 3600
 
 
@@ -125,6 +132,30 @@ class SessionStore:
         if session:
             session.touched = time.monotonic()
         return session
+
+    async def get_or_restore(self, session_id: object, market: Market) -> Optional[Session]:
+        """La session en mémoire du processus, sinon celle enregistrée dans AgentCore Memory (microVM recyclée)."""
+        session = self.get(session_id)
+        if session or not (isinstance(session_id, str) and SESSION_ID_RE.fullmatch(session_id) and memory.enabled()):
+            return session
+        state = await asyncio.to_thread(memory.load, session_id)
+        if state is None:
+            return None
+        try:
+            session = memory.from_state(state, market)
+        except Exception:  # noqa: BLE001
+            logger.exception("Session %s illisible dans la mémoire", session_id)
+            return None
+        self._purge()
+        self._sessions[session.id] = session
+        logger.info("Session %s restaurée depuis AgentCore Memory", session.id)
+        return session
+
+
+async def persist(session: Session) -> None:
+    """Enregistre la session dans AgentCore Memory sans retarder le client (sans MEMORY_ID: rien)."""
+    if memory.enabled():
+        await asyncio.to_thread(memory.save, session)
 
 
 SESSIONS = SessionStore()

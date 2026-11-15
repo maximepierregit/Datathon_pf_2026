@@ -71,6 +71,8 @@ def main() -> int:
                         if (STATE / "agents-runtime-arn").exists() else None)
     parser.add_argument("--url", help="Function URL du proxy (sinon appel direct au runtime)")
     parser.add_argument("--check-only", action="store_true")
+    parser.add_argument("--restore", action="store_true",
+                        help="Chat sous un autre runtimeSessionId: microVM neuve, session restaurée par AgentCore Memory")
     parser.add_argument("--chat", default="Pourquoi ce portefeuille me convient-il? Réponds en deux phrases.")
     args = parser.parse_args()
 
@@ -90,6 +92,9 @@ def main() -> int:
     if "portfolios" not in built:
         print("ÉCHEC: pas de portefeuilles")
         return 1
+    if args.restore:
+        session = uuid.uuid4().hex + uuid.uuid4().hex
+        print(f"chat sur une nouvelle microVM (session {session})")
     chat = run(call({"mode": "monport_chat", "session": built.get("session") or seen.get("session"),
                      "message": args.chat}), t0)
     if "error" in chat or "pepite" not in chat:
