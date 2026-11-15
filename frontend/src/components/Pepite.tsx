@@ -5,7 +5,7 @@ const files = import.meta.glob('../../../assets/mascot/svg/*.svg', { eager: true
 
 export type Pose =
   | 'wave' | 'happy' | 'question' | 'thinking' | 'surprised' | 'coffee' | 'laptop' | 'map'
-  | 'binoculars' | 'thumbsup' | 'sleep' | 'tired' | 'cool' | 'excited' | 'flag'
+  | 'binoculars' | 'thumbsup' | 'sleep' | 'tired' | 'cool' | 'excited' | 'flag' | 'pondering'
 
 const POSES = Object.fromEntries(
   Object.entries(files).map(([path, url]) => [path.split('/').pop()!.replace(/^\d+-|\.svg$/g, ''), url]),

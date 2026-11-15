@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from .allocator import optimize
-from .catalog import evaluate, excluded_mask
+from .catalog import evaluate, excluded_mask, members
 from .macro import get_macro, history, latest_snapshot
 from .market import Market, get_market
 from .schemas import Constraint
@@ -48,12 +48,15 @@ def screen_assets(
     sort_by: str = "sharpe",
     limit: int = 20,
     market: Optional[Market] = None,
+    theme: Optional[str] = None,
 ) -> dict:
     """Filtre l'univers admissible et retourne les meilleurs actifs selon un critère."""
     market = market or get_market()
     a = _eligible(market, _constraints(constraints))
     if sector:
         a = a[a["sector"].str.lower() == sector.lower()]
+    if theme:
+        a = a[members(a, "theme", [theme])]
     if country:
         a = a[a["country"].str.lower() == country.lower()]
     if asset_class:

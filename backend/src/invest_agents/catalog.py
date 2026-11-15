@@ -58,7 +58,7 @@ from .constraints import (
     filter_eligible_universe,
     validate_weights,
 )
-from .market import UNKNOWN, Market
+from .market import UNKNOWN, Market, theme_tags
 from .schemas import Constraint, ConstraintCheck, ConstraintRef, ConstraintType as T
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ HELD = 5e-4  # poids à partir duquel une position est considérée comme déten
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class Spec:
-    dimension: Optional[str]  # sector | country | asset_class | instrument_type | symbol | None
+    dimension: Optional[str]  # sector | country | theme | asset_class | instrument_type | symbol | factor | None
     kind: str  # fraction | count | none
     direction: Optional[str]  # max | min | None
     description: str
@@ -94,6 +94,7 @@ SPECS: dict[T, Spec] = {
                                     "Exclure un type d'instrument (Stock = action détenue en direct, Cryptocurrency = "
                                     "crypto détenue en direct, ETF = FNB)"),
     T.EXCLUDE_SYMBOL: Spec("symbol", "none", None, "Exclure un titre"),
+    T.EXCLUDE_THEME: Spec("theme", "none", None, "Exclure une thématique (actions et FNB étiquetés)"),
     T.MAX_SECTOR_WEIGHT: Spec("sector", "fraction", "max", "Poids maximal d'un secteur"),
     T.MIN_SECTOR_WEIGHT: Spec("sector", "fraction", "min", "Poids minimal d'un secteur"),
     T.MAX_COUNTRY_WEIGHT: Spec("country", "fraction", "max", "Poids maximal d'un pays"),
@@ -110,6 +111,10 @@ SPECS: dict[T, Spec] = {
                               "Part minimale de la poche actions dans un ou plusieurs pays"),
     T.MAX_COUNTRY_SHARE: Spec("country", "fraction", "max",
                               "Part maximale de la poche actions dans un ou plusieurs pays"),
+    T.MIN_THEME_SHARE: Spec("theme", "fraction", "min",
+                            "Part minimale de la poche actions dans une ou plusieurs thématiques"),
+    T.MAX_THEME_SHARE: Spec("theme", "fraction", "max",
+                            "Part maximale de la poche actions dans une ou plusieurs thématiques"),
     # Exposition = moyenne des z-scores des actions détenues en direct, pondérée par leur poids (voir factors.py).
     T.MIN_FACTOR_EXPOSURE: Spec("factor", "score", "min",
                                 "Exposition minimale à un facteur, en écarts-types (0.5 = actions en moyenne un "
@@ -125,22 +130,25 @@ FTOL = 0.01  # tolérance sur une exposition à un facteur
 
 ANY = "*"  # cible générique: « chaque secteur » / « chaque pays » (plafonds seulement)
 WILDCARD_TYPES = {T.MAX_SECTOR_WEIGHT, T.MAX_COUNTRY_WEIGHT}
-# Parts de la poche actions (actions détenues en direct + FNB d'actions): 0.45 = 45 % de cette poche. Seules les
-# actions en direct comptent au numérateur: un FNB n'a ni secteur ni pays connu, il compte comme hors du groupe. Il ne
-# peut donc pas servir à contourner la part, contrairement à une base limitée aux actions en direct (mesuré: avec
-# cette base, l'optimiseur gardait 0 action et satisfaisait la part à vide).
+# Parts de la poche actions (actions détenues en direct + FNB d'actions): 0.45 = 45 % de cette poche. Secteur et
+# pays: seules les actions en direct comptent au numérateur, un FNB n'a ni secteur ni pays connu et compte comme hors
+# du groupe. Il ne peut donc pas servir à contourner la part, contrairement à une base limitée aux actions en direct
+# (mesuré: avec cette base, l'optimiseur gardait 0 action et satisfaisait la part à vide). Thématique: tout actif
+# étiqueté compte, FNB compris (ICLN est étiqueté « energie-propre » dans le Parquet).
 SHARE_TYPES = {
     T.MIN_SECTOR_SHARE: ("sector", "min"),
     T.MAX_SECTOR_SHARE: ("sector", "max"),
     T.MIN_COUNTRY_SHARE: ("country", "min"),
     T.MAX_COUNTRY_SHARE: ("country", "max"),
+    T.MIN_THEME_SHARE: ("theme", "min"),
+    T.MAX_THEME_SHARE: ("theme", "max"),
 }
 SEP = "|"  # plusieurs cibles pour une part (une région = plusieurs pays)
 EQUITY_CLASSES = {"equity", "equities"}
 
-DIMENSION_COLUMN = {"sector": "sector", "country": "country", "asset_class": "asset_class",
+DIMENSION_COLUMN = {"sector": "sector", "country": "country", "theme": "theme", "asset_class": "asset_class",
                     "instrument_type": "instrument_type", "symbol": None}
-DIMENSION_FR = {"sector": "secteur", "country": "pays", "asset_class": "classe d'actifs",
+DIMENSION_FR = {"sector": "secteur", "country": "pays", "theme": "thématique", "asset_class": "classe d'actifs",
                 "instrument_type": "type d'instrument", "symbol": "titre", "factor": "facteur"}
 
 # Types traduits en contraintes linéaires de groupe, par dimension du moteur.
@@ -172,12 +180,14 @@ def catalog_prompt(allowed: dict[str, list[str]]) -> str:
         "Pour max_sector_weight et max_country_weight, la cible \"*\" signifie « chaque secteur » ou « chaque pays » "
         "(ex.: « pas plus de 25 % par secteur »). Pour un secteur ou un pays précis, utilise son libellé.",
         "Les *_share se calculent sur la poche actions, actions en direct et FNB d'actions (0.45 = 45 % de cette "
-        "poche); seules les actions en direct du groupe comptent pour la part. Leur cible accepte plusieurs libellés "
-        "séparés par « | ».",
+        "poche). Secteur et pays: seules les actions en direct du groupe comptent pour la part. Thématique: tout "
+        "actif étiqueté compte, FNB thématiques compris (screen_assets avec `theme` les liste). Leur cible accepte "
+        "plusieurs libellés séparés par « | ».",
         "",
         "VALEURS ACCEPTÉES POUR LES CIBLES (utiliser exactement ces libellés):",
         f"- sector: {', '.join(allowed['sector'])}",
         f"- country: {', '.join(allowed['country'])}",
+        f"- theme: {', '.join(allowed.get('theme', [])) or 'aucune dans cet univers'}",
         f"- asset_class: {', '.join(allowed['asset_class'])}",
         f"- instrument_type: {', '.join(allowed['instrument_type'])}",
         "- symbol: symbole boursier exact (utiliser l'outil search_universe pour retrouver un symbole à partir d'un nom)",
@@ -379,11 +389,29 @@ def is_equity(market: Market, symbol: str) -> bool:
     return str(market.assets.loc[symbol].get("asset_class", "")).lower() in EQUITY_CLASSES
 
 
+def members(assets: pd.DataFrame, dimension: str, targets: Iterable[str]) -> pd.Series:
+    """Masque des actifs dont la métadonnée fait partie des cibles. Une thématique se lit dans les étiquettes
+    (« ia;tech »): un actif peut en porter plusieurs, FNB compris."""
+    wanted = {t.lower() for t in targets}
+    if dimension == "symbol":
+        return pd.Series(assets.index.str.lower().isin(wanted), index=assets.index)
+    if dimension == "theme":
+        return assets["theme"].map(lambda v: bool(theme_tags(v) & wanted)).astype(bool)
+    return assets[DIMENSION_COLUMN[dimension]].astype(str).str.lower().isin(wanted)
+
+
+def share_members(assets: pd.DataFrame, c: Constraint) -> pd.Series:
+    """Les actifs qui comptent pour une part: actions en direct du secteur ou du pays, actifs d'actions étiquetés de la
+    thématique."""
+    dimension = SHARE_TYPES[c.type][0]
+    base = (assets["asset_class"].astype(str).str.lower().isin(EQUITY_CLASSES) if dimension == "theme"
+            else assets["instrument_type"].astype(str).str.lower() == "stock")
+    return base & members(assets, dimension, share_targets(c))
+
+
 def in_share(market: Market, symbol: str, c: Constraint) -> bool:
-    """Le titre est une action détenue en direct dont le secteur ou le pays fait partie des cibles de la part."""
-    column = DIMENSION_COLUMN[SHARE_TYPES[c.type][0]]
-    targets = {t.lower() for t in share_targets(c)}
-    return is_stock(market, symbol) and str(market.assets.loc[symbol, column]).lower() in targets
+    """Le titre compte pour la part (voir `share_members`)."""
+    return bool(share_members(market.assets.loc[[symbol]], c).iloc[0])
 
 
 def engine_universe(market: Market) -> pd.DataFrame:
@@ -400,12 +428,10 @@ def engine_universe(market: Market) -> pd.DataFrame:
 
 
 def _targets(market: Market, dimension: str, target: str) -> list[str]:
-    """Les symboles dont la métadonnée correspond à la cible. Un FNB n'a ni secteur ni pays connu: il n'y figure pas."""
+    """Les symboles dont la métadonnée correspond à la cible. Un FNB n'a ni secteur ni pays connu: il n'y figure pas.
+    Une thématique vise aussi les FNB étiquetés."""
     a = market.assets
-    if dimension == "symbol":
-        return [s for s in a.index if s.lower() == target.lower()]
-    column = DIMENSION_COLUMN[dimension]
-    return a.index[a[column].astype(str).str.lower() == target.lower()].tolist()
+    return a.index[members(a, dimension, [target])].tolist()
 
 
 def _groups_present(market: Market, dimension: str, symbols: Iterable[str]) -> list[str]:
@@ -597,9 +623,9 @@ def plan_for(
                     upper[index[s]] = min(upper[index[s]], float(c.value))
         elif c.type in SHARE_TYPES and c.target and c.value is not None:
             # Part p de la poche actions, linéaire: poids du groupe − p × poids de la poche ≥ 0 (min) ou ≤ 0 (max).
-            coeff = np.zeros(len(plan.symbols), dtype=float)
-            for s, i in index.items():
-                coeff[i] = float(in_share(market, s, c)) - (float(c.value) if is_equity(market, s) else 0.0)
+            selection = market.assets.loc[list(plan.symbols)]
+            equity = selection["asset_class"].astype(str).str.lower().isin(EQUITY_CLASSES)
+            coeff = share_members(selection, c).to_numpy(dtype=float) - float(c.value) * equity.to_numpy(dtype=float)
             low, high = (0.0, math.inf) if SHARE_TYPES[c.type][1] == "min" else (-math.inf, 0.0)
             groups.append(GroupConstraint(f"{c.type.value}:{c.target.casefold()}", coeff, low, high))
         elif c.type in GROUP_TYPES and c.target and c.value is not None:
@@ -755,6 +781,6 @@ def evaluate(market: Market, weights: dict[str, float], constraints: list[Constr
 __all__ = [
     "ANY", "DIMENSION_COLUMN", "DIMENSION_FR", "HELD", "SEP", "SHARE_TYPES", "SPECS", "TOL", "WTOL", "Spec",
     "agent_request", "audit", "catalog_prompt", "describe", "detect_conflicts", "engine_universe",
-    "evaluate", "excluded_mask", "in_share", "is_equity", "is_fund", "is_stock", "merge_constraints", "plan_for", "screen",
-    "settings_for", "share_targets", "validate_all", "validate_constraint",
+    "evaluate", "excluded_mask", "in_share", "is_equity", "is_fund", "is_stock", "members", "merge_constraints",
+    "plan_for", "screen", "settings_for", "share_members", "share_targets", "validate_all", "validate_constraint",
 ]

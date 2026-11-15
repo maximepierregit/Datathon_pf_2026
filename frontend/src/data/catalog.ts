@@ -78,7 +78,7 @@ export const BLOCKS: Record<ConstraintBlock, { title: string; hint: string; item
       { id: 'consommation', label: 'Consommation' },
       { id: 'industrie', label: 'Industrie et infrastructures' },
       { id: 'armement', label: 'Armement' },
-      { id: 'alcool-tabac', label: 'Alcool et tabac' },
+      { id: 'alcool-tabac', label: 'Alcool, tabac, jeux et cannabis' },
     ],
   },
   factors: {
@@ -171,60 +171,47 @@ export function sharesValid(values: Record<string, Share>, ids: string[]): boole
   return total <= 100 && (free > 0 || entered === 0 || total === 100)
 }
 
-/** Parts égales et entières qui font 100 : les premiers reçoivent le reste de la division. */
-function equalShares(ids: string[]): Record<string, number> {
-  const base = Math.floor(100 / ids.length)
-  return Object.fromEntries(ids.map((id, i) => [id, base + (i < 100 - base * ids.length ? 1 : 0)]))
-}
-
+/**
+ * Un modèle de thématiques remplace tous les réglages de la page : ce qu'il ne nomme pas revient à « Neutre ».
+ * IA et technologie se recoupent (NVIDIA est dans les deux) : chaque action compte dans toutes ses thématiques.
+ */
 export interface ThemePreset {
   id: string
   label: string
   desc: string
-  /** Les thématiques après le choix du modèle ; les exclusions déjà faites sont gardées. */
-  apply: (current: Record<string, Share>) => Record<string, Share>
+  values: Record<string, Share>
 }
-
-const exclusions = (current: Record<string, Share>) => Object.fromEntries(Object.entries(current).filter(([, v]) => v === 'exclure'))
-
-const keep = (current: Record<string, Share>, values: Record<string, Share>) => ({
-  ...Object.fromEntries(Object.entries(exclusions(current)).filter(([id]) => !(id in values))),
-  ...values,
-})
 
 export const THEME_PRESETS: ThemePreset[] = [
   {
     id: 'neutre',
     label: 'Neutre',
-    desc: 'Toutes les thématiques que tu n’exclus pas, à parts égales.',
-    apply: (current) => {
-      const ids = BLOCKS.themes.items.map((t) => t.id).filter((id) => current[id] !== 'exclure')
-      return { ...exclusions(current), ...(ids.length ? equalShares(ids) : {}) }
-    },
+    desc: 'Aucune thématique imposée : les gestionnaires répartissent librement.',
+    values: {},
   },
   {
     id: 'tech',
     label: 'Techno d’abord',
-    desc: '45 % en technologie, le reste libre.',
-    apply: (current) => keep(current, { tech: 45 }),
+    desc: 'Technologie 35 % et intelligence artificielle 25 % de tes actions. Une action comme NVIDIA compte dans les deux.',
+    values: { tech: 35, ia: 25 },
   },
   {
     id: 'esg',
     label: 'Responsable (ESG)',
-    desc: 'Sans énergies fossiles, armement ni alcool et tabac.',
-    apply: (current) => keep(current, { fossiles: 'exclure', armement: 'exclure', 'alcool-tabac': 'exclure' }),
+    desc: 'Énergie propre 20 % de tes actions, sans énergies fossiles, armement, alcool, tabac ni jeux.',
+    values: { 'energie-propre': 20, fossiles: 'exclure', armement: 'exclure', 'alcool-tabac': 'exclure' },
   },
   {
     id: 'defensif',
     label: 'Défensif',
-    desc: 'Santé et consommation, 25 % chacune : des secteurs qui résistent mieux aux crises.',
-    apply: (current) => keep(current, { sante: 25, consommation: 25 }),
+    desc: 'Santé 30 % et consommation 20 % de tes actions : on en a besoin même pendant une crise.',
+    values: { sante: 30, consommation: 20 },
   },
   {
     id: 'revenus',
     label: 'Revenus',
-    desc: 'Banques et assurances 30 %, immobilier 15 % : des entreprises qui versent souvent des dividendes.',
-    apply: (current) => keep(current, { finance: 30, immobilier: 15 }),
+    desc: 'Banques et assurances 30 %, immobilier 15 % et énergie 10 % de tes actions (pipelines compris) : des entreprises qui versent souvent des dividendes.',
+    values: { finance: 30, immobilier: 15, fossiles: 10 },
   },
 ]
 
