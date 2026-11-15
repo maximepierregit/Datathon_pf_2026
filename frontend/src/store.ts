@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import { buildAll, emptyConstraints, PORTFOLIO_META, riskScore, WINNER_META } from './lib/engine'
-import type { BackendPortfolio, Constraints, ConstraintBlock, Contribution, DashboardLevel, Level, Portfolio, PortfolioId, Profile, ProfileCheck, RiskNote, Vehicles } from './types'
+import type { BackendPortfolio, ChatMsg, Constraints, ConstraintBlock, Contribution, DashboardLevel, Level, Portfolio, PortfolioId, Profile, ProfileCheck, RiskNote, Vehicles } from './types'
 
 export const DEFAULT_PROFILE: Profile = {
   age: 35,
@@ -39,6 +39,10 @@ export interface State {
   base: Portfolios | null
   portfolios: Portfolios | null
   adjustments: AppliedAdjustment[]
+  /** Le chat avec Pépite : il survit à l'aller-retour par la page de construction. */
+  chat: ChatMsg[]
+  /** Le client a confirmé un changement dans le chat : la page de construction relance les agents. */
+  rebuild: boolean
   disclaimerSeen: boolean
   setProfile: (patch: Partial<Profile>) => void
   setContribution: (patch: Partial<Contribution>) => void
@@ -48,6 +52,8 @@ export interface State {
   setCheck: (check: ProfileCheck | null) => void
   setSession: (session: string | null) => void
   setAdjustment: (text: string) => void
+  setChat: (update: (chat: ChatMsg[]) => ChatMsg[]) => void
+  setRebuild: (rebuild: boolean) => void
   acceptDisclaimer: () => void
   /** Portefeuilles du moteur d'exemple, quand le backend n'en a pas fourni. */
   build: () => void
@@ -103,6 +109,8 @@ export const useApp = create<State>()(
       base: null,
       portfolios: null,
       adjustments: [],
+      chat: [],
+      rebuild: false,
       disclaimerSeen: false,
       setProfile: (patch) => set((s) => ({ profile: { ...s.profile, ...patch } })),
       setContribution: (patch) => set((s) => ({ contribution: { ...s.contribution, ...patch } })),
@@ -113,6 +121,8 @@ export const useApp = create<State>()(
       setCheck: (check) => set({ check }),
       setSession: (session) => set({ session }),
       setAdjustment: (adjustment) => set({ adjustment }),
+      setChat: (update) => set((s) => ({ chat: update(s.chat) })),
+      setRebuild: (rebuild) => set({ rebuild }),
       acceptDisclaimer: () => set({ disclaimerSeen: true }),
       build: () =>
         set((s) => {
@@ -150,6 +160,8 @@ export const useApp = create<State>()(
           base: null,
           portfolios: null,
           adjustments: [],
+          chat: [],
+          rebuild: false,
           disclaimerSeen: false,
         }),
     }),

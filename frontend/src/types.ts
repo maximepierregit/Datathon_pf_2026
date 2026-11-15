@@ -105,8 +105,11 @@ export type AgentStatus = 'pending' | 'running' | 'done'
 export type PipelineEvent =
   | { type: 'check'; check: ProfileCheck; session?: string }
   | { type: 'agent_status'; agent: AgentId; status: AgentStatus; message: string }
-  /** `final` : la réponse de Pépite à un message du chat. */
-  | { type: 'pepite'; text: string; final?: boolean }
+  /**
+   * `final` : la réponse de Pépite à un message du chat. `ready` : elle a récapitulé un changement et demande si on
+   * relance ses agents ; `request` résume ce changement.
+   */
+  | { type: 'pepite'; text: string; final?: boolean; ready?: boolean; request?: string }
   | { type: 'universe'; before: number; after: number }
   | { type: 'rerun'; portfolio: PortfolioId; reason: string }
   | { type: 'warning'; text: string }
@@ -129,4 +132,22 @@ export interface AdjustProposal {
   /** Contraintes à appliquer si l'utilisateur accepte. */
   patch?: Partial<Constraints>
   riskShift?: number
+}
+
+/** Ce que Pépite a fait pour répondre dans le chat : ses propres étapes et celles des agents qu'elle a sollicités. */
+export interface ChatStep {
+  agent: AgentId
+  text: string
+  done: boolean
+}
+
+export interface ChatMsg {
+  from: 'user' | 'pepite' | 'info'
+  text: string
+  steps?: ChatStep[]
+  proposal?: AdjustProposal
+  request?: string
+  status?: 'open' | 'applied' | 'dismissed'
+  /** Pépite demande si on relance ses agents avec les changements convenus. `stale` : la conversation a continué. */
+  confirm?: 'open' | 'accepted' | 'dismissed' | 'stale'
 }

@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 import { Pepite } from './Pepite'
 
@@ -50,6 +51,11 @@ export function Footer() {
 }
 
 export function Layout() {
+  const { pathname } = useLocation()
+  // Chaque écran a son URL : on l'ouvre en haut de page.
+  useEffect(() => {
+    window.scrollTo(0, 0)
+  }, [pathname])
   return (
     <div className="flex min-h-screen flex-col">
       <Header />
