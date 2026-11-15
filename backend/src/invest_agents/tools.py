@@ -50,17 +50,21 @@ class PMState:
     best: Optional[OptimizationResult] = None
     attempts: int = 0
     log: list[str] = field(default_factory=list)
+    # True quand on interroge le gestionnaire après coup: il explique son portefeuille, il ne le modifie plus.
+    read_only: bool = False
 
 
 def make_pm_tools(market: Market, state: PMState) -> list:
-    hard = [c for c in state.constraints if c.hard]
-    eligible = market.assets[~excluded_mask(market, hard)]
+    def eligible_assets():
+        """Univers admissible. Recalculé à chaque appel: les contraintes du gestionnaire changent à chaque relance."""
+        hard = [c for c in state.constraints if c.hard]
+        return market.assets[~excluded_mask(market, hard)]
 
     @tool
     def describe_universe() -> dict:
         """Résume l'univers d'investissement admissible (après exclusions imposées): nombre d'actifs par classe,
         secteur et pays, et fourchettes de volatilité historique et de rendement espéré."""
-        a = eligible
+        a = eligible_assets()
         return {
             "n_assets": int(len(a)),
             "by_asset_class": a["asset_class"].value_counts().to_dict(),
@@ -91,7 +95,7 @@ def make_pm_tools(market: Market, state: PMState) -> list:
             sort_by: Critère de tri: "sharpe", "ann_return" ou "ann_vol" (croissant pour ann_vol).
             limit: Nombre maximal de résultats (max 50).
         """
-        a = eligible
+        a = eligible_assets()
         if sector:
             a = a[a["sector"].str.lower() == sector.lower()]
         if country:
@@ -114,6 +118,8 @@ def make_pm_tools(market: Market, state: PMState) -> list:
         Args:
             symbols: Liste de symboles (ex. ["AAPL", "RY.TO"]). Chaque titre pèse au moins 1 %.
         """
+        if state.read_only:
+            return {"status": "read_only", "message": "Le portefeuille est figé: explique-le, ne le recalcule pas."}
         state.attempts += 1
         result = optimize(market, symbols, state.objective, state.constraints, vol_cap=state.vol_cap,
                           risk_aversion=state.risk_aversion)

@@ -130,7 +130,7 @@ Changer le format d'un événement casse le frontend: mettre à jour le README e
 - Format long issu de `create_opt_inputs` (`../Universe_Cleaned.ipynb`). Obligatoires: `date`, `symbol`, `total_return_cad`. Optionnelles: `name`, `sector`, `industry`, `country`, `currency`, `asset_class`, `instrument_type`, `market`, `is_included_universe`.
 - Actifs avec moins de 120 observations écartés. Secteur, pays et classe manquants deviennent `Non classé`.
 - `get_market()` est en cache (`lru_cache`); appelé via `asyncio.to_thread` dans l'orchestrateur.
-- Le dataset réel (S3, 1,2 M lignes) est lu par `_read_dataset`: seulement les colonnes utiles, métadonnées texte en catégories. Pic mémoire ~440 Mo au lieu de ~850 Mo avec `pd.read_parquet`, nécessaire sur l'EC2 t3.micro (1 Go). Le jeu synthétique (`make_sample_dataset.py`, symboles `SYN*`, `SETF*`, `SCRY*`) reste pour le développement sans AWS; ses chiffres n'ont aucune valeur réelle.
+- Le dataset réel (S3, 1,2 M lignes) est lu par `_read_dataset`: seulement les colonnes utiles, métadonnées texte en catégories. Pic mémoire ~440 Mo au lieu de ~850 Mo avec `pd.read_parquet`, utile sur l'EC2 (t3.small, 2 Go). Le jeu synthétique (`make_sample_dataset.py`, symboles `SYN*`, `SETF*`, `SCRY*`) reste pour le développement sans AWS; ses chiffres n'ont aucune valeur réelle.
 - Comme dans l'univers réel, l'`asset_class` d'un FNB reprend sa catégorie (`Equities`, `Fixed Income`, `Money Market`, `Commodities`, `Real Estate`); les actions sont `Equity`, les cryptos `Crypto`. Le jeu synthétique compte 6 FNB d'obligations: un profil prudent doit tenir sous la limite de 40 % par ligne.
 
 ## Déploiement AgentCore

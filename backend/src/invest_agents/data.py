@@ -218,7 +218,7 @@ def get_market() -> Market:
 def _read_dataset(path: str) -> pd.DataFrame:
     """Lit seulement les colonnes utiles. Les métadonnées texte, répétées sur chaque date, sont lues en
     dictionnaire (catégories): sur le dataset réel (1,2 M lignes), le pic mémoire passe d'environ 850 Mo à
-    une fraction, ce qui compte sur l'EC2 t3.micro (1 Go)."""
+    environ 440 Mo, ce qui compte sur la petite EC2 du front (t3.small, 2 Go)."""
     import pyarrow.parquet as pq
 
     schema = pq.read_schema(path)
