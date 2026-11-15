@@ -150,7 +150,10 @@ Changer le format d'un événement casse le frontend: mettre à jour le README e
 
 ## Limites et pistes
 
-- Rendements et volatilités historiques (moyenne et covariance de la période). Pas de modèle prospectif.
+- Rendement espéré (`data.py`, colonne `ann_return`): 75 % d'un rendement de long terme par classe d'actifs
+  (`CLASS_RETURNS`: actions 7 %, obligations 3,5 %…) + 25 % de la moyenne historique bornée entre −10 % et 30 %.
+  La moyenne brute (`hist_return`) reflète le marché haussier 2021-2026 et les gagnants de la période. Volatilité et
+  covariance restent historiques.
 - Défensif peut avoir un rendement nul ou négatif: envisager un plancher `min_expected_return` propre au mandat.
 - La réflexion arrive surtout en anglais malgré la consigne.
 - Le nouvel essai cible les PM, pas l'agent Profil (le schéma dessine un retour au Profil: à harmoniser).

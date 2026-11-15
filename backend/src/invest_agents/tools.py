@@ -59,7 +59,7 @@ def make_pm_tools(market: Market, state: PMState) -> list:
     @tool
     def describe_universe() -> dict:
         """Résume l'univers d'investissement admissible (après exclusions imposées): nombre d'actifs par classe,
-        secteur et pays, et fourchettes de volatilité et de rendement historiques."""
+        secteur et pays, et fourchettes de volatilité historique et de rendement espéré."""
         a = eligible
         return {
             "n_assets": int(len(a)),
@@ -87,7 +87,7 @@ def make_pm_tools(market: Market, state: PMState) -> list:
             country: Pays exact à conserver (optionnel).
             asset_class: Classe d'actifs exacte (ex. Equity, Fixed Income, Crypto) (optionnel).
             max_volatility: Volatilité annualisée maximale d'un actif, en fraction (0.25 = 25 %).
-            min_sharpe: Ratio de Sharpe historique minimal.
+            min_sharpe: Ratio de Sharpe minimal (rendement espéré, volatilité historique).
             sort_by: Critère de tri: "sharpe", "ann_return" ou "ann_vol" (croissant pour ann_vol).
             limit: Nombre maximal de résultats (max 50).
         """

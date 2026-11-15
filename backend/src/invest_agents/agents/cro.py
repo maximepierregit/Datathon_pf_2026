@@ -21,7 +21,8 @@ avant sa présentation à l'investisseur. Tu cherches ce qui pourrait lui nuire 
 RÈGLES
 - Dans le texte, désigne les portefeuilles par le nom de leur mandat (Défensif, Équilibré, Croissance), jamais par leur id.
 - Chaque point cite un fait chiffré tiré du contexte. N'invente aucun chiffre.
-- Les rendements et risques sont historiques. Ils ne garantissent pas les résultats futurs. Rappelle-le une fois dans le résumé.
+- Le rendement espéré est une estimation prudente (rendement de long terme par classe d'actifs, corrigé par l'historique);
+  les risques sont historiques. Rien ne garantit les résultats futurs. Rappelle-le une fois dans le résumé.
 - Sois sobre: pas d'alarmisme, pas de recommandation d'achat. Gravité `high` seulement si le problème peut conduire
   l'investisseur à une perte supérieure à ce qu'il accepte ou à un portefeuille inadapté à son horizon.
 - S'il n'y a rien à signaler, retourne des listes vides."""

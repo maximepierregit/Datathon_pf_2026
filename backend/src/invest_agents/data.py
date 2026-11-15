@@ -26,6 +26,14 @@ UNKNOWN = "Non classé"
 REQUIRED_COLUMNS = {"date", "symbol", "total_return_cad"}
 META_COLUMNS = ["name", "sector", "industry", "country", "currency", "asset_class", "instrument_type", "market"]
 
+# Rendement espéré: la moyenne 2021-2026 reflète un marché haussier et les gagnants de la période (biais du
+# survivant). On la ramène vers un rendement de long terme par classe d'actifs, en CAD, sans en garder les extrêmes.
+CLASS_RETURNS = {"Equity": 0.07, "Fixed Income": 0.035, "Real Estate": 0.06, "Multi-Asset": 0.055,
+                 "Commodities": 0.045, "Alternative": 0.06}
+DEFAULT_RETURN = 0.05
+HISTORY_WEIGHT = 0.25  # part de l'historique dans le rendement espéré
+HISTORY_CLIP = (-0.10, 0.30)
+
 
 def _resolve_path(path: str) -> str:
     """Télécharge le fichier si c'est une URI S3, sinon retourne le chemin local.
@@ -108,7 +116,7 @@ class Market:
     def moments(self, symbols: list[str]) -> tuple[np.ndarray, np.ndarray]:
         """Rendements espérés et covariance annualisés (covariance corrigée pour être semi-définie positive)."""
         r = self.returns[symbols]
-        mu = (r.mean() * TRADING_DAYS).to_numpy(dtype=float)
+        mu = self.assets.loc[symbols, "ann_return"].to_numpy(dtype=float)
         cov = r.cov(min_periods=60) * TRADING_DAYS
         var = np.array(np.diag(cov.to_numpy()), dtype=float)
         cov = np.array(cov.fillna(0.0).to_numpy(), dtype=float)  # copie modifiable
@@ -178,10 +186,13 @@ def build_market(df: pd.DataFrame) -> Market:
         meta[col] = meta[col].fillna(UNKNOWN).astype(str)
 
     rf = get_settings().risk_free_rate
-    ann_ret = returns.mean() * TRADING_DAYS
+    hist_ret = returns.mean() * TRADING_DAYS
+    prior = meta["asset_class"].map(CLASS_RETURNS).fillna(DEFAULT_RETURN)
+    ann_ret = (1 - HISTORY_WEIGHT) * prior + HISTORY_WEIGHT * hist_ret.clip(*HISTORY_CLIP)
     ann_vol = returns.std() * np.sqrt(TRADING_DAYS)
     stats = pd.DataFrame(
         {
+            "hist_return": hist_ret,
             "ann_return": ann_ret,
             "ann_vol": ann_vol,
             "sharpe": (ann_ret - rf) / ann_vol.replace(0, np.nan),
