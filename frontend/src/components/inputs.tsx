@@ -1,6 +1,6 @@
 import { useId, useState } from 'react'
 import { LEVELS, shareTotal, type CatalogItem } from '../data/catalog'
-import { pct } from '../lib/format'
+import { share, shareNumber } from '../lib/format'
 import type { Level, Share } from '../types'
 
 export interface Option<T> {
@@ -195,17 +195,7 @@ export function ShareTuner({ items, value, onChange, percent = true }: { items: 
               {percent &&
                 (num ? (
                   <label className="flex min-h-11 items-center gap-1 rounded-md bg-navy px-2.5 text-sm font-semibold text-white">
-                    <input
-                      type="number"
-                      inputMode="numeric"
-                      min={0}
-                      max={100}
-                      autoFocus={opened === it.id}
-                      aria-label={`Pourcentage pour ${it.label}`}
-                      value={cur}
-                      onChange={(e) => onChange(it.id, Math.min(100, Math.max(0, Math.round(Number(e.target.value) || 0))))}
-                      className="w-12 bg-transparent text-right text-white outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
-                    />
+                    <ShareInput value={cur} label={it.label} autoFocus={opened === it.id} onChange={(s) => onChange(it.id, s)} />
                     %
                   </label>
                 ) : (
@@ -229,6 +219,55 @@ export function ShareTuner({ items, value, onChange, percent = true }: { items: 
   )
 }
 
+/** Le texte saisi, nettoyé : chiffres et une virgule, une décimale au plus, sans zéro en tête, 100 au plus. */
+function cleanShare(raw: string): string {
+  const [whole = '', ...rest] = raw.replace(/\./g, ',').replace(/[^\d,]/g, '').split(',')
+  const int = whole.replace(/^0+(?=\d)/, '')
+  const text = rest.length ? `${int || '0'},${rest.join('').slice(0, 1)}` : int
+  return (parseShare(text) ?? 0) > 100 ? '100' : text
+}
+
+/** Le nombre d'un texte nettoyé ; null s'il est vide. */
+function parseShare(text: string): number | null {
+  if (!text || text === ',') return null
+  return Math.round(Number(text.replace(',', '.')) * 10) / 10
+}
+
+/**
+ * Champ de pourcentage : virgule ou point, une décimale. Pendant la saisie, le brouillon garde « 12, » tel quel ; à la
+ * sortie du champ, 0 ou un champ vide devient « Exclure ».
+ */
+function ShareInput({ value, label, autoFocus, onChange }: { value: number; label: string; autoFocus: boolean; onChange: (s: Share) => void }) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const shown = draft ?? shareNumber(value)
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      autoFocus={autoFocus}
+      aria-label={`Pourcentage pour ${label}`}
+      value={shown}
+      onFocus={(e) => {
+        setDraft(shown)
+        e.target.select()
+      }}
+      onChange={(e) => {
+        const text = cleanShare(e.target.value)
+        setDraft(text)
+        const n = parseShare(text)
+        if (n !== null) onChange(n)
+      }}
+      onBlur={() => {
+        const n = draft === null ? value : parseShare(draft)
+        setDraft(null)
+        if (!n) onChange('exclure')
+      }}
+      onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+      className="w-12 bg-transparent text-right text-white outline-none"
+    />
+  )
+}
+
 /** Total des pourcentages d'un bloc : ce qui est fixé, ce qui reste libre, ce qui manque ou dépasse. */
 export function ShareTotal({ value, ids }: { value: Record<string, Share>; ids: string[] }) {
   const { total, entered, free } = shareTotal(value, ids)
@@ -236,12 +275,12 @@ export function ShareTotal({ value, ids }: { value: Record<string, Share>; ids: 
   const over = total > 100
   const short = !free && total < 100
   const message = over
-    ? `Tes pourcentages font ${pct(total / 100, 0)} : enlève ${total - 100} points.`
+    ? `Tes pourcentages font ${share(total)} : enlève ${shareNumber(total - 100)} points.`
     : short
-      ? `Tout est fixé, mais il manque ${100 - total} points pour arriver à ${pct(1, 0)}.`
+      ? `Tout est fixé, mais il manque ${shareNumber(100 - total)} points pour arriver à ${share(100)}.`
       : total === 100
-        ? `${pct(1, 0)} fixés : tout est réparti.`
-        : `${pct(total / 100, 0)} fixés · ${pct((100 - total) / 100, 0)} laissés libres aux gestionnaires.`
+        ? `${share(100)} fixés : tout est réparti.`
+        : `${share(total)} fixés · ${share(100 - total)} laissés libres aux gestionnaires.`
   return (
     <div className="flex flex-col gap-2" role="status">
       <div className="h-2 overflow-hidden rounded-full bg-mist" aria-hidden>

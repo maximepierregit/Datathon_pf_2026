@@ -1,7 +1,7 @@
 // Moteur d'exemple côté front : il imite ce que feront les agents Strands et l'optimiseur Python,
 // pour que l'interface fonctionne avant le branchement du backend.
 import { CLASS_ASSUMPTIONS, CLASS_LABELS, BLOCKS, FACTOR_IDS, shownClasses, UNIVERSE, type UniverseLine } from '../data/catalog'
-import type { AssetClass, Constraints, FactorView, Holding, Level, Metrics, Portfolio, PortfolioId, Profile, RiskNote, ScoredStock, Share } from '../types'
+import type { AssetClass, Constraints, Evidence, FactorView, Holding, Level, Metrics, Portfolio, PortfolioId, Profile, RiskNote, ScoredStock, Share } from '../types'
 
 const CLASSES = Object.keys(CLASS_LABELS) as AssetClass[]
 const LINE_CAP = 0.4
@@ -41,12 +41,67 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
 const OBJECTIVE_TOLERANCE = { securiser: 0, fructifier: 0.5, 'viser-haut': 1 }
 const RISK_LABELS = ['Très prudent', 'Prudent', 'Équilibré', 'Audacieux', 'Très audacieux']
 
+const CAPACITY_MARGIN = 0.125
+
+/** Chaque réponse ramenée entre 0 et 1, puis capacité C, tolérance T et position S (le carnet de Pépite les montre). */
+export function riskBreakdown(p: Profile) {
+  const horizon = clamp((Math.min(p.horizon, 20) - 1) / 19, 0, 1)
+  const age = clamp((75 - p.age) / 50, 0, 1)
+  const reaction = clamp(p.lossReaction / 3, 0, 1)
+  const objective = OBJECTIVE_TOLERANCE[p.objective]
+  const comfort = clamp((p.comfort - 1) / 4, 0, 1)
+  const capacity = 0.6 * horizon + 0.4 * age
+  const tolerance = 0.5 * reaction + 0.3 * objective + 0.2 * comfort
+  // La tolérance ne dépasse pas la capacité de plus de 3 crans sur 24.
+  const capped = (capacity + tolerance) / 2 > capacity + CAPACITY_MARGIN
+  const s = clamp(Math.min((capacity + tolerance) / 2, capacity + CAPACITY_MARGIN), 0, 1)
+  return { horizon, age, reaction, objective, comfort, capacity, tolerance, capped, s }
+}
+
 /** S, de 0 (très prudent) à 1 (très audacieux) : capacité (horizon, âge) et tolérance (baisse, objectif, aisance). */
 export function riskPosition(p: Profile): number {
-  const capacity = 0.6 * clamp((Math.min(p.horizon, 20) - 1) / 19, 0, 1) + 0.4 * clamp((75 - p.age) / 50, 0, 1)
-  const tolerance = 0.5 * clamp(p.lossReaction / 3, 0, 1) + 0.3 * OBJECTIVE_TOLERANCE[p.objective] + 0.2 * clamp((p.comfort - 1) / 4, 0, 1)
-  // La tolérance ne dépasse pas la capacité de plus de 3 crans sur 24.
-  return clamp(Math.min((capacity + tolerance) / 2, capacity + 0.125), 0, 1)
+  return riskBreakdown(p).s
+}
+
+// Mêmes bornes que AVERSION_ANCHORS de monport.py : une par profil, interpolées en log.
+export const AVERSION_ANCHORS: [number, number][] = [[0, 25], [0.2, 14], [0.4, 7], [0.6, 3.5], [0.8, 1.5], [1, 1]]
+
+/** Aversion au risque A donnée à l'optimiseur : 25 très prudent … 1 très audacieux (risk_aversion() de monport.py). */
+export function riskAversion(s: number): number {
+  const x = clamp(s, 0, 1)
+  for (let i = 1; i < AVERSION_ANCHORS.length; i++) {
+    const [s0, a0] = AVERSION_ANCHORS[i - 1]
+    const [s1, a1] = AVERSION_ANCHORS[i]
+    if (x <= s1) return a0 * (a1 / a0) ** ((x - s0) / (s1 - s0))
+  }
+  return 1
+}
+
+const lerp = (s: number, anchors: number[]) => {
+  const x = clamp(s, 0, 1) / 0.2
+  const i = Math.min(4, Math.floor(x))
+  return anchors[i] + (anchors[i + 1] - anchors[i]) * (x - i)
+}
+
+/**
+ * Garde-fous du profil sous lesquels l'optimiseur répartit ce qui est neutre (BOND_FLOOR, NO_CRYPTO, VOL_ANCHORS et
+ * STOCK_ANCHORS de monport.py).
+ */
+export function profileLimits(s: number) {
+  const band = Math.min(4, Math.floor(clamp(s, 0, 1) / 0.2))
+  return {
+    bondFloor: [0.8, 0.6, 0.4, 0.2, 0][band],
+    noCrypto: band <= 1,
+    maxVolatility: lerp(s, [0.06, 0.08, 0.11, 0.14, 0.18, 0.25]),
+    maxStock: Math.min(LINE_CAP, lerp(s, [0.07, 0.09, 0.11, 0.13, 0.17, 0.22])),
+    lineCap: LINE_CAP,
+  }
+}
+
+/** La position S de chaque gestionnaire (slot_position() de monport.py) ; null : « Tes préférences » ignore le profil. */
+export function slotPosition(s: number, coherent: boolean, id: PortfolioId): number | null {
+  if (!coherent) return id === 'conviction' ? null : s
+  return clamp(s + { prudent: -0.1, equilibre: 0, conviction: 0.1 }[id], 0, 1)
 }
 
 /** Score de risque 5–95 tiré du profil. */
@@ -233,23 +288,66 @@ export function metricsOf(holdings: Holding[]): Metrics {
   }
 }
 
+const EXAMPLE_SOURCE = 'Données d’exemple du moteur de démonstration (backend hors ligne)'
+
+/** Preuves d'exemple, mêmes identifiants que portfolio_evidence() de backend/src/invest_agents/evidence.py. */
+export function evidenceOf(p: Portfolio, profile: Profile): Record<string, Evidence> {
+  const m = p.metrics
+  const loss = { label: 'Baisse que tu acceptes', value: -LOSS_BY_REACTION[profile.lossReaction] }
+  const rows = backtest(p)
+  const start = new Date()
+  start.setMonth(start.getMonth() - rows.length + 1)
+  const dateOf = (month: number) => {
+    const d = new Date(start)
+    d.setMonth(d.getMonth() + month)
+    return d.toISOString().slice(0, 10)
+  }
+  const trough = rows.reduce((a, b) => (b.drawdown < a.drawdown ? b : a))
+  const peak = rows.slice(0, trough.month + 1).reduce((a, b) => (b.value > a.value ? b : a))
+  const period: [string, string] = [dateOf(0), dateOf(rows.length - 1)]
+  const top = p.holdings.reduce((a, b) => (b.weight > a.weight ? b : a))
+  const hhi = p.holdings.reduce((s, h) => s + h.weight ** 2, 0)
+  const item = (id: string, label: string, value: number, unit: Evidence['unit'], extra: Partial<Evidence> = {}): Evidence => ({ id, label, value, unit, source: EXAMPLE_SOURCE, ...extra })
+  return Object.fromEntries(
+    [
+      item('pire_baisse', 'Pire baisse de ce portefeuille dans le passé', m.maxDrawdown, 'pct', {
+        limit: loss,
+        period,
+        series: rows.map((r) => ({ date: dateOf(r.month), value: r.value })),
+        span: [dateOf(peak.month), dateOf(trough.month)],
+      }),
+      item('mauvaise_annee', 'Une très mauvaise année (1 chance sur 100)', m.worstYear, 'pct', { limit: loss, period }),
+      item('volatilite', 'Variation typique en un an, à la hausse comme à la baisse', m.volatility, 'pct', { period }),
+      item('ligne_max', `Plus grosse ligne : ${top.name}`, top.weight, 'pct', { limit: { label: 'Limite par ligne', value: LINE_CAP } }),
+      item('diversification', 'Placements qui comptent vraiment (diversification)', hhi > 0 ? 1 / hhi : 0, 'nombre', { limit: { label: 'Lignes au total', value: p.holdings.length } }),
+      item('actions', 'Part en actions', p.allocation.actions, 'pct'),
+      item('obligations', 'Part en obligations', p.allocation.obligations, 'pct'),
+      item('crypto', 'Part en crypto-actifs', p.allocation.crypto, 'pct'),
+      item('horizon', 'Ton horizon de placement', profile.horizon, 'ans'),
+    ].map((e) => [e.id, e]),
+  )
+}
+
+// Mêmes valeurs que LOSS_BY_REACTION de monport.py (baisse de 20 % : je vends tout … j'investis plus).
+const LOSS_BY_REACTION = [0.1, 0.15, 0.25, 0.35]
+
 /** Alertes de cohérence profil ↔ contraintes (le backend les confie au responsable des risques). */
 export function coherenceWarnings(score: number, c: Constraints): RiskNote[] {
   const w: RiskNote[] = []
   const crypto = shareOf(c.classes.crypto)
   const actions = shareOf(c.classes.actions)
   if (score < 40 && crypto)
-    w.push({ title: 'Crypto et prudence font mauvais ménage', detail: 'Tu cherches de la stabilité, mais tu veux de la crypto. La crypto peut perdre la moitié de sa valeur en quelques mois.', severity: 'high' })
+    w.push({ title: 'Crypto et prudence font mauvais ménage', detail: 'Tu cherches de la stabilité, mais tu veux de la crypto. La crypto peut perdre la moitié de sa valeur en quelques mois.', severity: 'high', cites: ['crypto', 'pire_baisse'] })
   if (score < 40 && actions !== undefined && actions >= 0.7)
-    w.push({ title: 'Beaucoup d’actions pour un profil prudent', detail: 'Avec autant d’actions, tu pourrais vivre des baisses difficiles à supporter.', severity: 'medium' })
+    w.push({ title: 'Beaucoup d’actions pour un profil prudent', detail: 'Avec autant d’actions, tu pourrais vivre des baisses difficiles à supporter.', severity: 'medium', cites: ['actions', 'mauvaise_annee'] })
   if (score > 65 && (c.classes.actions === 'exclure' || (actions !== undefined && actions <= 0.3)))
-    w.push({ title: 'Peu d’actions pour ton horizon', detail: 'Ton profil est dynamique, mais tu limites les actions : ton argent risque de moins grandir.', severity: 'medium' })
+    w.push({ title: 'Peu d’actions pour ton horizon', detail: 'Ton profil est dynamique, mais tu limites les actions : ton argent risque de moins grandir.', severity: 'medium', cites: ['actions', 'horizon'] })
   // Sous « Très audacieux », le profil prévoit une part d'obligations, qui n'existent ici qu'en FNB.
   if (score < 77 && c.vehicles === 'titres')
-    w.push({ title: 'Pas d’obligations sans FNB', detail: 'Avec des titres individuels seulement, ton portefeuille n’aura pas d’obligations : ton profil en prévoit pourtant une part pour amortir les baisses.', severity: 'medium' })
+    w.push({ title: 'Pas d’obligations sans FNB', detail: 'Avec des titres individuels seulement, ton portefeuille n’aura pas d’obligations : ton profil en prévoit pourtant une part pour amortir les baisses.', severity: 'medium', cites: ['obligations', 'pire_baisse'] })
   const kept = shownClasses(c.vehicles).filter((k) => c.classes[k] !== 'exclure' && c.classes[k] !== 0)
   if (kept.length === 1)
-    w.push({ title: 'Un seul type de placement', detail: `Tu n’as gardé que les ${CLASS_LABELS[kept[0]].toLowerCase()} : ton portefeuille sera très peu diversifié.`, severity: 'medium' })
+    w.push({ title: 'Un seul type de placement', detail: `Tu n’as gardé que les ${CLASS_LABELS[kept[0]].toLowerCase()} : ton portefeuille sera très peu diversifié.`, severity: 'medium', cites: ['diversification', 'ligne_max'] })
   return w
 }
 

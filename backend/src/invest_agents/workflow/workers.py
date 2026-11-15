@@ -19,12 +19,14 @@ from ..diagnostics import diagnostics
 from ..agents.portfolio_manager import make_pm_worker, run_pm_worker
 from ..catalog import describe, evaluate, excluded_mask
 from ..mandates import Mandate
+from ..evidence import brief
 from ..monport import (
     BASE_NAMES,
     SLOTS,
     VARIANT_NAMES,
     build_profiles,
     ensure_feasible,
+    evidence_for,
     front,
     guidance_for,
     objective_for,
@@ -99,6 +101,12 @@ Les `warnings` s'affichent telles quelles au client, souvent débutant, à côt�
   ni volatilité, ni VaR, ni drawdown, ni Sharpe, ni régime macro, ni symbole boursier sans son nom.
 - Trois mises en garde au plus, les plus importantes d'abord.
 
+TES PREUVES
+`preuves` liste les faits calculés par le code, chacun sous un identifiant (`pire_baisse`, `mauvaise_annee`, `crypto`,
+`secteur`, `inflation_ca`…). Chaque mise en garde cite dans `sources` 1 à 3 identifiants de cette liste, ceux qui la
+prouvent: le client les voit sous ta mise en garde, avec leur source et leurs données. Le chiffre de ton `detail`
+vient d'une preuve citée. Une mise en garde qu'aucune preuve n'appuie ne s'écrit pas.
+
 RÈGLES
 - Chaque point s'appuie sur un fait chiffré tiré du contexte ou des outils. N'invente aucun chiffre.
 - Les rendements et risques sont historiques. Ils ne garantissent pas les résultats futurs. Rappelle-le une fois dans le résumé.
@@ -130,6 +138,7 @@ def _portfolio_payload(session: Session, slot: str, p: Portfolio) -> dict:
         "compromis": p.tradeoffs,
         "ecarts": [f"{c.label}: {c.message}" for c in checks if not c.passed],
         "diagnostics": diagnostics(investor, p),
+        "preuves": {k: brief(e) for k, e in evidence_for(p, session.market, session.form).items()},
     }
 
 

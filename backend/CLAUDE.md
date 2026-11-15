@@ -62,6 +62,7 @@ src/invest_agents/
   guardrail.py              Bedrock Guardrails sur le texte libre du client (GUARDRAIL_ID)
   memory.py                 Enregistrement et restauration des sessions dans AgentCore Memory (MEMORY_ID)
   diagnostics.py            Faits de risque calculés par le code, lus par les agents Risque
+  evidence.py               Preuves chiffrées des agents Risque (code pur); ils citent leurs identifiants dans RiskIssue.sources
   mandates.py, catalog.py, constraints.py, allocator.py, optimizer.py, market.py, data.py, macro.py
   events.py, models.py, schemas.py, config.py, runtime.py
 ```

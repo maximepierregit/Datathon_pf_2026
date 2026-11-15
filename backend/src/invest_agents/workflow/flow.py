@@ -157,7 +157,7 @@ def present(session: Session, bus) -> bool:
         front(bus, status("pepite", "done", "Mélanges 80/20 prêts : profil d’abord, préférences d’abord."))
     front(bus, {"type": "portfolios", "session": session.id, "portfolios": {
         p.id: to_portfolio(p, v, market, {"warnings": _warnings_for(session, p.id, sources)}, check.risk_position,
-                           session.skipped, session.notes.get(p.id, []), name, tagline)
+                           session.skipped, session.notes.get(p.id, []), name, tagline, session.form)
         for p, v, name, tagline, sources in presented
     }})
     session.shown_version = session.version

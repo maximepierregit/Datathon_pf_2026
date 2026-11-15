@@ -69,6 +69,8 @@ export default function Preferences() {
   const valid = !share || (sharesValid(c[s], ids) && !noneKept)
   const preset = s === 'themes' ? activePreset(c.themes) : undefined
   const last = step === steps.length
+  // Rien à réinitialiser si tout est déjà neutre (un facteur à 0 est neutre).
+  const touched = s !== 'vehicles' && Object.values(c[s]).some((v) => v !== 0)
   return (
     <QuestionShell
       chapter="Tes préférences"
@@ -94,6 +96,21 @@ export default function Preferences() {
         )
       }
     >
+      {s !== 'vehicles' && (
+        <div className="-mb-2 flex justify-end">
+          <button
+            onClick={() => state.resetBlock(s)}
+            disabled={!touched}
+            className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium text-blue hover:bg-sky hover:text-blue-dark disabled:text-slate-light disabled:hover:bg-transparent"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M3 12a9 9 0 1 0 3-6.7" />
+              <path d="M3 4v5h5" />
+            </svg>
+            Tout remettre à « Neutre »
+          </button>
+        </div>
+      )}
       {s === 'vehicles' ? (
         <ChoiceList label="FNB, titres individuels ou les deux" options={VEHICLE_OPTIONS} value={c.vehicles} onChange={state.setVehicles} />
       ) : s === 'factors' ? (

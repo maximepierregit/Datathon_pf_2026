@@ -230,6 +230,11 @@ class RiskIssue(BaseModel):
     detail: str
     severity: Literal["low", "medium", "high"]
     portfolio_id: Optional[str] = Field(default=None, description="Null si l'enjeu concerne le profil en général")
+    sources: list[str] = Field(
+        default_factory=list,
+        description="1 à 3 identifiants de `preuves` qui prouvent ce point (ex.: pire_baisse, crypto, inflation_ca). "
+        "Seulement des identifiants de la liste reçue.",
+    )
 
 
 class RiskReport(BaseModel):
@@ -268,6 +273,11 @@ class PepiteReview(BaseModel):
         description="Questions tutoyées à poser au client pour clarifier une incohérence ou une réponse ambiguë. "
         "Liste vide si le profil est cohérent.",
     )
+    risk_explanation: str = Field(
+        default="",
+        description="2 ou 3 phrases tutoyées, sans formule: quelles réponses ont le plus pesé sur ton niveau de risque, "
+        "et ce que ton aversion au risque change pour les gestionnaires. Seulement les chiffres de compute_risk_profile.",
+    )
 
 
 class PepiteCheck(ProfileAssessment):
@@ -277,6 +287,7 @@ class PepiteCheck(ProfileAssessment):
     coherent: bool
     issues: list[CoherenceIssue] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
+    risk_explanation: str = ""
     risk_position: float = Field(default=0.5, ge=0, le=1, description="0 très prudent … 1 très audacieux")
     risk_aversion: float = Field(default=7.0, ge=1, le=25, description="Coefficient A: 1 très audacieux … 25 très prudent")
 

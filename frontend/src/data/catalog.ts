@@ -162,7 +162,7 @@ export const FACTOR_TARGETS: Record<Exclude<Level, 0>, number> = { 2: 0.5, 1: 0.
 /** Somme des pourcentages saisis, et s'il reste un élément neutre (libre) parmi `ids`. */
 export function shareTotal(values: Record<string, Share>, ids: string[]) {
   const entered = ids.map((id) => values[id]).filter((v): v is number => typeof v === 'number')
-  return { total: entered.reduce((a, b) => a + b, 0), entered: entered.length, free: ids.filter((id) => values[id] === undefined).length }
+  return { total: Math.round(entered.reduce((a, b) => a + b, 0) * 10) / 10, entered: entered.length, free: ids.filter((id) => values[id] === undefined).length }
 }
 
 /** Les pourcentages d'un bloc font au plus 100 %, et exactement 100 % quand plus rien n'est libre. */

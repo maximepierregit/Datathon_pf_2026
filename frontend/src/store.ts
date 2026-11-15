@@ -51,6 +51,8 @@ export interface State {
   setShare: (block: ShareBlock, id: string, share: Share | null) => void
   setShares: (block: ShareBlock, values: Record<string, Share>) => void
   setFactor: (id: string, level: Level) => void
+  /** Tout un bloc remis à neutre (ses clés disparaissent). */
+  resetBlock: (block: ConstraintBlock) => void
   /** Retire ce que le nouveau véhicule ne permet pas : classes hors FNB, pourcentages de régions et de thèmes en FNB seulement. */
   setVehicles: (vehicles: Vehicles) => void
   clearConstraints: () => void
@@ -128,6 +130,7 @@ export const useApp = create<State>()(
         }),
       setShares: (block, values) => set((s) => ({ constraints: { ...s.constraints, [block]: values } })),
       setFactor: (id, level) => set((s) => ({ constraints: { ...s.constraints, factors: { ...s.constraints.factors, [id]: level } } })),
+      resetBlock: (block) => set((s) => ({ constraints: { ...s.constraints, [block]: {} } })),
       setVehicles: (vehicles) =>
         set((s) => {
           const shown: string[] = shownClasses(vehicles)
