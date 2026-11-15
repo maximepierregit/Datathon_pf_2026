@@ -428,9 +428,40 @@ def validate_profile(constraints: list[Constraint], exclusions: list[Constraint]
     return None if detect_conflicts(valid) else valid
 
 
+def _floor_column(c: Constraint) -> Optional[str]:
+    """La colonne d'un poids minimal par groupe (secteur, pays, classe d'actifs); None pour les autres contraintes."""
+    if not (c.type.value.startswith("min_") and c.target):
+        return None
+    return DIMENSION_COLUMN.get(c.type.value.removeprefix("min_").removesuffix("_weight"))
+
+
+def drop_unreachable_floors(market: Market, constraints: list[Constraint]) -> tuple[list[Constraint], Optional[str]]:
+    """Retire un poids minimal qu'aucun placement admissible ne peut remplir. Ex.: « FNB seulement » et plus de
+    techno, alors qu'un FNB n'a pas de secteur. Sans ça, les trois gestionnaires échouent."""
+    hard = [c for c in constraints if c.hard]
+    eligible = market.assets[~excluded_mask(market, hard)]
+    dropped = []
+    for c in hard:
+        column = _floor_column(c)
+        if column and not (eligible[column].astype(str).str.lower() == c.target.lower()).any():
+            dropped.append(c)
+    if not dropped:
+        return constraints, None
+    names = ", ".join(f"« {c.target} »" for c in dropped)
+    note = f"Avec tes choix, aucun placement ne correspond à {names} : je n’ai pas pu en garantir une part."
+    return [c for c in constraints if c not in dropped], note
+
+
 def ensure_feasible(market: Market, constraints: list[Constraint]) -> tuple[list[Constraint], Optional[str]]:
-    """Relève le plafond de volatilité quand l'univers ne permet pas de descendre aussi bas: sans ça, le gestionnaire
-    et son repli échouent tous les deux (fréquent sur le dataset synthétique pour un profil prudent)."""
+    """Retire les poids minimaux impossibles, puis relève le plafond de volatilité quand l'univers ne permet pas de
+    descendre aussi bas: sans ça, le gestionnaire et son repli échouent tous les deux (fréquent sur le dataset
+    synthétique pour un profil prudent)."""
+    constraints, floor_note = drop_unreachable_floors(market, constraints)
+    constraints, vol_note = _raise_volatility_cap(market, constraints)
+    return constraints, " ".join(n for n in (floor_note, vol_note) if n) or None
+
+
+def _raise_volatility_cap(market: Market, constraints: list[Constraint]) -> tuple[list[Constraint], Optional[str]]:
     hard = [c for c in constraints if c.hard]
     caps = [c.value for c in hard if c.type is T.MAX_VOLATILITY and c.value]
     if not caps:
@@ -438,9 +469,8 @@ def ensure_feasible(market: Market, constraints: list[Constraint]) -> tuple[list
     eligible = market.assets[~excluded_mask(market, hard)]
     picks = eligible.sort_values("ann_vol").index[:30].tolist()
     for c in hard:  # les poids minimaux exigent des titres de leur groupe
-        column = DIMENSION_COLUMN.get(c.type.value.removeprefix("min_").removesuffix("_weight"))
-        if c.type.value.startswith("min_") and c.target and column:
-            group = eligible[eligible[column].str.lower() == c.target.lower()]
+        if column := _floor_column(c):
+            group = eligible[eligible[column].astype(str).str.lower() == c.target.lower()]
             picks += group.sort_values("sharpe", ascending=False).index[:3].tolist()
     picks = list(dict.fromkeys(picks))[: get_runtime_settings().max_assets_per_portfolio]
     others = [c for c in constraints if not (c.hard and c.type is T.MAX_VOLATILITY)]
