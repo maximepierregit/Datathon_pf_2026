@@ -67,8 +67,8 @@ client ni entre eux: tout passe par toi, avec tes outils.
 CE QUE TU FAIS
 1. Déterminer le profil et les préférences du client, et vérifier qu'ils sont cohérents.
 2. Écrire les 3 profils de contraintes des gestionnaires, lancer leur construction, puis le jugement.
-3. Relancer la construction au besoin: le juge l'exige (portefeuille non conforme, rapport de risque insuffisant) ou le
-   client la confirme, après que tu l'as questionné jusqu'à ce que ses changements soient clairs.
+3. Relancer la construction seulement quand le client la confirme, après que tu l'as questionné jusqu'à ce que ses
+   changements soient clairs. Le juge ne demande plus de reconstruction: il compare et choisit.
 4. Répondre aux questions du client sur ses portefeuilles. Pour le pourquoi et le comment, tu interroges les
    gestionnaires, les agents Risque et le juge, puis tu expliques avec tes mots.
 5. Expliquer des notions de finance de base quand le client en a besoin.
@@ -316,8 +316,8 @@ def make_pepite_tools(session: Session) -> list:
 
     @tool
     async def judge_portfolios() -> dict:
-        """Fait juger les portefeuilles construits: le code calcule la conformité, le juge compare et peut exiger une
-        réoptimisation. Retourne la conformité, le gagnant (profil cohérent) et ce qu'il faut reconstruire."""
+        """Fait juger les portefeuilles construits: le code calcule la conformité, le juge compare et choisit.
+        Retourne la conformité, les notes du juge et le gagnant (profil cohérent)."""
         if not all(s in session.portfolios for s in SLOTS) or not session.built():
             return {"error": "Construis d'abord les portefeuilles avec build_portfolios."}
         if session.judged_round != session.build_round:  # sinon le juge a déjà parlé sur ces portefeuilles
@@ -373,7 +373,7 @@ def make_pepite_tools(session: Session) -> list:
 
     @tool
     async def ask_judge(question: str) -> str:
-        """Demande au juge d'expliquer sa décision (le gagnant, la conformité, une réoptimisation demandée).
+        """Demande au juge d'expliquer sa décision (le gagnant, la conformité, ses notes).
 
         Args:
             question: La question, reformulée pour le juge.
@@ -412,9 +412,7 @@ Démarche, dans l'ordre:
    s'il répond à tes questions sur une incohérence, tiens-en compte (`set_coherence` si ses réponses la lèvent).
 3. Écris les 3 profils et envoie-les avec `submit_constraint_plan`. Corrige et renvoie si le code les refuse.
 4. `build_portfolios` (les trois), puis `judge_portfolios`.
-5. Si le juge demande de reconstruire des portefeuilles et qu'il reste des relances: `build_portfolios` avec ces `slots`
-   et leurs `instructions`, puis `judge_portfolios` de nouveau.
-6. Réponds au client en 2 ou 3 phrases: profil cohérent, ton portefeuille est prêt et pourquoi il l'emporte (reprends la
+5. Réponds au client en 2 ou 3 phrases: profil cohérent, ton portefeuille est prêt et pourquoi il l'emporte (reprends la
    justification du juge); profil incohérent, trois propositions t'attendent et c'est lui qui choisit.
 
 """
@@ -461,8 +459,7 @@ REBUILD_TASK = """Le client a confirmé les changements dont vous avez parlé da
    profils qui suivent les préférences (exact_*_weight, en fractions: du portefeuille entier pour les classes, de la
    poche actions pour les régions et les thématiques), ceux que le client a changés compris.
    Corrige et renvoie si le code les refuse.
-3. `build_portfolios` (les trois), puis `judge_portfolios`. Si le juge demande de reconstruire et qu'il reste des
-   relances: `build_portfolios` avec ces `slots` et leurs `instructions`, puis `judge_portfolios` de nouveau.
+3. `build_portfolios` (les trois), puis `judge_portfolios`.
 4. Réponds au client en 2 phrases, en texte simple sans balises: ce qui a changé dans ses portefeuilles.
 
 """

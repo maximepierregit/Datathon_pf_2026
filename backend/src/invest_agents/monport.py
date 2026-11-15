@@ -122,7 +122,7 @@ MAX_ADJUSTMENT = 1000
 # Répartition stratégique du profil (portefeuilles modèles 20/80 … 100/0): plancher d'obligations, fixé par le code
 # pour les portefeuilles qui suivent le profil (« Ton profil », et les 3 variantes quand le profil est cohérent).
 BOND_FLOOR = {"conservateur": 0.80, "modere": 0.60, "equilibre": 0.40, "dynamique": 0.20, "agressif": 0.0}
-BOND_SHIFT = {"prudent": 0.10, "equilibre": 0.0, "conviction": -0.10}
+BOND_SHIFT = {"prudent": 0.0, "equilibre": 0.0, "conviction": 0.0}  # plus de décalage: seul A distingue les variantes
 BOND_TARGETS = ("Fixed Income", "Bonds")
 CRYPTO_TARGETS = ("Crypto", "Alternative")
 NO_CRYPTO = {"conservateur", "modere"}  # pas de crypto dans un portefeuille qui suit un profil prudent
@@ -458,8 +458,12 @@ def slot_position(check: PepiteCheck, slot: str) -> Optional[float]:
 
 
 def slot_volatility(check: PepiteCheck, slot: str) -> Optional[float]:
+    """Plafond de volatilité d'un gestionnaire. Profil cohérent: le MÊME pour les 3 variantes (celui du profil),
+    seul A les distingue. Profil incohérent: celui du profil, sauf « Tes préférences » qui n'en a pas."""
     s = slot_position(check, slot)
-    return None if s is None else round(_interpolate(s, VOL_ANCHORS), 3)
+    if s is None:
+        return None
+    return round(_interpolate(check.risk_position if check.coherent else s, VOL_ANCHORS), 3)
 
 
 # --------------------------------------------------------------------------- #
@@ -531,10 +535,10 @@ def fallback_plan(check: PepiteCheck, prefs: list[Constraint]) -> dict[str, tupl
     exclusions = [c for c in prefs if is_exclusion(c)]
     if check.coherent:
         return {
-            "prudent": ("Un cran plus prudent que tes réponses.", prefs + _limits(slot_volatility(check, "prudent"), weight)),
+            # Mêmes contraintes pour les trois; seule l'aversion au risque A change (S − 0,10 / S / S + 0,10).
+            "prudent": ("Tes réponses, avec une aversion au risque un cran plus élevée.", prefs + _limits(vol, weight)),
             "equilibre": ("Fidèle à tes réponses.", prefs + _limits(vol, weight)),
-            "conviction": ("Un cran plus audacieux que tes réponses.",
-                           prefs + _limits(slot_volatility(check, "conviction"), weight)),
+            "conviction": ("Tes réponses, avec une aversion au risque un cran plus faible.", prefs + _limits(vol, weight)),
         }
     return {
         "prudent": ("Seulement les limites de ton profil.", exclusions + _limits(vol, weight)),
@@ -559,11 +563,12 @@ def guidance_for(aversion: Optional[float]) -> str:
 
 
 def bond_floors(check: PepiteCheck) -> dict[str, float]:
-    """Incohérent: seul « Ton profil » suit la répartition du profil. Cohérent: les 3 variantes, décalées de ±10 points."""
+    """Incohérent: seul « Ton profil » suit la répartition du profil. Cohérent: le MÊME plancher pour les 3 variantes
+    (plus de décalage de ±10 points: seul A distingue les variantes)."""
     base = BOND_FLOOR.get(check.risk_label, 0.0)
     if not check.coherent:
         return {"prudent": base}
-    return {s: min(0.9, max(0.0, base + BOND_SHIFT[s])) if base else 0.0 for s in SLOTS}
+    return {s: base for s in SLOTS}
 
 
 def validate_profile(constraints: list[Constraint], exclusions: list[Constraint],
@@ -667,6 +672,12 @@ def build_profiles(plan: Optional[ConstraintPlan], check: PepiteCheck, prefs: li
     # Tout le reste du questionnaire: pourcentages et facteurs, imposés tels quels.
     targets = [c for c in prefs if not is_exclusion(c)]
     proposed = {p.slot: p for p in (plan.profiles if plan else [])}
+    if check.coherent and "equilibre" in proposed:
+        # Mêmes contraintes pour les 3 variantes: le profil « fidèle » de Pépite (qui intègre l'ajustement libre du
+        # client) sert aux trois. Seul A, tiré de S − 0,10 / S / S + 0,10, les distingue.
+        common = proposed["equilibre"]
+        proposed = {s: common.model_copy(update={"slot": s, "rationale": proposed.get(s, common).rationale})
+                    for s in SLOTS}
     out, replaced = {}, 0
     for slot in SLOTS:
         p = proposed.get(slot)

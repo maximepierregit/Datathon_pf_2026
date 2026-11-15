@@ -210,6 +210,8 @@ class Portfolio(BaseModel):
     summary: str = ""
     tradeoffs: str = ""
     failure_reason: Optional[str] = None
+    # Traçabilité backend du Markowitz global (filtres, Sigma, sélection, A effectif); jamais envoyée au frontend.
+    diagnostics: Optional[dict] = None
 
 
 class JudgeOpinion(BaseModel):
@@ -319,7 +321,7 @@ class ReoptimizeRequest(BaseModel):
 
 
 class JudgeDecision(BaseModel):
-    """Décision du juge: avis par portefeuille, gagnant (profil cohérent seulement) et demandes de réoptimisation."""
+    """Décision du juge: avis par portefeuille et gagnant (profil cohérent seulement)."""
 
     opinions: list[SlotOpinion] = Field(description="Un avis par portefeuille construit")
     winner: Optional[MonPortSlot] = Field(
@@ -331,7 +333,8 @@ class JudgeDecision(BaseModel):
     )
     reoptimize: list[ReoptimizeRequest] = Field(
         default_factory=list,
-        description="Portefeuilles à reconstruire parce que le rapport de risque ou la conformité l'exige. Vide sinon.",
+        description="Toujours vide: les portefeuilles sont calculés par l'optimiseur et ne sont pas reconstruits. "
+        "Conservé pour la compatibilité; le code l'ignore.",
     )
 
 

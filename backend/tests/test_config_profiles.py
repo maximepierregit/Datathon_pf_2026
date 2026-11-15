@@ -109,9 +109,12 @@ def test_cash_rate_is_separate_cad_assumption():
 
 
 def test_ewma_full_history_and_capm_window():
+    """mu utilise l'historique individuel maximal de chaque titre: aucune fenêtre ne le tronque."""
     cfg = config.get_base_settings()
     assert cfg["estimation"]["ewma"]["lookback_observations"] is None
-    assert cfg["estimation"]["capm_shrinkage"]["lookback_observations"] == 756
+    assert cfg["estimation"]["capm_shrinkage"]["lookback_observations"] is None
+    assert cfg["estimation"]["capm_shrinkage"]["historical_lookback_observations"] is None
+    assert cfg["estimation"]["historical"]["lookback_observations"] is None
 
 
 def test_capm_full_history_is_valid_option():

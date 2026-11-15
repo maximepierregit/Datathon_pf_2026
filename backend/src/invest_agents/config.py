@@ -113,8 +113,10 @@ ESTIMATION = {
     # deux peuvent avoir asset_class='Alternative'.
     "method_by_instrument_type": {"Cryptocurrency": "ewma"},
     "method_by_symbol": {"BITW": "ewma"},  # ETP de crypto (Bitwise 10)
+    # Fenêtres de mu : historique individuel MAXIMAL de chaque titre (None = tout ce qui est disponible jusqu'à
+    # la date d'estimation). mu n'exige jamais de dates communes avec les autres titres.
     "historical": {
-        "lookback_observations": 1260,  # ~ 5 années de séances
+        "lookback_observations": None,  # avant : 1260 (~5 ans) ; tout l'historique du titre
         "min_observations": 120,
     },
     "ewma": {
@@ -123,18 +125,19 @@ ESTIMATION = {
         "min_observations": 120,
     },
     "capm_shrinkage": {
-        "lookback_observations": 756,   # ~ 3 ans pour bêta ; None = tout l'historique
+        # Bêta sur les dates communes au titre et à SPY seulement (pas à tout l'univers), tout l'historique.
+        "lookback_observations": None,   # avant : 756 (~3 ans)
         "min_paired_observations": 120,
         "market_proxy": "SPY",        # baseline unique, pas un CAPM multi-classe
         "rf_annual": RF_ANNUAL,  # taux CAPM commun = 3,5 %, hypothèse
         "erp_annual": 0.05,        # hypothèse illustrative, pas une donnée live
         "alpha": 0.50,            # poids de la cible CAPM
-        "historical_lookback_observations": 1260,  # None = toute la période
+        "historical_lookback_observations": None,  # avant : 1260 ; toute la période du titre
     },
     "capm_benchmark_shrinkage": {
-        "lookback_observations": 756,  # bêta ; None = historique intégral
+        "lookback_observations": None,  # bêta ; avant : 756 ; historique intégral commun titre/benchmark
         "min_paired_observations": 120,
-        "historical_lookback_observations": 1260,
+        "historical_lookback_observations": None,  # avant : 1260
         "rf_annual": RF_ANNUAL,
         "alpha": 0.50,
         # Ne PAS appliquer mécaniquement la prime SPY à tous les benchmarks.
@@ -223,7 +226,8 @@ BENCHMARKS = {
 COVARIANCE = {
     "method": "ledoit_wolf",       # alternative : "sample"
     "periods_per_year": DATA["periods_per_year"],
-    "lookback_observations": 1260,
+    # None = tout l'échantillon commun depuis le début de l'horizon (voir COVARIANCE_HISTORY) ; avant : 1260.
+    "lookback_observations": None,
     "min_observations_per_asset": DATA["min_observations"],
     # IMPORTANT : pré-sélectionner les candidats avant de supprimer les
     # lignes NaN, sinon les titres fraîchement listés éliminent l'historique.
@@ -253,6 +257,33 @@ COVARIANCE = {
 # 5. CANDIDATS ET DIVERSIFICATION : UNIVERS ≠ TITRES DÉTENUS
 # ---------------------------------------------------------------------------
 
+# Univers d'optimisation de MonPort : un titre n'y entre que si son historique remonte au début de l'horizon.
+# Sinon un seul titre récent réduirait l'échantillon commun de Sigma (Ledoit-Wolf) à quelques mois.
+# Le début effectif est la première date du panel >= start_date (le 1er janvier 2021 n'est pas une séance) ;
+# max_start_delay_business_days absorbe seulement les calendriers boursiers et l'initialisation des rendements.
+COVARIANCE_HISTORY = {
+    "start_date": "2021-01-01",
+    "require_full_horizon": True,
+    "method": "ledoit_wolf",
+    "max_start_delay_business_days": 5,
+}
+
+# Positions réellement DÉTENUES par chaque portefeuille de MonPort (pas des candidats). Aucune cible fixe:
+# l'optimiseur part des titres que Markowitz détient, complète jusqu'à min_count, puis ajoute des titres tant que
+# chacun coûte au plus max_marginal_utility_cost d'utilité annuelle (diversification presque gratuite), sans
+# dépasser max_count. Le nombre final dépend donc de A, des rendements, des covariances et des contraintes.
+# Cas extrêmes: un nombre de positions demandé par le client (min/max_positions), ou un univers admissible trop
+# petit (ex.: tout exclu sauf la crypto), l'emporte sur cette plage; le diagnostic le signale.
+PORTFOLIO_HOLDINGS = {
+    "min_count": 25,
+    "max_count": 70,
+    "min_held_weight": 0.01,
+    # 1 point de base d'utilité annuelle par position ajoutée au-delà de min_count. Mesuré sur un univers synthétique
+    # de 769 titres (mu de 2 % à 14 %): environ 28 titres détenus par Markowitz seul, arrêt vers 45 à 50.
+    "max_marginal_utility_cost": 0.0001,
+}
+
+# Présélection du pipeline autonome (optimizer.run_pipeline) ; MonPort n'en a plus besoin (Markowitz global).
 CANDIDATES = {
     "enabled": True,
     "target_count": 50,  # cible indicative, ajustable ; non forcée à 50
@@ -596,6 +627,8 @@ def _get_engine_defaults() -> dict[str, Any]:
         "estimation": ESTIMATION,
         "benchmarks": BENCHMARKS,
         "covariance": COVARIANCE,
+        "covariance_history": COVARIANCE_HISTORY,
+        "portfolio_holdings": PORTFOLIO_HOLDINGS,
         "candidates": CANDIDATES,
         "risk_aversion": RISK_AVERSION,
         "constraints": CONSTRAINTS,
@@ -934,8 +967,24 @@ def validate_settings(settings: Mapping[str, Any] | None = None) -> None:
 
     if cov["method"] not in VALID_COVARIANCE_METHODS:
         raise ValueError("Méthode de covariance inconnue.")
-    if cov["min_joint_observations"] < 2 or cov["lookback_observations"] < cov["min_joint_observations"]:
+    if cov["min_joint_observations"] < 2 or (
+            cov["lookback_observations"] is not None and cov["lookback_observations"] < cov["min_joint_observations"]):
         raise ValueError("Historique joint insuffisant pour Ledoit-Wolf.")
+    history = cfg["covariance_history"]
+    if history["method"] != "ledoit_wolf" or not isinstance(history["require_full_horizon"], bool):
+        raise ValueError("covariance_history : méthode ledoit_wolf et require_full_horizon booléen attendus.")
+    delay = history["max_start_delay_business_days"]
+    if not isinstance(delay, int) or isinstance(delay, bool) or not 0 <= delay <= 10:
+        raise ValueError("max_start_delay_business_days doit être un entier entre 0 et 10 (calendriers seulement).")
+    holdings = cfg["portfolio_holdings"]
+    counts = [holdings[k] for k in ("min_count", "max_count")]
+    if any(not isinstance(n, int) or isinstance(n, bool) or n < 1 for n in counts) or counts != sorted(counts):
+        raise ValueError("portfolio_holdings : entiers min_count <= max_count attendus.")
+    if _finite_number(holdings["max_marginal_utility_cost"], "max_marginal_utility_cost") < 0:
+        raise ValueError("portfolio_holdings.max_marginal_utility_cost doit être >= 0.")
+    held = _weight(holdings["min_held_weight"], "portfolio_holdings.min_held_weight")
+    if not 0 < held or held * holdings["min_count"] > 1:
+        raise ValueError("portfolio_holdings : min_count positions à min_held_weight dépassent 100 %.")
     if cov["sample"]["min_pairwise_observations"] < 2:
         raise ValueError("min_pairwise_observations doit être >= 2.")
     if cov["ledoit_wolf"]["target"] != "scaled_identity":

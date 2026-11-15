@@ -265,6 +265,37 @@ def make_pm_tools(market: Market, state: PMState) -> list:
     return tools
 
 
+def make_explain_tools(state: PMState) -> list:
+    """Outils du gestionnaire de MonPort: il lit le portefeuille calculé par le Markowitz global, il n'y touche pas."""
+
+    @tool
+    def get_portfolio() -> dict:
+        """Le portefeuille calculé par l'optimiseur sur tout l'univers admissible: poids, indicateurs, et la trace
+        du calcul (titres considérés, positions retenues, aversion au risque effective, contributions au risque).
+        Lecture seule: les titres et les poids viennent du calcul, pas de toi."""
+        best = state.best
+        if best is None:
+            return {"error": "Aucun portefeuille calculé."}
+        d = best.diagnostics or {}
+        out: dict = {"weights": dict(sorted(best.weights.items(), key=lambda kv: -kv[1])), "message": best.message}
+        if best.metrics:
+            m = best.metrics
+            out["metrics"] = {"expected_return": m.expected_return, "volatility": m.volatility, "sharpe": m.sharpe,
+                              "max_drawdown": m.max_drawdown, "n_positions": m.n_positions,
+                              "effective_n": m.effective_n, "sector_weights": m.sector_weights,
+                              "country_weights": m.country_weights, "asset_class_weights": m.asset_class_weights}
+        keys = ("assets_sent_to_markowitz", "positive_weights_initial", "final_holdings", "A_requested",
+                "A_effective", "top_5_weight", "risk_contributions_top", "active_bounds")
+        out["trace"] = {k: d[k] for k in keys if k in d}
+        if best.weights:
+            exposure, covered = factors.exposures(best.weights)
+            if exposure:
+                out["factor_exposure"] = {"by_factor": exposure, "scored_weight": covered}
+        return out
+
+    return [get_portfolio, *make_macro_tools()]
+
+
 def fallback_selection(market: Market, constraints: list[Constraint], objective: Objective) -> list[str]:
     """Sélection de repli si le PM n'a produit aucun portefeuille valide (garde le pipeline en marche)."""
     hard = [c for c in constraints if c.hard]

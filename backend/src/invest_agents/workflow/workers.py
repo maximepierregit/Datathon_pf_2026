@@ -17,7 +17,8 @@ from strands import tool
 from ..agents.base import AgentError, AgentHandle
 from ..agents.cro import diagnostics
 from ..agents.portfolio_manager import make_pm_worker, run_pm_worker
-from ..catalog import describe, evaluate, excluded_mask
+from ..allocator import universe_symbols
+from ..catalog import describe, evaluate
 from ..mandates import Mandate
 from ..monport import (
     BASE_NAMES,
@@ -69,8 +70,9 @@ async def apply_plan(session: Session, plan: Optional[ConstraintPlan]) -> int:
         if note:
             notes[slot].append(note)
     session.profiles, session.notes = profiles, notes
-    hard = [c for c in profiles["equilibre"][1] if c.hard]
-    session.universe = (len(market.assets), int((~excluded_mask(market, hard)).sum()))
+    # Univers réellement optimisé: après le questionnaire ET le filtre d'historique depuis 2021.
+    kept, _ = await asyncio.to_thread(universe_symbols, market, profiles["equilibre"][1])
+    session.universe = (len(market.assets), len(kept))
     if session.bus:
         front(session.bus, {"type": "universe", "before": session.universe[0], "after": session.universe[1]})
     return replaced
@@ -104,9 +106,9 @@ RÈGLES
 - Sois sobre: pas d'alarmisme, pas de recommandation d'achat. Gravité `high` seulement si le problème peut conduire
   l'investisseur à une perte supérieure à ce qu'il accepte ou à un portefeuille inadapté à son horizon. Un risque
   macro seul ne justifie pas `high`.
-- Un problème que le gestionnaire peut corriger sans enfreindre les contraintes (concentration, diversification)
-  s'écrit comme tel: le juge peut demander une réoptimisation. Ce qui vient des contraintes du client s'écrit aussi,
-  mais n'est pas corrigeable.
+- Le portefeuille est calculé par l'optimiseur sur tout l'univers admissible. Dis d'où vient un risque quand c'est
+  clair (contraintes du client, niveau de risque du profil, concentration du portefeuille): le juge s'en sert pour
+  comparer les trois portefeuilles.
 - S'il n'y a rien à signaler, retourne des listes vides.
 
 PLUS TARD
@@ -202,14 +204,11 @@ JUDGE_SYSTEM = """Tu es le juge de MonPort. Trois gestionnaires ont chacun const
 leur agent Risque l'a relu. Tu reçois les portefeuilles, la conformité calculée par le code et les rapports de risque.
 
 1. Appelle `check_portfolio_constraints` pour chaque portefeuille. Ses résultats font foi: ne les contredis jamais.
-2. `opinions`: un avis par portefeuille construit (adéquation de 0 à 10, commentaire, corrections suggérées).
-3. Rapport de risque: lis-le avec soin. Demande une réoptimisation (`reoptimize`, avec des instructions précises)
-   seulement si c'est sérieux et corrigeable: une mise en garde de gravité `high` que le gestionnaire peut régler sans
-   enfreindre ses contraintes dures, ou un rapport incomplet qui contredit les indicateurs. Une mise en garde `low`
-   ou `medium`, un risque normal pour le profil ou un problème qui vient des contraintes du client ne justifie pas de
-   reconstruire: mentionne-le dans l'avis. Une reconstruction coûte cher: en cas de doute, ne la demande pas.
-4. Un portefeuille non conforme (contrainte dure) est reconstruit d'office par le code: inutile de le demander.
-5. PROFIL COHÉRENT: les trois portefeuilles sont des variantes en concurrence. Désigne le meilleur dans `winner`:
+2. `opinions`: un avis par portefeuille construit (adéquation de 0 à 10, commentaire, points d'attention).
+3. Rapport de risque: lis-le avec soin et tiens-en compte dans ton avis et dans ta note. Les portefeuilles sont
+   calculés par l'optimiseur sur tout l'univers admissible: tu ne demandes aucune reconstruction (laisse
+   `reoptimize` vide), tu compares et tu choisis.
+4. PROFIL COHÉRENT: les trois portefeuilles sont des variantes en concurrence. Désigne le meilleur dans `winner`:
    celui qui correspond le mieux au profil (niveau de risque, horizon, objectif), qui respecte le mieux les thèmes
    et les préférences du client, puis la diversification, le rendement espéré pour le risque pris et la tenue probable
    dans le régime macro actuel (`get_latest_macro_snapshot`). Un portefeuille
@@ -217,7 +216,7 @@ leur agent Risque l'a relu. Tu reçois les portefeuilles, la conformité calcul�
    pourquoi ce portefeuille correspond le mieux au profil, sans le recommander (jamais « je te recommande », « tu
    devrais »: c'est le client qui décide), sans jargon (ni Sharpe, ni volatilité, ni écart-type, ni drawdown): « le meilleur rendement pour
    le risque pris », « des variations plus douces ». Seulement des chiffres fournis, à une décimale au plus.
-6. PROFIL INCOHÉRENT: les trois portefeuilles sont trois bases (« Ton profil », « Tes contraintes », « Tes
+5. PROFIL INCOHÉRENT: les trois portefeuilles sont trois bases (« Ton profil », « Tes contraintes », « Tes
    préférences »). Le client choisira. `winner` vaut null et `justification` est vide.
 
 PLUS TARD
@@ -261,11 +260,6 @@ def _judge_tools(session: Session) -> list:
     return [check_portfolio_constraints, *make_macro_tools()]
 
 
-def _correction_text(v: JudgeVerdict) -> str:
-    lines = [f"- {c.label}: {c.message}" for c in v.checks if c.constraint.hard and not c.passed]
-    return "\n".join(lines + [f"- Correction suggérée: {f}" for f in v.suggested_fixes])
-
-
 async def judge_round(session: Session) -> None:
     """Le juge compare les portefeuilles, la conformité est calculée par le code. Remplit verdicts, gagnant et relances."""
     bus = session.bus
@@ -297,17 +291,11 @@ async def judge_round(session: Session) -> None:
     session.verdicts = {p.id: _verdict(session, p.id, decision) for p in built}
     session.judged_round = session.build_round
 
-    # Demandes de réoptimisation: celles du juge, et le code ajoute tout portefeuille non conforme ou en échec.
-    requests = {r.slot: r.instructions for r in decision.reoptimize if r.slot in session.portfolios}
-    for slot in SLOTS:
-        p = session.portfolios.get(slot)
-        if p is None:
-            continue
-        if p.status == "failed":
-            requests[slot] = f"Aucun portefeuille n'a pu être construit: {p.failure_reason}"
-        elif not session.verdicts[slot].compliant:
-            requests[slot] = "\n".join(filter(None, [requests.get(slot), _correction_text(session.verdicts[slot])]))
-    session.reoptimize = requests
+    # Plus de relance: le Markowitz global est déterministe (mêmes données, mêmes contraintes, même A), une
+    # reconstruction redonnerait le même portefeuille. Un portefeuille non conforme ne gagne que si aucun ne l'est.
+    if decision.reoptimize:
+        logger.info("Demandes de réoptimisation du juge ignorées: %s", [r.slot for r in decision.reoptimize])
+    session.reoptimize = {}
 
     if session.coherent:  # un seul gagnant: le choix du juge, sauf si le code le contredit sur la conformité
         winner = pick_winner(built, session.verdicts, decision.winner) if built else None
@@ -345,6 +333,9 @@ def justifications(session: Session, slot: str) -> dict:
         "juge": {"conforme": v.compliant, "note": v.fit_score, "avis": v.comment, "corrections": v.suggested_fixes} if v else None,
         "gagnant": session.winner == slot,
         "essais_du_gestionnaire": worker.state.log if worker else [],
+        # Trace du Markowitz global: univers, filtres, positions retenues, A effectif (sans les longues listes).
+        "trace_du_calcul": {k: v for k, v in (p.diagnostics or {}).items()
+                            if k not in ("excluded_by_questionnaire", "dropped_from_initial_optimum")},
     }
 
 

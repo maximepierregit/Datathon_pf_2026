@@ -1,14 +1,15 @@
-"""Gestionnaires de portefeuille (étape 5): sélectionnent les titres, l'optimiseur calcule les poids.
+"""Gestionnaires de portefeuille (étape 5): l'optimiseur choisit les titres ET les poids, le gestionnaire explique.
 
-Le modèle choisit les titres et rédige l'explication. Les poids et toutes les métriques viennent de
-`optimizer.optimize`, jamais du texte du modèle.
+Le portefeuille vient de `allocator.optimize_universe`: Markowitz sur tous les titres admissibles (questionnaire puis
+filtre d'historique depuis 2021), puis 25 à 60 positions détenues (cible 50). Le modèle ne sélectionne aucun titre
+et n'impose aucun poids: il lit le résultat (`get_portfolio`), le situe dans le régime macro et rédige l'explication.
 
-Un `PMWorker` garde son agent: on peut le relancer avec des consignes (réoptimisation) et l'interroger ensuite sur
-ses choix, avec la mémoire de ses essais.
+Un `PMWorker` garde son agent: on peut l'interroger ensuite sur le portefeuille, avec la mémoire de son analyse.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import Optional
@@ -17,40 +18,31 @@ from ..catalog import describe
 from ..market import Market
 from ..events import EventBus
 from ..mandates import Mandate, vol_cap_for
-from ..allocator import optimize
+from ..allocator import optimize_universe
 from ..schemas import Constraint, InvestorProfile, PMNarrative, Portfolio, Position
-from ..tools import MACRO_PROMPT, PMState, fallback_selection, make_pm_tools
+from ..tools import MACRO_PROMPT, PMState, make_explain_tools
 from .base import AgentError, AgentHandle
 
 SYSTEM_TEMPLATE = """Tu es le gestionnaire de portefeuille « {name} » d'un service de conseil en placement canadien (CAD).
 Mandat: {description}
 Style: {guidance}
 
-DÉMARCHE
-1. Appelle `get_latest_macro_snapshot` pour situer le régime macro, puis `describe_universe` et `screen_assets`
-   (plusieurs fois, avec des filtres différents) pour repérer des candidats. Si tes contraintes contiennent
-   min_factor_exposure ou max_factor_exposure, appelle `screen_factor` sur ce facteur et garde au moins 10 % du
-   portefeuille en actions détenues en direct bien notées: l'exposition est la moyenne de leurs scores, pondérée par
-   leur poids (les FNB ne comptent pas). Les mieux notées sont souvent très volatiles: sous un plafond de
-   volatilité, passe `min_score` au seuil du profil et `sort_by="ann_vol"`. Pour plusieurs facteurs, préfère des
-   actions qui respectent chaque seuil. `optimize_portfolio` te rend l'exposition obtenue (`factor_exposure`).
-2. Choisis entre {low} et {high} titres. Diversifie par secteur, pays et classe d'actifs. Le régime macro peut orienter
-   tes choix (par exemple la part d'obligations selon le niveau des taux), dans le respect de ton mandat.
-3. Appelle `optimize_portfolio` avec ta sélection. Les contraintes dures de l'utilisateur sont appliquées par l'outil;
-   tu ne peux ni les changer ni les contourner.
-4. Si le statut est `infeasible` ou `invalid_selection`, lis le message, corrige la sélection et recommence.
-   Au plus {attempts} appels à `optimize_portfolio` au total.
-5. Le dernier appel réussi (statut `optimal` ou `feasible`) est ton portefeuille. Rédige ensuite ta réponse finale.
+LE PORTEFEUILLE EST DÉJÀ CALCULÉ
+L'optimiseur a considéré tous les titres admissibles (après les contraintes du client et le filtre d'historique),
+avec leurs rendements espérés et leurs covariances, puis a retenu les positions détenues et leurs poids. Tu ne
+choisis aucun titre et tu ne changes aucun poids: tu expliques le résultat.
 
-Dans ta réponse finale: un résumé de stratégie (avec, en une phrase, le régime macro retenu), une note par position
-principale (au moins les 8 plus lourdes) et les compromis. N'écris aucun poids ni indicateur qui ne vient pas de l'outil.
+DÉMARCHE
+1. Appelle `get_portfolio` pour lire les poids, les indicateurs et la trace du calcul, et
+   `get_latest_macro_snapshot` pour situer le régime macro.
+2. Rédige ta réponse finale: un résumé de stratégie (avec, en une phrase, le régime macro retenu), une note par
+   position principale (au moins les 8 plus lourdes: son rôle, par exemple diversification ou rendement) et les
+   compromis (limites actives, concentration, ce que les contraintes du client ont coûté).
+N'écris aucun poids ni indicateur qui ne vient pas de `get_portfolio`.
 
 PLUS TARD
-Pépite, l'agente qui parle au client, peut te redemander de reconstruire ton portefeuille (le juge ou le client
-l'exige) ou te demander de justifier tes choix. Pour une justification, réponds en texte, avec les faits de tes
-essais et de tes outils: pourquoi ces titres, pourquoi ces poids, quels compromis. Tu ne recalcules rien alors."""
-
-MAX_ATTEMPTS = 6
+Pépite peut te demander de justifier le portefeuille ou de tenir compte de consignes du juge. Le calcul ne dépend
+pas de toi: explique ce que les consignes changeraient et pourquoi l'optimiseur a fait ces choix. Tu ne recalcules rien."""
 
 
 @dataclass
@@ -77,10 +69,12 @@ def _prompt(mandate: Mandate, profile: InvestorProfile, constraints: list[Constr
         },
         "contraintes": [describe(c) for c in constraints],
     }
-    head = "Reconstruis ton portefeuille." if rebuild else "Construis ton portefeuille pour cet investisseur."
+    head = ("Le portefeuille a été recalculé. Explique-le de nouveau." if rebuild
+            else "Explique le portefeuille calculé pour cet investisseur.")
     text = head + "\n\n" + json.dumps(payload, ensure_ascii=False, indent=2)
     if feedback:
-        text += "\n\nCorrige ton portefeuille en tenant compte de ces consignes:\n" + feedback
+        text += ("\n\nConsignes reçues (juge ou client). Le calcul ne dépend pas de toi: explique dans tes compromis "
+                 "ce qu'elles impliquent et ce que les contraintes permettent:\n" + feedback)
     return text
 
 
@@ -108,14 +102,10 @@ def make_pm_worker(market: Market, mandate: Mandate, profile: InvestorProfile,
         vol_cap=vol_cap_for(mandate, profile.assessment.suggested_max_volatility),
         risk_aversion=mandate.risk_aversion,
     )
-    min_n = max([int(c.value) for c in pm_constraints if c.hard and c.type.value == "min_positions" and c.value] + [8])
-    max_n = min([20] + [int(c.value) for c in pm_constraints if c.hard and c.type.value == "max_positions" and c.value])
-    system = SYSTEM_TEMPLATE.format(
-        name=mandate.name, description=mandate.description, guidance=mandate.guidance,
-        low=min(min_n, max_n), high=max_n, attempts=MAX_ATTEMPTS,
-    ) + "\n\n" + MACRO_PROMPT
+    system = SYSTEM_TEMPLATE.format(name=mandate.name, description=mandate.description,
+                                    guidance=mandate.guidance) + "\n\n" + MACRO_PROMPT
     handle = AgentHandle(label=f"PM {mandate.name}", step="5", kind="strong", system_prompt=system,
-                         tools=make_pm_tools(market, state), persistent=True)
+                         tools=make_explain_tools(state), persistent=True)
     return PMWorker(mandate=mandate, state=state, handle=handle)
 
 
@@ -128,7 +118,7 @@ async def run_pm_worker(
     pm_constraints: list[Constraint],
     feedback: Optional[str] = None,
 ) -> Portfolio:
-    """Construit (ou reconstruit) le portefeuille. `mandate` et les contraintes peuvent avoir changé depuis le dernier tour."""
+    """Calcule le portefeuille (Markowitz global, par le code), puis fait rédiger son explication par le modèle."""
     label = worker.handle.label
     state = worker.state
     rebuild = worker.builds > 0
@@ -136,43 +126,37 @@ async def run_pm_worker(
     worker.mandate = mandate
     state.constraints, state.objective, state.risk_aversion = pm_constraints, mandate.objective, mandate.risk_aversion
     state.vol_cap = vol_cap_for(mandate, profile.assessment.suggested_max_volatility)
-    state.best, state.attempts, state.read_only = None, 0, False
+    state.best, state.attempts, state.read_only = None, 0, True  # aucun outil ne modifie le portefeuille
+
+    bus.emit("tool", step="5", agent=label, name="optimize_portfolio")
+    result = await asyncio.to_thread(optimize_universe, market, mandate.objective, pm_constraints,
+                                     vol_cap=state.vol_cap, risk_aversion=mandate.risk_aversion)
+    state.log.append(f"Markowitz global: {result.status} ({result.message})")
+    if not result.ok:
+        return Portfolio(id=mandate.id, mandate=mandate.name, mandate_description=mandate.description,
+                         status="failed", failure_reason=result.message, diagnostics=result.diagnostics)
+    state.best = result
     try:
         worker.narrative = await worker.handle.run(
             bus, _prompt(mandate, profile, pm_constraints, feedback, rebuild), PMNarrative,
-            start_text=f"{'Reconstruction' if rebuild else 'Construction'} du portefeuille « {mandate.name} »",
+            start_text=f"{'Explication renouvelée' if rebuild else 'Explication'} du portefeuille « {mandate.name} »",
             done_text="Portefeuille construit",
         )
     except AgentError as exc:
         worker.narrative = None
-        bus.emit("status", step="5", agent=label, state="warning", text="Le gestionnaire a échoué, sélection de repli")
+        bus.emit("status", step="5", agent=label, state="warning", text="Explication indisponible, portefeuille conservé")
         state.log.append(str(exc))
 
-    if state.best is None:  # filet de sécurité: le pipeline continue même si le PM n'a pas abouti
-        selection = fallback_selection(market, pm_constraints, mandate.objective)
-        result = optimize(market, selection, mandate.objective, pm_constraints, vol_cap=state.vol_cap,
-                          risk_aversion=mandate.risk_aversion)
-        if result.ok:
-            state.best = result
-            bus.emit("status", step="5", agent=label, state="warning", text="Portefeuille obtenu par sélection de repli")
-        else:
-            state.read_only = True
-            return Portfolio(
-                id=mandate.id, mandate=mandate.name, mandate_description=mandate.description, status="failed",
-                failure_reason=result.message,
-            )
-
-    state.read_only = True  # les questions ultérieures portent sur ce portefeuille: il ne change plus
-    best = state.best
     narrative = worker.narrative
     return Portfolio(
         id=mandate.id,
         mandate=mandate.name,
         mandate_description=mandate.description,
-        positions=_positions(market, best.weights, narrative),
-        metrics=best.metrics,
-        summary=narrative.summary if narrative else "Portefeuille obtenu par sélection automatique de repli.",
+        positions=_positions(market, result.weights, narrative),
+        metrics=result.metrics,
+        summary=narrative.summary if narrative else result.message,
         tradeoffs=narrative.tradeoffs if narrative else "",
+        diagnostics=result.diagnostics,
     )
 
 
