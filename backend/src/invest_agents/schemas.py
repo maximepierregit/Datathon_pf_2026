@@ -26,6 +26,7 @@ class ConstraintType(str, Enum):
     EXCLUDE_ASSET_CLASS = "exclude_asset_class"
     EXCLUDE_INSTRUMENT_TYPE = "exclude_instrument_type"
     EXCLUDE_SYMBOL = "exclude_symbol"
+    EXCLUDE_THEME = "exclude_theme"
     MAX_SECTOR_WEIGHT = "max_sector_weight"
     MIN_SECTOR_WEIGHT = "min_sector_weight"
     MAX_COUNTRY_WEIGHT = "max_country_weight"
@@ -39,6 +40,9 @@ class ConstraintType(str, Enum):
     MAX_SECTOR_SHARE = "max_sector_share"
     MIN_COUNTRY_SHARE = "min_country_share"
     MAX_COUNTRY_SHARE = "max_country_share"
+    # Thématiques étiquetées dans le Parquet (colonne `theme`): actions et FNB étiquetés comptent pour la part.
+    MIN_THEME_SHARE = "min_theme_share"
+    MAX_THEME_SHARE = "max_theme_share"
     MIN_FACTOR_EXPOSURE = "min_factor_exposure"
     MAX_FACTOR_EXPOSURE = "max_factor_exposure"
 
@@ -49,7 +53,7 @@ class Constraint(BaseModel):
     type: ConstraintType
     target: Optional[str] = Field(
         default=None,
-        description="Secteur, pays, classe d'actifs ou symbole visé. Pour les *_share, un ou plusieurs libellés "
+        description="Secteur, pays, thématique, classe d'actifs ou symbole visé. Pour les *_share, un ou plusieurs libellés "
         "séparés par « | » (ex.: \"France|Germany\"). Null si le type n'a pas de cible.",
     )
     value: Optional[float] = Field(

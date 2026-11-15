@@ -390,6 +390,9 @@ POSES = {
                        top=lines(52, 64, -35)),
     "15-flag": dict(rot=-2, dx=-32, eyes="open", mouth="open",
                     front=place(flag, 232, 86, 0, 1.1) + hand(231, 150, 0)),
+    # Same as thinking, without the thought dots: the verification screen draws its own.
+    "16-pondering": dict(rot=-2, eyes="open", brows="raised", mouth="content", mouth_dx=-2,
+                         front=hand(158, 144, -30)),
 }
 
 CELL = 340
@@ -431,7 +434,7 @@ def build():
         (OUT / f"{name}.svg").write_text(svg(mascot(p)))
         g = mascot(p, phase=i * 0.37)
         cells.append(f'<g transform="translate({(i % 5) * CELL},{(i // 5) * CELL})">{g}</g>')
-    (OUT.parent / "sheet.svg").write_text(svg("".join(cells), CELL * 5, CELL * 3))
+    (OUT.parent / "sheet.svg").write_text(svg("".join(cells), CELL * 5, CELL * -(-len(POSES) // 5)))
     (OUT.parent / "avatar.svg").write_text(avatar())
 
 

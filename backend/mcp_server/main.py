@@ -47,7 +47,8 @@ def describe_universe(constraints: Constraints) -> dict:
 @mcp.tool()
 def screen_assets(constraints: Constraints, sector: Optional[str] = None, country: Optional[str] = None,
                   asset_class: Optional[str] = None, max_volatility: Optional[float] = None,
-                  min_sharpe: Optional[float] = None, sort_by: str = "sharpe", limit: int = 20) -> dict:
+                  min_sharpe: Optional[float] = None, sort_by: str = "sharpe", limit: int = 20,
+                  theme: Optional[str] = None) -> dict:
     """Filtre l'univers admissible et retourne les meilleurs actifs selon un critère (sharpe, ann_return ou ann_vol).
 
     Args:
@@ -59,8 +60,10 @@ def screen_assets(constraints: Constraints, sector: Optional[str] = None, countr
         min_sharpe: Ratio de Sharpe historique minimal.
         sort_by: "sharpe", "ann_return" ou "ann_vol".
         limit: Nombre maximal de résultats (max 50).
+        theme: Étiquette de thématique, actions et FNB (ex. energie-propre, ia) (optionnel).
     """
-    return tool_core.screen_assets(constraints, sector, country, asset_class, max_volatility, min_sharpe, sort_by, limit)
+    return tool_core.screen_assets(constraints, sector, country, asset_class, max_volatility, min_sharpe, sort_by, limit,
+                                   theme=theme)
 
 
 @mcp.tool()

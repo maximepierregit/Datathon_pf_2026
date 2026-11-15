@@ -25,7 +25,13 @@ from .schemas import PortfolioMetrics
 logger = logging.getLogger(__name__)
 
 UNKNOWN = "Non classé"
-META_COLUMNS = ["name", "sector", "industry", "country", "currency", "asset_class", "instrument_type", "market"]
+META_COLUMNS = ["name", "sector", "industry", "country", "currency", "asset_class", "instrument_type", "market", "theme"]
+
+
+def theme_tags(value: Any) -> set[str]:
+    """Les étiquettes de thématique d'un actif (« ia;tech » -> {"ia", "tech"}); vide sans étiquette."""
+    tags = {t.strip().lower() for t in value.split(";")} if isinstance(value, str) else set()
+    return tags - {"", UNKNOWN.lower()}
 
 
 # --------------------------------------------------------------------------- #
@@ -204,6 +210,7 @@ class Market:
             "instrument_type": sorted(a["instrument_type"].dropna().astype(str).unique().tolist()),
             "symbol": sorted(a.index.tolist()),
             "factor": available_factors(a.index),
+            "theme": sorted(set().union(*map(theme_tags, a["theme"]))),
         }
 
     def search(self, query: str, limit: int = 10) -> list[dict]:
@@ -234,6 +241,7 @@ class Market:
                     "ann_return": round(float(r["ann_return"]), 4),
                     "ann_vol": round(float(r["ann_vol"]), 4),
                     "sharpe": round(float(r["sharpe"]), 3),
+                    **({"themes": sorted(tags)} if (tags := theme_tags(r.get("theme"))) else {}),
                 }
             )
         return out

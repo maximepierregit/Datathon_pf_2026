@@ -36,11 +36,11 @@ const VEHICLE_PEPITE: Partial<Record<Vehicles, string>> = {
   titres: 'Que des titres? Tu verras chaque entreprise que tu détiens.',
 }
 
-/** Le modèle de thématiques en cours : celui qui, appliqué maintenant, ne changerait rien. */
+/** Le modèle de thématiques en cours : celui dont les réglages sont exactement ceux de la page. */
 function activePreset(themes: Record<string, Share>): string | undefined {
   const same = (a: Record<string, Share>, b: Record<string, Share>) =>
     Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([k, v]) => b[k] === v)
-  return THEME_PRESETS.find((p) => same(p.apply(themes), themes))?.id
+  return THEME_PRESETS.find((p) => same(p.values, themes))?.id
 }
 
 /** Les facteurs ne s'affichent que pour une aisance de 4 ou 5. */
@@ -123,7 +123,7 @@ export default function Preferences() {
                 label="Modèle de thématiques"
                 options={THEME_PRESETS.map((p) => ({ value: p.id, label: p.label }))}
                 value={preset}
-                onChange={(id) => state.setShares('themes', THEME_PRESETS.find((p) => p.id === id)!.apply(c.themes))}
+                onChange={(id) => state.setShares('themes', { ...THEME_PRESETS.find((p) => p.id === id)!.values })}
               />
               <p className="m-0 text-center text-base text-ink-soft">
                 {THEME_PRESETS.find((p) => p.id === preset)?.desc ?? 'Choisis un modèle, ou règle chaque thématique toi-même.'}
@@ -139,6 +139,13 @@ export default function Preferences() {
             </p>
           )}
           {noneKept && <p className="m-0 text-center text-base font-semibold text-red-dark">Garde au moins un type de placement.</p>}
+          {s === 'themes' && (
+            <Alert tone="info" title="À savoir">
+              Les thématiques s’appliquent aux titres individuels et à quelques FNB thématiques (énergie propre, IA, armement…). La plupart des FNB sont
+              généraux : faute de données sur les titres qu’ils contiennent, on ne peut pas les filtrer. Un FNB d’actions mondiales peut donc contenir une
+              entreprise d’une thématique que tu exclus.
+            </Alert>
+          )}
         </div>
       )}
     </QuestionShell>

@@ -386,7 +386,7 @@ function Choices({ constraints: c, s, a, coherent }: { constraints: Constraints;
         )}
         {fixed.length > 0 && (
           <p className="m-0 text-[13px] leading-5 text-ink-soft">
-            Une marge de {TOLERANCE} points de chaque côté laisse l’optimiseur respirer. Régions et thématiques comptent tes actions détenues en direct : un FNB n’a ni pays ni secteur.{' '}
+            Une marge de {TOLERANCE} points de chaque côté laisse l’optimiseur respirer. Régions et thématiques comptent tes actions détenues en direct : un FNB n’a ni pays ni secteur. IA, énergie propre, armement et alcool-tabac font exception : chaque titre y est étiqueté, FNB thématiques compris, et une action compte dans toutes ses thématiques.{' '}
             {coherent ? 'Les 3 gestionnaires respectent tes pourcentages.' : '« Tes contraintes » et « Tes préférences » respectent tes pourcentages ; « Ton profil » ne garde que tes exclusions.'}
           </p>
         )}
