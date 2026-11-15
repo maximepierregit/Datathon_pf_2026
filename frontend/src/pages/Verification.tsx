@@ -176,8 +176,7 @@ function Thinking({ stage }: { stage: number }) {
   return (
     <div className="fade-in flex flex-col items-center gap-6 rounded-[var(--radius-card)] bg-sky px-6 py-10 text-center">
       <div className="relative">
-        <span className="halo absolute inset-4 rounded-full bg-white" aria-hidden />
-        <Pepite pose="thinking" size={200} className="relative" />
+        <Pepite pose="pondering" size={200} />
         <span className="absolute -right-6 top-2 flex items-end gap-1.5" aria-hidden>
           {[10, 14, 20].map((d, i) => (
             <span key={d} className="think-dot rounded-full bg-navy" style={{ width: d, height: d, animationDelay: `${i * 0.2}s` }} />

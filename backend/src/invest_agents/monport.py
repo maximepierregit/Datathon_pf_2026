@@ -17,8 +17,8 @@ import numpy as np
 from pydantic import ValidationError
 
 from .runtime import get_runtime_settings
-from .catalog import (DIMENSION_COLUMN, SEP, SHARE_TYPES, describe, detect_conflicts, excluded_mask, share_targets,
-                      validate_all)
+from .catalog import (DIMENSION_COLUMN, SEP, SHARE_TYPES, describe, detect_conflicts, excluded_mask, share_members,
+                      share_targets, validate_all)
 from .market import UNKNOWN, Market
 from .events import EventBus
 from . import evidence, factors
@@ -87,6 +87,14 @@ THEME_SECTORS = {
     "consommation": ["Consumer Staples", "Consumer Discretionary"],
     "industrie": ["Industrials"],
 }
+# Thématiques sans secteur: étiquettes de la colonne `theme` du Parquet (data-prep/themes.csv), posées titre par titre,
+# FNB thématiques compris. « vice » = alcool, tabac, jeux et cannabis.
+THEME_TAGS = {
+    "ia": ["ia"],
+    "energie-propre": ["energie-propre"],
+    "armement": ["armement"],
+    "alcool-tabac": ["vice"],
+}
 # Titres détenus en direct, écartés par « FNB seulement ». Par type d'instrument, pas par classe d'actifs: les FNB
 # d'actions ont la classe « Equity », comme les actions.
 DIRECT_TYPES = ("Stock", "Cryptocurrency")
@@ -106,11 +114,14 @@ FRONT_FACTORS = {engine: front for front, engine in FACTOR_TARGETS.items()}
 # Classes: % du portefeuille. Régions et thématiques: % de la poche actions, tenu par les actions détenues en direct
 # (les FNB n'ont ni pays ni secteur connu, voir `catalog.SHARE_TYPES`). Imposé à ± SHARE_TOLERANCE.
 EXCLUDE = "exclure"
+THEME_NOTE = "MonPort: themes."
 SHARE_TOLERANCE = 0.02
+BLOCKS = ("classes", "regions", "themes")
 DIMENSION_TYPES = {
-    "classes": (T.EXCLUDE_ASSET_CLASS, T.MAX_ASSET_CLASS_WEIGHT, T.MIN_ASSET_CLASS_WEIGHT),
-    "regions": (T.EXCLUDE_COUNTRY, T.MAX_COUNTRY_SHARE, T.MIN_COUNTRY_SHARE),
-    "themes": (T.EXCLUDE_SECTOR, T.MAX_SECTOR_SHARE, T.MIN_SECTOR_SHARE),
+    "asset_class": (T.EXCLUDE_ASSET_CLASS, T.MAX_ASSET_CLASS_WEIGHT, T.MIN_ASSET_CLASS_WEIGHT),
+    "country": (T.EXCLUDE_COUNTRY, T.MAX_COUNTRY_SHARE, T.MIN_COUNTRY_SHARE),
+    "sector": (T.EXCLUDE_SECTOR, T.MAX_SECTOR_SHARE, T.MIN_SECTOR_SHARE),
+    "theme": (T.EXCLUDE_THEME, T.MAX_THEME_SHARE, T.MIN_THEME_SHARE),
 }
 
 LOSS_BY_REACTION = {0: 10.0, 1: 15.0, 2: 25.0, 3: 35.0}  # baisse de 20 %: je vends tout … j'investis plus
@@ -153,11 +164,15 @@ GUIDANCE = {
 # --------------------------------------------------------------------------- #
 # Entrée: profil et préférences -> InvestorForm
 # --------------------------------------------------------------------------- #
-def _targets(block: str, item: str, allowed: dict[str, list[str]]) -> list[str]:
-    candidates = {"classes": CLASS_TARGETS, "regions": REGION_COUNTRIES, "themes": THEME_SECTORS}[block].get(item, [])
-    dimension = {"classes": "asset_class", "regions": "country", "themes": "sector"}[block]
-    present = {v.lower(): v for v in allowed[dimension]}
-    return [present[c.lower()] for c in candidates if c.lower() in present]
+def _targets(block: str, item: str, allowed: dict[str, list[str]]) -> tuple[str, list[str]]:
+    """La dimension d'un choix du client et ses cibles présentes dans l'univers."""
+    if block == "themes" and item in THEME_TAGS:
+        dimension, candidates = "theme", THEME_TAGS[item]
+    else:
+        dimension = {"classes": "asset_class", "regions": "country", "themes": "sector"}[block]
+        candidates = {"classes": CLASS_TARGETS, "regions": REGION_COUNTRIES, "themes": THEME_SECTORS}[block].get(item, [])
+    present = {v.lower(): v for v in allowed.get(dimension, [])}
+    return dimension, [present[c.lower()] for c in candidates if c.lower() in present]
 
 
 def _dedupe(constraints: list[Constraint]) -> list[Constraint]:
@@ -229,22 +244,24 @@ def preference_constraints(prefs: dict, allowed: dict[str, list[str]]) -> tuple[
     """Traduit les exclusions et les pourcentages saisis en contraintes dures. Retourne aussi ce qui n'a pas pu l'être."""
     out: list[Constraint] = []
     skipped: list[str] = []
-    for block, (exclude, cap, floor) in DIMENSION_TYPES.items():
+    for block in BLOCKS:
         for item, choice in (prefs.get(block) or {}).items():
             share = share_of(choice)
             if choice != EXCLUDE and share is None:
                 continue
             if block == "classes" and item not in shown_classes(prefs):
                 continue
-            targets = _targets(block, item, allowed)
+            dimension, targets = _targets(block, item, allowed)
+            exclude, cap, floor = DIMENSION_TYPES[dimension]
             if not targets:
                 skipped.append(f"{BLOCK_LABELS[block]} « {item} »")
                 continue
-            note = f"MonPort: {block}.{item} = {choice}"
+            note = f"MonPort: {block}.{item} = {choice}"  # « MonPort: themes.ia = 20 » (voir THEME_NOTE)
             if choice == EXCLUDE:
                 out += [Constraint(type=exclude, target=t, hard=True, note=note) for t in targets]
                 continue
-            # Une classe vise une seule classe du dataset; une région ou une thématique, tous ses pays ou secteurs.
+            # Une classe vise une seule classe du dataset; une région ou une thématique, tous ses pays, secteurs ou
+            # étiquettes.
             target = targets[0] if block == "classes" else SEP.join(targets)
             low, high = share - SHARE_TOLERANCE, share + SHARE_TOLERANCE
             if low > 0:
@@ -265,11 +282,28 @@ def preference_constraints(prefs: dict, allowed: dict[str, list[str]]) -> tuple[
     return _dedupe(out), skipped
 
 
+def relax_overlaps(market: Market, constraints: list[Constraint]) -> list[Constraint]:
+    """Deux thématiques chiffrées qui se recoupent (NVIDIA est « tech » et « ia »): le plafond de l'une contredirait le
+    plancher de l'autre, et l'optimiseur s'en sortirait sans aucune action (une part de rien est respectée). On garde
+    leurs planchers: chaque titre compte dans toutes ses thématiques."""
+    theme_of = {id(c): (c.note or "").removeprefix(THEME_NOTE).split(" = ")[0] for c in constraints
+                if c.type in SHARE_TYPES and (c.note or "").startswith(THEME_NOTE)}
+    if len(set(theme_of.values())) < 2:
+        return constraints
+    groups: dict[str, Any] = {}
+    for c in constraints:
+        if id(c) in theme_of:
+            groups[theme_of[id(c)]] = share_members(market.assets, c)
+    overlapping = {a for a in groups for b in groups if a != b and (groups[a] & groups[b]).any()}
+    return [c for c in constraints if not (theme_of.get(id(c)) in overlapping and SHARE_TYPES[c.type][1] == "max")]
+
+
 def to_form(profile: dict, prefs: dict, market: Market) -> tuple[InvestorForm, list[str]]:
     reaction = int(profile.get("lossReaction", 2))
     objective = OBJECTIVES.get(str(profile.get("objective")), "balanced")
     horizon = int(profile.get("horizon", 10))
     constraints, skipped = preference_constraints(prefs, market.allowed_values())
+    constraints = relax_overlaps(market, constraints)
     form = InvestorForm(
         age=min(110, max(18, int(profile.get("age", 35)))),
         investment_amount_cad=float(profile.get("amount", 10000)),
@@ -379,7 +413,8 @@ def choices_breakdown(constraints: list[Constraint], s: float) -> dict:
         "contraintes_du_client": [describe(c) for c in constraints] or ["aucune: tout est neutre"],
         "pourcentages": f"Un pourcentage saisi devient un plancher et un plafond à ± {SHARE_TOLERANCE * 100:g} points, durs. "
                         "Classes: part du portefeuille. Régions et thématiques: part de la poche actions, tenue par les "
-                        "actions détenues en direct (un FNB n'a ni pays ni secteur).",
+                        "actions détenues en direct (un FNB n'a ni pays ni secteur), sauf IA, énergie propre, armement "
+                        "et alcool-tabac, étiquetées titre par titre: un FNB étiqueté compte aussi.",
         "exclusions": "0 % dans les 3 portefeuilles; un facteur à Exclure aussi.",
         "qui_les_respecte": {"profil_coherent": "les 3 gestionnaires",
                              "profil_incoherent": "Tes contraintes et Tes préférences; Ton profil ne garde que les exclusions"},
@@ -602,15 +637,12 @@ def drop_unreachable_floors(market: Market, constraints: list[Constraint]) -> tu
     hard = [c for c in constraints if c.hard]
     eligible = market.assets[~excluded_mask(market, hard)]
     dropped = []
-    stocks = eligible[eligible["instrument_type"].astype(str).str.lower() == "stock"]
     for c in hard:
         column = _floor_column(c)
         if column and not (eligible[column].astype(str).str.lower() == c.target.lower()).any():
             dropped.append(c)
         elif c.type in SHARE_TYPES and SHARE_TYPES[c.type][1] == "min" and (c.value or 0) > 0:
-            share_column = DIMENSION_COLUMN[SHARE_TYPES[c.type][0]]
-            members = {t.lower() for t in share_targets(c)}
-            if not stocks[share_column].astype(str).str.lower().isin(members).any():
+            if not share_members(eligible, c).any():
                 dropped.append(c)
     if not dropped:
         return constraints, None
@@ -642,9 +674,7 @@ def _raise_volatility_cap(market: Market, constraints: list[Constraint]) -> tupl
             group = eligible[eligible[column].astype(str).str.lower() == c.target.lower()]
             picks += group.sort_values("sharpe", ascending=False).index[:3].tolist()
         elif c.type in SHARE_TYPES and SHARE_TYPES[c.type][1] == "min":
-            members = {t.lower() for t in share_targets(c)}
-            group = eligible[(eligible["instrument_type"].astype(str).str.lower() == "stock")
-                             & eligible[DIMENSION_COLUMN[SHARE_TYPES[c.type][0]]].astype(str).str.lower().isin(members)]
+            group = eligible[share_members(eligible, c)]
             picks += group.sort_values("sharpe", ascending=False).index[:3].tolist()
     picks = list(dict.fromkeys(picks))[: get_runtime_settings().max_assets_per_portfolio]
     others = [c for c in constraints if not (c.hard and c.type is T.MAX_VOLATILITY)]

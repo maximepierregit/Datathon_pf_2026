@@ -18,7 +18,7 @@ from strands import tool
 
 from . import factors, gateway
 from .runtime import get_runtime_settings
-from .catalog import DIMENSION_COLUMN, excluded_mask
+from .catalog import DIMENSION_COLUMN, SHARE_TYPES, excluded_mask, share_members
 from .market import Market
 from .allocator import Objective, OptimizationResult
 from .schemas import Constraint, ConstraintType as T, PortfolioMetrics
@@ -115,6 +115,7 @@ def make_pm_tools(market: Market, state: PMState) -> list:
         min_sharpe: Optional[float] = None,
         sort_by: str = "sharpe",
         limit: int = 20,
+        theme: Optional[str] = None,
     ) -> dict:
         """Filtre l'univers admissible et retourne les meilleurs actifs selon un critère.
 
@@ -126,10 +127,11 @@ def make_pm_tools(market: Market, state: PMState) -> list:
             min_sharpe: Ratio de Sharpe historique minimal.
             sort_by: Critère de tri: "sharpe", "ann_return" ou "ann_vol" (croissant pour ann_vol).
             limit: Nombre maximal de résultats (max 50).
+            theme: Étiquette de thématique à conserver, actions et FNB (ex. energie-propre, ia) (optionnel).
         """
         return gateway.run("screen_assets", market=market, constraints=state.constraints, sector=sector,
                            country=country, asset_class=asset_class, max_volatility=max_volatility,
-                           min_sharpe=min_sharpe, sort_by=sort_by, limit=limit)
+                           min_sharpe=min_sharpe, sort_by=sort_by, limit=limit, **({"theme": theme} if theme else {}))
 
     @tool
     def screen_factor(
@@ -244,6 +246,8 @@ def fallback_selection(market: Market, constraints: list[Constraint], objective:
         if c.type.value.startswith("min_") and c.target and column:
             group = a[a[column].astype(str).str.lower() == c.target.lower()]
             picks += group.sort_values(key, ascending=asc).index[:4].tolist()
+        elif c.type in SHARE_TYPES and SHARE_TYPES[c.type][1] == "min" and c.target:  # une part: titres du groupe
+            picks += a[share_members(a, c)].sort_values(key, ascending=asc).index[:4].tolist()
     # Contraintes de facteurs: des actions qui respectent tous les seuils à la fois, les moins volatiles d'abord.
     # Les mieux notées sont souvent très volatiles (sur l'univers réel, APP ou SNDK en qualité) et feraient
     # dépasser le plafond de volatilité.

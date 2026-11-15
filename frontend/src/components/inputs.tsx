@@ -178,7 +178,7 @@ export function ShareTuner({ items, value, onChange, percent = true }: { items: 
       {items.map((it) => {
         const cur = value[it.id]
         const num = typeof cur === 'number'
-        const seg = (on: boolean, style: string) => `min-h-11 rounded-md px-3.5 text-sm font-semibold transition-colors ${on ? style : 'text-ink-soft hover:text-navy'}`
+        const seg = (on: boolean, style: string) => `min-h-11 rounded-md px-3 text-sm font-semibold transition-colors ${on ? style : 'text-ink-soft hover:text-navy'}`
         return (
           <div key={it.id} role="group" aria-label={it.label} className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[var(--radius-card)] border border-line-soft bg-white py-3 pl-5 pr-3">
             <span className="flex min-w-[150px] flex-1 flex-col">
@@ -192,9 +192,10 @@ export function ShareTuner({ items, value, onChange, percent = true }: { items: 
               <button aria-pressed={cur === undefined} onClick={() => onChange(it.id, null)} className={seg(cur === undefined, 'bg-white text-navy ring-1 ring-line')}>
                 Neutre
               </button>
+              {/* Même largeur avec ou sans champ : la colonne de choix ne bouge pas quand on saisit un pourcentage. */}
               {percent &&
                 (num ? (
-                  <label className="flex min-h-11 items-center gap-1 rounded-md bg-navy px-2.5 text-sm font-semibold text-white">
+                  <label className="flex min-h-11 w-[4.25rem] items-center justify-center gap-1 rounded-md bg-navy text-sm font-semibold text-white">
                     <ShareInput value={cur} label={it.label} autoFocus={opened === it.id} onChange={(s) => onChange(it.id, s)} />
                     %
                   </label>
@@ -206,7 +207,7 @@ export function ShareTuner({ items, value, onChange, percent = true }: { items: 
                       setOpened(it.id)
                       onChange(it.id, Math.max(0, Math.round((100 - total) / Math.max(1, free))))
                     }}
-                    className={seg(false, '')}
+                    className={`${seg(false, '')} w-[4.25rem]`}
                   >
                     %
                   </button>
@@ -263,7 +264,7 @@ function ShareInput({ value, label, autoFocus, onChange }: { value: number; labe
         if (!n) onChange('exclure')
       }}
       onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-      className="w-12 bg-transparent text-right text-white outline-none"
+      className="w-10 bg-transparent text-right text-white outline-none"
     />
   )
 }

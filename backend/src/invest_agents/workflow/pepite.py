@@ -50,8 +50,10 @@ LEGEND = """LÉGENDE DU JSON DU QUESTIONNAIRE
 - constraints.vehicles: "fnb" = FNB seulement (aucun titre détenu en direct), "titres" = titres individuels seulement
   (actions et crypto détenues en direct, aucun FNB, donc aucune obligation), "tous" = FNB et titres individuels.
 - constraints.classes, regions, themes: "exclure", ou un pourcentage de 0 à 100 que le client impose. Une clé absente
-  vaut Neutre: libre. Classes: % du portefeuille entier. Régions et thématiques: % des actions détenues en direct
-  (un FNB n'a ni pays ni secteur connu). Les pourcentages d'un même bloc font au plus 100.
+  vaut Neutre: libre. Classes: % du portefeuille entier. Régions et thématiques: % de la poche actions, tenu par les
+  actions détenues en direct (un FNB n'a ni pays ni secteur connu); ia, energie-propre, armement et alcool-tabac
+  (étiquette « vice »: alcool, tabac, jeux, cannabis) sont des étiquettes posées titre par titre, FNB compris.
+  Les pourcentages d'un même bloc font au plus 100.
 - constraints.factors: échelle -2 Exclure, -1 Moins, 0 Neutre, 1 Plus, 2 Imposer. Une clé absente vaut Neutre."""
 
 TONE = (
@@ -124,10 +126,10 @@ Règles communes
 - Le code traduit lui-même le questionnaire et l'ajoute aux profils: les exclusions dans les 3, « FNB seulement »
   ({direct}) et « titres individuels seulement » (exclude_instrument_type), et les pourcentages saisis par le client,
   imposés à ± 2 points dans les profils qui suivent ses préférences (min/max_asset_class_weight pour les classes,
-  min/max_country_share et min/max_sector_share pour les régions et les thématiques), et les facteurs (taille ->
-  small_cap, qualite -> quality, momentum, value, croissance -> growth: Imposer -> min_factor_exposure 0.5 dur;
-  Plus -> min_factor_exposure 0.2; Moins -> max_factor_exposure -0.2; Exclure -> max_factor_exposure -0.5 dur,
-  dans les 3 profils; aucun avec FNB seulement). Ne les réécris pas: ce que tu écris sur les mêmes cibles est
+  min/max_country_share pour les régions, min/max_sector_share ou min/max_theme_share pour les thématiques), et les
+  facteurs (taille -> small_cap, qualite -> quality, momentum, value, croissance -> growth: Imposer ->
+  min_factor_exposure 0.5 dur; Plus -> min_factor_exposure 0.2; Moins -> max_factor_exposure -0.2; Exclure ->
+  max_factor_exposure -0.5 dur, dans les 3 profils; aucun avec FNB seulement). Ne les réécris pas: ce que tu écris sur les mêmes cibles est
   remplacé. Un élément neutre reste libre.
 - Utilise exactement les libellés de cibles du catalogue.
 - Le reste du profil de risque est ajouté par le code: plafond de volatilité, aversion au risque donnée à l'optimiseur,
