@@ -135,7 +135,7 @@ export default function Pipeline() {
     <div className="mx-auto flex w-full max-w-[1020px] flex-col gap-8 px-4 py-12 sm:px-6">
       <div className="flex flex-col gap-1">
         <span className="text-sm font-semibold text-slate">Profil retenu</span>
-        <h1 className="text-[36px] font-semibold leading-10 text-navy md:text-[50px] md:leading-[54px]">Profil {riskLabel(score)}</h1>
+        <h1 className="text-[36px] font-semibold leading-10 text-navy md:text-[50px] md:leading-[54px]">Profil {riskLabel(score).toLowerCase()}</h1>
         <Separator />
         <p className="m-0 max-w-[560px] text-ink-soft">
           Selon tes réponses : {state.profile.age} ans, horizon de {state.profile.horizon} ans.{' '}
