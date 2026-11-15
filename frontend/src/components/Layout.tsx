@@ -13,7 +13,8 @@ export function Header() {
   const { pathname } = useLocation()
   const current = STEPS.findIndex((s) => s.match.some((m) => pathname.startsWith(m)))
   return (
-    <header className="on-dark bg-navy text-white">
+    // Sur le tableau de bord, l'en-tête reste en haut : le chat de Pépite se cale juste dessous.
+    <header className={`on-dark bg-navy text-white ${pathname.startsWith('/portefeuille') ? 'sticky top-0 z-30' : ''}`}>
       <div className="mx-auto flex max-w-[1020px] flex-wrap items-center justify-between gap-4 px-4 py-3 sm:px-6">
         <Link to="/" className="flex items-center gap-2 text-lg font-semibold text-white no-underline">
           <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white">

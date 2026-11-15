@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import { buildAll, emptyConstraints, PORTFOLIO_META, riskScore, WINNER_META } from './lib/engine'
-import type { BackendPortfolio, Constraints, ConstraintBlock, Contribution, DashboardLevel, Level, Portfolio, PortfolioId, Profile, ProfileCheck, Vehicles } from './types'
+import type { BackendPortfolio, Constraints, ConstraintBlock, Contribution, DashboardLevel, Level, Portfolio, PortfolioId, Profile, ProfileCheck, RiskNote, Vehicles } from './types'
 
 export const DEFAULT_PROFILE: Profile = {
   age: 35,
@@ -57,6 +57,13 @@ export interface State {
   applyAdjustment: (a: Omit<AppliedAdjustment, 'id'>) => void
   undoAdjustment: (id: string) => void
   reset: () => void
+}
+
+/** Un ancien backend envoie « Titre. Détail » : on sépare au premier point. */
+function riskNote(w: RiskNote | string): RiskNote {
+  if (typeof w !== 'string') return w
+  const cut = w.indexOf('. ')
+  return cut > 0 ? { title: w.slice(0, cut), detail: w.slice(cut + 2), severity: 'medium' } : { title: w, detail: '', severity: 'medium' }
 }
 
 export function defaultDashboardLevel(comfort: number): DashboardLevel {
@@ -115,7 +122,8 @@ export const useApp = create<State>()(
         }),
       setPortfolios: (received) => {
         const base: Portfolios = {}
-        for (const [id, p] of Object.entries(received) as [PortfolioId, BackendPortfolio][]) base[id] = { ...PORTFOLIO_META[id], ...p }
+        for (const [id, p] of Object.entries(received) as [PortfolioId, BackendPortfolio][])
+          base[id] = { ...PORTFOLIO_META[id], ...p, warnings: p.warnings.map(riskNote) }
         if (Object.keys(base).length) set({ adjustments: [], base, portfolios: base })
         else get().build()
       },

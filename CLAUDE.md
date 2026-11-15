@@ -64,6 +64,7 @@ Ces paires sont dupliquées à la main ; toute modification touche les deux côt
 - Les identifiants de `frontend/src/data/catalog.ts` (classes, régions, thématiques) ↔ les tables `CLASS_TARGETS`, `REGION_COUNTRIES`, `THEME_SECTORS` de `monport.py`.
 - `metricsOf()` de `frontend/src/lib/engine.ts` ↔ `to_portfolio()` de `monport.py` (pire année, VaR, ES).
 - Les messages de Pépite et des agents : script d'exemple de `api.ts` ↔ `Translator` et `build_portfolios` de `monport.py`.
+- Les balises des réponses de Pépite dans le chat : `components/RichText.tsx` ↔ « FORMAT DE `message` » de `CHAT_TASK` (`workflow/pepite.py`).
 - `riskPosition()`, `riskScore()`, `riskLabel()` et `coherenceWarnings()` de `engine.ts` ↔ `risk_position()`, `risk_score()`, `risk_label()` et `coherence_facts()` de `monport.py` ; `PORTFOLIO_META` ↔ `TRIO` ; noms des cartes de `Pipeline.tsx` ↔ `VARIANT_NAMES` et `BASE_NAMES`.
 
 ## Design

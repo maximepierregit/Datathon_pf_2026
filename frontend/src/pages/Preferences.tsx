@@ -64,8 +64,8 @@ export default function Preferences() {
         warnings.length > 0 && (
           <div className="flex flex-col gap-2">
             {warnings.map((w) => (
-              <Alert key={w} title="Pépite te prévient">
-                {w} On construira quand même ce que tu demandes, avec un avertissement.
+              <Alert key={w.title} title="Pépite te prévient">
+                {w.detail} On construira quand même ce que tu demandes, avec un avertissement.
               </Alert>
             ))}
           </div>

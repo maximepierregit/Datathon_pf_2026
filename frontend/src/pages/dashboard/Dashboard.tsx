@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { Navigate, useSearchParams } from 'react-router-dom'
-import { Alert, Button, Separator } from '../../components/ui'
+import { Button, Separator } from '../../components/ui'
 import { PORTFOLIO_IDS } from '../../lib/engine'
 import { money, pct } from '../../lib/format'
 import { defaultDashboardLevel, useApp } from '../../store'
 import type { DashboardLevel, PortfolioId } from '../../types'
 import { AdjustPanel } from './AdjustPanel'
 import { Disclaimer } from './Disclaimer'
+import { RiskNotes } from './RiskNotes'
 import { Advanced, Beginner, Intermediate } from './Views'
 
 const LEVELS: { id: DashboardLevel; label: string }[] = [
@@ -14,6 +15,9 @@ const LEVELS: { id: DashboardLevel; label: string }[] = [
   { id: 'intermediaire', label: 'Intermédiaire' },
   { id: 'avance', label: 'Avancé' },
 ]
+
+/** Même grille pour l'en-tête et le contenu : les onglets restent alignés sur le portefeuille. */
+const COLUMNS = 'mx-auto grid w-full max-w-[1240px] gap-6 px-4 sm:px-6 xl:grid-cols-[250px_minmax(0,1fr)]'
 
 export default function Dashboard() {
   const portfolios = useApp((s) => s.portfolios)
@@ -34,10 +38,13 @@ export default function Dashboard() {
   const set = (k: string, v: string) => setParams((prev) => ({ ...Object.fromEntries(prev), [k]: v }), { replace: true })
   const View = { debutant: Beginner, intermediaire: Intermediate, avance: Advanced }[level]
 
+  // Grand écran : risques à gauche, portefeuille au centre, Pépite à droite (toujours visible, sous l'en-tête).
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-1 flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_380px] 2xl:grid-cols-[minmax(0,1fr)_420px]">
+      <div className="flex min-w-0 flex-col">
       <section className="bg-white">
-        <div className="mx-auto flex max-w-[1020px] flex-col gap-6 px-4 pt-10 sm:px-6">
+        <div className={`${COLUMNS} pt-10`}>
+          <div className="flex flex-col gap-6 xl:col-start-2">
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div className="flex flex-col">
               <span className="text-sm font-semibold text-slate">
@@ -47,7 +54,9 @@ export default function Dashboard() {
               <Separator />
               <p className="m-0 max-w-[560px] text-ink-soft">{p.tagline}</p>
             </div>
-            <Button onClick={() => setChat(true)}>{session ? 'Discuter avec Pépite' : 'Ajuster avec Pépite'}</Button>
+            <Button className="lg:hidden" onClick={() => setChat(true)}>
+              {session ? 'Discuter avec Pépite' : 'Ajuster avec Pépite'}
+            </Button>
           </div>
 
           {!single && (
@@ -63,25 +72,35 @@ export default function Dashboard() {
                     onClick={() => set('p', pid)}
                     className={`flex flex-col items-start gap-1 rounded-t-[var(--radius-card)] border-x border-t px-4 py-3 text-left transition-colors ${on ? 'border-line-soft border-t-red border-t-[3px] bg-mist' : 'border-transparent bg-white hover:bg-mist/60'}`}
                   >
-                    <span className="flex w-full items-center justify-between">
+                    <span className="flex w-full flex-wrap-reverse items-baseline justify-between gap-x-2">
                       <span className={`text-lg font-semibold ${on ? 'text-navy' : 'text-slate'}`}>{q.name}</span>
-                      {pid === 'equilibre' && <span className="text-xs font-semibold text-red">Point de départ</span>}
+                      {pid === 'equilibre' && <span className="whitespace-nowrap text-xs font-semibold text-red">Point de départ</span>}
                     </span>
                     <span className="text-sm text-ink-soft">
                       {pct(q.allocation.actions, 0)} actions · ≈ {pct(q.metrics.expectedReturn)} / an
                     </span>
-                    {q.warnings.length > 0 && <span className="text-xs font-semibold text-red-dark">⚠ À lire avant de choisir</span>}
+                    {q.warnings.length > 0 && (
+                      <span className="flex items-center gap-1.5 text-xs font-semibold text-red-dark">
+                        <span className="h-2 w-2 rounded-full bg-red" aria-hidden />
+                        {q.warnings.length} point{q.warnings.length > 1 ? 's' : ''} à lire avant de choisir
+                      </span>
+                    )}
                   </button>
                 )
               })}
             </div>
           )}
           {single && <div className="h-6" aria-hidden />}
+          </div>
         </div>
       </section>
 
       <section className="flex-1 bg-mist">
-        <div className="mx-auto flex max-w-[1020px] flex-col gap-6 px-4 py-8 sm:px-6">
+        <div className={`${COLUMNS} py-8`}>
+          <aside className="xl:sticky xl:top-[88px] xl:col-start-1 xl:row-start-1 xl:max-h-[calc(100dvh-112px)] xl:self-start xl:overflow-y-auto">
+            <RiskNotes p={p} />
+          </aside>
+          <div className="flex min-w-0 flex-col gap-6 xl:col-start-2 xl:row-start-1">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div role="group" aria-label="Niveau de détail" className="flex rounded-[var(--radius-pill)] border border-line bg-white p-1">
               {LEVELS.map((l) => (
@@ -93,17 +112,13 @@ export default function Dashboard() {
             <span className="text-xs text-ink-soft">Données d’exemple · proposition, pas une recommandation</span>
           </div>
 
-          {p.warnings.map((w) => (
-            <Alert key={w} title="Le responsable des risques te prévient">
-              {w}
-            </Alert>
-          ))}
-
           <View p={p} amount={profile.amount} />
+          </div>
         </div>
       </section>
+      </div>
 
-      {chat && <AdjustPanel p={p} onClose={() => setChat(false)} />}
+      <AdjustPanel p={p} open={chat} onClose={() => setChat(false)} />
       {!disclaimerSeen && <Disclaimer onAccept={acceptDisclaimer} />}
     </div>
   )

@@ -1,7 +1,7 @@
 // Moteur d'exemple côté front : il imite ce que feront les agents Strands et l'optimiseur Python,
 // pour que l'interface fonctionne avant le branchement du backend.
 import { CLASS_ASSUMPTIONS, CLASS_LABELS, BLOCKS, UNIVERSE, type UniverseLine } from '../data/catalog'
-import type { AssetClass, ConstraintBlock, Constraints, Holding, Level, Metrics, Portfolio, PortfolioId, Profile } from '../types'
+import type { AssetClass, ConstraintBlock, Constraints, Holding, Level, Metrics, Portfolio, PortfolioId, Profile, RiskNote } from '../types'
 
 const CLASSES = Object.keys(CLASS_LABELS) as AssetClass[]
 const LINE_CAP = 0.4
@@ -183,18 +183,19 @@ export function metricsOf(holdings: Holding[]): Metrics {
 }
 
 /** Alertes de cohérence profil ↔ contraintes (le backend les confie au responsable des risques). */
-export function coherenceWarnings(score: number, c: Constraints): string[] {
-  const w: string[] = []
+export function coherenceWarnings(score: number, c: Constraints): RiskNote[] {
+  const w: RiskNote[] = []
   const crypto = level(c, 'classes', 'crypto')
   const actions = level(c, 'classes', 'actions')
   if (score < 40 && crypto >= 1)
-    w.push('Tu cherches plutôt de la stabilité, mais tu demandes plus de crypto-actifs. Les deux se marient mal : la crypto peut perdre la moitié de sa valeur en quelques mois.')
+    w.push({ title: 'Crypto et prudence font mauvais ménage', detail: 'Tu cherches de la stabilité, mais tu veux plus de crypto. La crypto peut perdre la moitié de sa valeur en quelques mois.', severity: 'high' })
   if (score < 40 && actions === 2)
-    w.push('Imposer beaucoup d’actions avec un profil prudent peut te faire vivre des baisses difficiles à supporter.')
+    w.push({ title: 'Beaucoup d’actions pour un profil prudent', detail: 'Avec autant d’actions, tu pourrais vivre des baisses difficiles à supporter.', severity: 'medium' })
   if (score > 65 && actions <= -1)
-    w.push('Ton profil est dynamique, mais tu limites les actions : le rendement attendu sera plus faible que ce que ton horizon permet.')
+    w.push({ title: 'Peu d’actions pour ton horizon', detail: 'Ton profil est dynamique, mais tu limites les actions : ton argent risque de moins grandir.', severity: 'medium' })
   const kept = CLASSES.filter((k) => level(c, 'classes', k) !== -2)
-  if (kept.length === 1) w.push(`Tu n’as gardé qu’un seul type de placement (${CLASS_LABELS[kept[0]].toLowerCase()}) : ton portefeuille sera très peu diversifié.`)
+  if (kept.length === 1)
+    w.push({ title: 'Un seul type de placement', detail: `Tu n’as gardé que les ${CLASS_LABELS[kept[0]].toLowerCase()} : ton portefeuille sera très peu diversifié.`, severity: 'medium' })
   return w
 }
 

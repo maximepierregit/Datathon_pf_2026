@@ -19,11 +19,11 @@ from ..catalog import catalog_prompt, describe
 from ..events import EventBus
 from ..monport import (
     BOND_FLOOR,
-    DIRECT_CLASSES,
     SLOTS,
     assess,
     capacity,
     coherence_facts,
+    direct_types,
     front,
     pepite as pepite_event,
     status,
@@ -102,7 +102,8 @@ Règles communes
 - Le poids maximal par titre du profil passe par max_stock_weight: il ne vise que les titres détenus en direct.
   Un FNB est déjà diversifié; un FNB d'obligations peut peser jusqu'à 40 %.
 - Les exclusions du client (niveau -2) s'appliquent aux 3 profils.
-- FNB seulement: exclure dans les 3 profils les classes d'actifs des titres détenus en direct ({direct}).
+- FNB seulement: exclude_instrument_type dans les 3 profils pour les titres détenus en direct ({direct}). Jamais
+  exclude_asset_class pour ça: une classe d'actifs regroupe titres et FNB (« Equity » contient les FNB d'actions).
 - Traduction de l'échelle: Imposer -> min_*_weight dur (0.05 à 0.15); Plus -> min_*_weight préférence (hard=false);
   Moins -> max_*_weight préférence; Exclure -> exclude_*. Utilise exactement les libellés de cibles du catalogue.
   Une préférence sans équivalent dans le catalogue (ex.: facteurs, IA) est ignorée.
@@ -127,7 +128,7 @@ Le code mélangera ensuite le capital: 80 % « Ton profil » + 20 % « Tes préf
 
 def system_prompt(session: Session) -> str:
     allowed = session.market.allowed_values()
-    direct = ", ".join(v for v in allowed["asset_class"] if v in DIRECT_CLASSES) or "aucune dans cet univers"
+    direct = ", ".join(direct_types(allowed)) or "aucun dans cet univers"
     return SYSTEM.format(legend=LEGEND, catalog=catalog_prompt(allowed), direct=direct, tone=TONE)
 
 
@@ -314,6 +315,8 @@ def make_pepite_tools(session: Session) -> list:
         Args:
             slot: "prudent", "equilibre" ou "conviction".
         """
+        if slot in session.portfolios:
+            _say(session, f"Je relis les notes des agents sur « {names_for(session)[slot]} »")
         return justifications(session, slot)
 
     @tool
@@ -400,6 +403,18 @@ CHAT_TASK = """Le client t'écrit après avoir vu ses portefeuilles.
   `adjust_risk_position`. Explique ce que tu as changé. Si c'est impossible, dis pourquoi.
 - Question de finance générale: explique la notion simplement, avec un exemple, sans conseil personnalisé.
 - Autre sujet, ou demande de conseil (« j'achète quoi? »): refuse poliment et ramène le client vers ses portefeuilles.
+
+FORMAT DE `message`
+Ta réponse s'affiche dans une bulle de chat étroite. Écris-la en HTML simple, jamais en Markdown, avec ces balises
+seulement, sans aucun attribut de style:
+- <p>…</p> par idée (3 au plus), <strong> pour l'essentiel, <em>.
+- <ul><li>…</li></ul> pour une liste, <ol><li>…</li></ol> pour des étapes (5 points au plus).
+- <h4>…</h4>: un petit titre, seulement si la réponse a plusieurs parties.
+- <chiffre valeur="5,2 %">rendement moyen par an</chiffre>: un chiffre clé donné par les outils ou les agents
+  (2 à 4 à la suite au plus). Nombres à la québécoise: « 5,2 % », « 25 000 $ ».
+- <barre nom="Obligations" pct="40"></barre>: une part du portefeuille, pct de 0 à 100 (6 barres au plus, toujours fermées).
+- <astuce>…</astuce>: une notion expliquée ou une chose à retenir. <attention>…</attention>: une mise en garde.
+Sois bref: une centaine de mots au plus, hors chiffres et barres. Commence par la réponse, pas par une formule.
 
 """
 
