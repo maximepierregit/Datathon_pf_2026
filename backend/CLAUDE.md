@@ -124,7 +124,7 @@ Changer le format d'un événement casse le frontend: mettre à jour le README e
 
 ## Données
 
-- `DATASET_PATH`: défaut `data/universe.parquet`; accepte `s3://bucket/key` (téléchargé une fois dans /tmp).
+- `DATASET_PATH`: défaut `data/universe.parquet`; accepte `s3://bucket/key` (téléchargé une fois dans /tmp, sous un nom qui inclut le VersionId S3). Dataset réel (801 actifs chargés, jours ouvrables depuis 2021): `s3://monport-datasets-381491955506/universe/universe.parquet`, produit et publié par `../data-prep/build_universe.py --upload s3://monport-datasets-381491955506 [--upload-only]`.
 - Format long issu de `create_opt_inputs` (`../Universe_Cleaned.ipynb`). Obligatoires: `date`, `symbol`, `total_return_cad`. Optionnelles: `name`, `sector`, `industry`, `country`, `currency`, `asset_class`, `instrument_type`, `market`, `is_included_universe`.
 - Actifs avec moins de 120 observations écartés. Secteur, pays et classe manquants deviennent `Non classé`.
 - `get_market()` est en cache (`lru_cache`); appelé via `asyncio.to_thread` dans l'orchestrateur.
@@ -134,9 +134,9 @@ Changer le format d'un événement casse le frontend: mettre à jour le README e
 ## Déploiement AgentCore
 
 - Déploiement par code (zip), **arm64 uniquement**, Python 3.13, point d'entrée `main.py`, réseau `PUBLIC`.
-- `build_package.sh` installe les wheels `aarch64-manylinux2014`, copie `src/` et le dataset, fixe les permissions (644/755) et retire `__pycache__`.
+- `build_package.sh` installe les wheels `aarch64-manylinux2014`, copie `src/` (et le dataset seulement avec `EMBED_DATASET=1`), fixe les permissions (644/755) et retire `__pycache__`.
 - `main.py` ajoute `src/` au `sys.path`: ne pas déplacer le paquet sans adapter ce chemin.
-- Rôle d'exécution: `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` (profils d'inférence + modèles sous-jacents), `s3:GetObject` si dataset sur S3.
+- Rôle d'exécution: `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` (profils d'inférence + modèles sous-jacents), politique gérée `MonPortDatasetRead` (`s3:GetObject` sur `universe/*`) si dataset sur S3.
 - Pas encore déployé. Le backend EC2 (appel `invoke_agent_runtime` avec le rôle d'instance, relais SSE, `proxy_buffering off` dans nginx) reste à écrire.
 
 ## Conventions

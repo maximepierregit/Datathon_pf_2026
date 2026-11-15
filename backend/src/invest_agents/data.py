@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 import logging
+import re
 import tempfile
 from dataclasses import dataclass
 from functools import lru_cache
@@ -27,16 +28,28 @@ META_COLUMNS = ["name", "sector", "industry", "country", "currency", "asset_clas
 
 
 def _resolve_path(path: str) -> str:
-    """Télécharge le fichier si c'est une URI S3, sinon retourne le chemin local."""
+    """Télécharge le fichier si c'est une URI S3, sinon retourne le chemin local.
+
+    Le cache local (/tmp) est nommé d'après la version de l'objet (VersionId, sinon ETag): remplacer l'objet
+    dans S3 force un nouveau téléchargement au prochain démarrage à froid.
+    """
     if not path.startswith("s3://"):
         return path
     import boto3
 
     bucket, _, key = path[len("s3://") :].partition("/")
-    target = Path(tempfile.gettempdir()) / f"dataset-{Path(key).name}"
+    s3 = boto3.client("s3", region_name=get_settings().region)
+    head = s3.head_object(Bucket=bucket, Key=key)
+    version_id = head.get("VersionId")
+    if version_id == "null":  # objet déposé avant l'activation du versioning
+        version_id = None
+    tag = re.sub(r"[^A-Za-z0-9._-]", "_", version_id or head["ETag"].strip('"'))
+    target = Path(tempfile.gettempdir()) / f"dataset-{tag}-{Path(key).name}"
     if not target.exists():
-        logger.info("Téléchargement du dataset depuis %s", path)
-        boto3.client("s3").download_file(bucket, key, str(target))
+        logger.info("Téléchargement du dataset depuis %s (version %s)", path, tag)
+        partial = target.with_name(target.name + ".part")
+        s3.download_file(bucket, key, str(partial), ExtraArgs={"VersionId": version_id} if version_id else None)
+        partial.replace(target)  # atomique: un téléchargement interrompu ne laisse pas de fichier tronqué
     return str(target)
 
 
