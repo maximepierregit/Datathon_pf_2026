@@ -49,6 +49,8 @@ class AgentHandle:
         self._lock = asyncio.Lock()
         self._handler = AgentStreamHandler(None, label, step, set())  # type: ignore[arg-type]  # lié à chaque appel
         self.agent = Agent(
+            name=label,  # nom affiché dans les traces CloudWatch (invoke_agent <nom>)
+            trace_attributes={"monport.agent": label, "monport.model_kind": kind},
             model=build_model(kind),
             system_prompt=f"{system_prompt}\n\n{LANGUAGE_RULE}",
             tools=list(tools),

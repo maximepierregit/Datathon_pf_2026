@@ -41,6 +41,7 @@ state_get() { [ -f "$STATE/$1" ] && cat "$STATE/$1" || true; }
 
 # Crée ou met à jour un runtime AgentCore (déploiement par code, zip dans S3). Affiche l'ARN une fois READY.
 #   deploy_runtime <nom> <zip> <role_arn> <env_json> [protocol_json]
+# Le point d'entrée passe par opentelemetry-instrument (ADOT) : traces des agents et des outils dans CloudWatch.
 deploy_runtime() {
   local name=$1 zip=$2 role=$3 env=$4 protocol=${5:-}
   local key="code/$name/$(date +%Y%m%d-%H%M%S).zip"
@@ -48,7 +49,7 @@ deploy_runtime() {
   local version
   version=$(aws s3api put-object --bucket "$BUCKET" --key "$key" --body "$zip" --query VersionId --output text)
   local artifact
-  artifact=$(printf '{"codeConfiguration":{"code":{"s3":{"bucket":"%s","prefix":"%s","versionId":"%s"}},"runtime":"PYTHON_3_13","entryPoint":["main.py"]}}' \
+  artifact=$(printf '{"codeConfiguration":{"code":{"s3":{"bucket":"%s","prefix":"%s","versionId":"%s"}},"runtime":"PYTHON_3_13","entryPoint":["opentelemetry-instrument","main.py"]}}' \
     "$BUCKET" "$key" "$version")
   local args=(--agent-runtime-artifact "$artifact" --role-arn "$role" --network-configuration networkMode=PUBLIC
     --environment-variables "$env" --lifecycle-configuration idleRuntimeSessionTimeout=3600,maxLifetime=28800)

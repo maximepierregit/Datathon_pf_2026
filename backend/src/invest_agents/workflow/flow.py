@@ -45,6 +45,7 @@ from ..monport import (
     to_form,
     to_portfolio,
 )
+from ..guardrail import screen
 from ..schemas import PepiteCheck
 from .pepite import build_turn, chat_turn, check_turn
 from .session import SESSIONS, Session, review_of
@@ -187,6 +188,10 @@ async def build_portfolios(payload: dict, bus, translator: Translator) -> None:
             _bind(session, bus, translator)
         _reset_results(session)
         adjustment = str(payload.get("adjustment") or "").strip()[:MAX_ADJUSTMENT]
+        refusal = await asyncio.to_thread(screen, adjustment)
+        if refusal:  # l'ajustement est écarté, la construction continue avec le questionnaire seul
+            front(bus, pepite(refusal + " Je construis tes portefeuilles avec ton questionnaire seulement."))
+            adjustment = ""
         session.rebuilds_left = get_runtime_settings().max_pm_retries
 
         front(bus, pepite("C’est parti! J’écris les consignes de tes trois gestionnaires."))
@@ -216,6 +221,11 @@ async def chat(payload: dict, bus, translator: Translator) -> None:
         return
     if session.lock.locked():
         front(bus, {"type": "error", "message": "Une demande est déjà en cours pour cette conversation."})
+        return
+    refusal = await asyncio.to_thread(screen, message)
+    if refusal:
+        front(bus, {**pepite(refusal), "final": True})
+        front(bus, {"type": "done"})
         return
     async with session.lock:
         _bind(session, bus, translator)

@@ -11,6 +11,12 @@
         "arn:aws:logs:${REGION}:${ACCOUNT}:log-group:aws/spans:*"
       ]
     },
+    {
+      "Sid": "UnifiedSpans",
+      "Effect": "Allow",
+      "Action": "logs:PutResourcePolicy",
+      "Resource": "arn:aws:logs:${REGION}:${ACCOUNT}:log-group:/aws/bedrock-agentcore/runtimes/monport_*"
+    },
     { "Sid": "LogGroups", "Effect": "Allow", "Action": "logs:DescribeLogGroups", "Resource": "arn:aws:logs:${REGION}:${ACCOUNT}:log-group:*" },
     {
       "Sid": "Traces",
@@ -42,6 +48,16 @@
         "arn:aws:bedrock:*::foundation-model/anthropic.*",
         "arn:aws:bedrock:::foundation-model/anthropic.*",
         "arn:aws:bedrock:${REGION}:${ACCOUNT}:inference-profile/*anthropic.*"
+      ]
+    },
+    {
+      "Sid": "Guardrails",
+      "Effect": "Allow",
+      "Action": "bedrock:ApplyGuardrail",
+      "Resource": [
+        "arn:aws:bedrock:${REGION}:${ACCOUNT}:guardrail/*",
+        "arn:aws:bedrock:*:${ACCOUNT}:guardrail-profile/us.guardrail.v1:0",
+        "arn:aws:bedrock:*::guardrail-profile/us.guardrail.v1:0"
       ]
     },
     {

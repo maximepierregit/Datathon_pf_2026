@@ -13,7 +13,7 @@ uv pip install \
   --python-version 3.13 \
   --target build/pkg \
   --only-binary=:all: \
-  -r pyproject.toml
+  -r pyproject.toml --extra otel
 
 cp main.py build/pkg/main.py
 cp -r src/invest_agents build/pkg/src_invest_agents_tmp
