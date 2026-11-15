@@ -31,7 +31,7 @@ DEFAULT_FACTORS_PATH = Path(__file__).resolve().parents[2] / "data" / "factor_sc
 # Facteurs du moteur. `small_cap` est le score de taille inversé: dans les données, une grande entreprise a un score
 # de taille positif, alors que le client demande des petites capitalisations.
 FACTORS = ("momentum", "quality", "value", "growth", "small_cap")
-FACTOR_FR = {"momentum": "momentum", "quality": "qualité", "value": "value", "growth": "croissance",
+FACTOR_FR = {"momentum": "momentum", "quality": "qualité", "value": "valeur", "growth": "croissance",
              "small_cap": "petites capitalisations"}
 RAW_COLUMNS = ("ticker", "momentum", "quality", "value", "growth", "size")
 

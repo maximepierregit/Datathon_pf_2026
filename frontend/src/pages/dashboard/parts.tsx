@@ -1,8 +1,7 @@
-import { useState } from 'react'
-import { Cell, Pie, PieChart, ResponsiveContainer } from 'recharts'
+import { useId, useState } from 'react'
 import { Card } from '../../components/ui'
 import { CLASS_COLORS, CLASS_LABELS } from '../../data/catalog'
-import { money, pct } from '../../lib/format'
+import { kindOf, money, pct } from '../../lib/format'
 import type { AssetClass, Portfolio } from '../../types'
 
 export const classesOf = (p: Portfolio) =>
@@ -44,27 +43,6 @@ export function Legend({ p }: { p: Portfolio }) {
   )
 }
 
-export function Donut({ p }: { p: Portfolio }) {
-  const data = classesOf(p).map((k) => ({ k, name: CLASS_LABELS[k], value: p.allocation[k] }))
-  return (
-    <div className="relative h-56 w-56 shrink-0" role="img" aria-label="Répartition par classe d’actifs">
-      <ResponsiveContainer>
-        <PieChart>
-          <Pie data={data} dataKey="value" innerRadius="62%" outerRadius="100%" stroke="#fff" strokeWidth={2} isAnimationActive={false}>
-            {data.map((d) => (
-              <Cell key={d.k} fill={CLASS_COLORS[d.k]} />
-            ))}
-          </Pie>
-        </PieChart>
-      </ResponsiveContainer>
-      <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-3xl font-light text-navy">{p.holdings.length}</span>
-        <span className="text-xs text-ink-soft">placements</span>
-      </div>
-    </div>
-  )
-}
-
 export function Kpi({ label, value, unit, note, secondary }: { label: string; value: string; unit?: string; note: string; secondary?: [string, string][] }) {
   return (
     <Card className="flex flex-col gap-1 p-5">
@@ -88,7 +66,7 @@ export function Kpi({ label, value, unit, note, secondary }: { label: string; va
   )
 }
 
-/** Liste d'achat ligne par ligne, filtrable par classe. */
+/** Positions ligne par ligne, filtrables par classe. Les montants partent du montant de départ du client. */
 export function HoldingsTable({ p, amount, detailed = false }: { p: Portfolio; amount: number; detailed?: boolean }) {
   const [filter, setFilter] = useState<AssetClass | 'all'>('all')
   const rows = p.holdings.filter((h) => filter === 'all' || h.assetClass === filter)
@@ -102,11 +80,12 @@ export function HoldingsTable({ p, amount, detailed = false }: { p: Portfolio; a
         ))}
       </div>
       <div className="overflow-x-auto rounded-[var(--radius-card)] border border-line-soft">
-        <table className="w-full min-w-[520px] border-collapse text-left text-[15px]">
+        <table className="w-full min-w-[640px] border-collapse text-left text-[15px]">
           <thead className="bg-mist text-xs text-slate">
             <tr>
               <th className="px-4 py-2 font-semibold">Code</th>
               <th className="px-4 py-2 font-semibold">Placement</th>
+              <th className="px-4 py-2 font-semibold">Type · secteur ou catégorie</th>
               {detailed && <th className="px-4 py-2 font-semibold">Classe</th>}
               <th className="px-4 py-2 text-right font-semibold">Poids</th>
               <th className="px-4 py-2 text-right font-semibold">Montant</th>
@@ -122,6 +101,7 @@ export function HoldingsTable({ p, amount, detailed = false }: { p: Portfolio; a
                     {h.name}
                   </span>
                 </td>
+                <td className="px-4 py-2.5 text-sm text-ink-soft">{kindOf(h) || '—'}</td>
                 {detailed && <td className="px-4 py-2.5 text-ink-soft">{CLASS_LABELS[h.assetClass]}</td>}
                 <td className="px-4 py-2.5 text-right font-semibold text-navy">{pct(h.weight)}</td>
                 <td className="px-4 py-2.5 text-right">{money(h.weight * amount)}</td>
@@ -130,7 +110,6 @@ export function HoldingsTable({ p, amount, detailed = false }: { p: Portfolio; a
           </tbody>
         </table>
       </div>
-      <p className="m-0 text-xs text-ink-soft">Données d’exemple : placements fictifs en attendant l’univers réel.</p>
     </div>
   )
 }
@@ -145,5 +124,29 @@ export function AgentNotes({ p }: { p: Portfolio }) {
         </li>
       ))}
     </ul>
+  )
+}
+
+/** Petit « i » : l'explication s'affiche au survol, au focus clavier et au toucher. */
+export function InfoTip({ label, children }: { label: string; children: React.ReactNode }) {
+  const id = useId()
+  return (
+    <span className="group relative inline-flex">
+      <button
+        type="button"
+        aria-label={label}
+        aria-describedby={id}
+        className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-light text-[11px] font-bold leading-none text-slate hover:border-navy hover:text-navy"
+      >
+        i
+      </button>
+      <span
+        role="tooltip"
+        id={id}
+        className="invisible absolute top-full left-1/2 z-20 mt-2 w-72 -translate-x-1/2 rounded-[var(--radius-card)] bg-navy px-3 py-2 text-[13px] leading-5 text-white opacity-0 group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100 motion-safe:transition-opacity"
+      >
+        {children}
+      </span>
+    </span>
   )
 }

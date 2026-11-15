@@ -25,7 +25,8 @@ from .schemas import PortfolioMetrics
 logger = logging.getLogger(__name__)
 
 UNKNOWN = "Non classé"
-META_COLUMNS = ["name", "sector", "industry", "country", "currency", "asset_class", "instrument_type", "market"]
+META_COLUMNS = ["name", "sector", "industry", "country", "currency", "asset_class", "instrument_type", "market",
+                "category", "category_group"]
 
 
 # --------------------------------------------------------------------------- #

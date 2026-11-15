@@ -1,9 +1,10 @@
 // Exposition aux facteurs (vue Avancé) : une carte par facteur, puis les actions qui font pencher le portefeuille.
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Card } from '../../components/ui'
 import { FACTOR_IDS, FACTOR_TARGETS, FACTOR_VIEW, LEVELS } from '../../data/catalog'
 import { pct } from '../../lib/format'
 import { FactorModel } from './FactorModel'
+import { InfoTip } from './parts'
 import { useApp } from '../../store'
 import type { FactorId, FactorView, Level, Portfolio } from '../../types'
 
@@ -210,30 +211,6 @@ function Legend() {
         0 : moyenne du groupe comparable
       </li>
     </ul>
-  )
-}
-
-/** Petit « i » : l'explication s'affiche au survol, au focus clavier et au toucher. */
-function InfoTip({ label, children }: { label: string; children: React.ReactNode }) {
-  const id = useId()
-  return (
-    <span className="group relative inline-flex">
-      <button
-        type="button"
-        aria-label={label}
-        aria-describedby={id}
-        className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-light text-[11px] font-bold leading-none text-slate hover:border-navy hover:text-navy"
-      >
-        i
-      </button>
-      <span
-        role="tooltip"
-        id={id}
-        className="invisible absolute top-full left-1/2 z-20 mt-2 w-72 -translate-x-1/2 rounded-[var(--radius-card)] bg-navy px-3 py-2 text-[13px] leading-5 text-white opacity-0 group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100 motion-safe:transition-opacity"
-      >
-        {children}
-      </span>
-    </span>
   )
 }
 
