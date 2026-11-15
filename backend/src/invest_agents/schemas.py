@@ -242,13 +242,26 @@ class CoherenceIssue(BaseModel):
     detail: str = Field(description="Une ou deux phrases tutoyées: ce qui se contredit et ce que ça risque de te coûter")
 
 
-class PepiteCheck(ProfileAssessment):
-    """Vérification du questionnaire par Pépite: le profil de risque, puis la cohérence profil ↔ préférences."""
+class PepiteReview(BaseModel):
+    """Sortie de Pépite à la vérification: du texte et la cohérence. Le profil de risque est calculé par le code."""
 
+    summary: str = Field(description="Ce que tu retiens du profil, en 2 à 4 phrases tutoyées")
+    key_points: list[str] = Field(default_factory=list, description="Éléments déterminants du profil")
+    flags: list[str] = Field(default_factory=list, description="Petites tensions qui ne rendent pas le profil incohérent")
     coherent: bool = Field(description="False si les préférences contredisent nettement le profil de risque")
     issues: list[CoherenceIssue] = Field(
         default_factory=list, description="Les enjeux à montrer au client; liste vide si le profil est cohérent"
     )
+
+
+class PepiteCheck(ProfileAssessment):
+    """Vérification du questionnaire: le texte de Pépite (PepiteReview) et le profil de risque calculé par le code
+    (`monport.assess`). Le frontend le renvoie tel quel à la construction, où le code le recalcule."""
+
+    coherent: bool
+    issues: list[CoherenceIssue] = Field(default_factory=list)
+    risk_position: float = Field(default=0.5, ge=0, le=1, description="0 très prudent … 1 très audacieux")
+    risk_aversion: float = Field(default=7.0, ge=1, le=25, description="Coefficient A: 1 très audacieux … 25 très prudent")
 
 
 class ConstraintProfile(BaseModel):
@@ -261,6 +274,16 @@ class ConstraintProfile(BaseModel):
 
 class ConstraintPlan(BaseModel):
     profiles: list[ConstraintProfile] = Field(description="Exactement 3 profils, un par slot (prudent, equilibre, conviction)")
+    risk_adjustment: int = Field(
+        default=0, ge=-2, le=2,
+        description="Seulement si l'ajustement du client parle du risque qu'il veut prendre: -2 nettement plus prudent, "
+                    "-1 un peu plus prudent, 1 un peu plus audacieux, 2 nettement plus audacieux. 0 sinon.",
+    )
+    risk_adjustment_reason: str = Field(
+        default="",
+        description="Si risk_adjustment n'est pas 0: une phrase tutoyée et sans jargon (ni optimiseur ni volatilité) qui dit "
+                    "au client ce que tu as changé, ex.: « Tu veux dormir tranquille : tes portefeuilles seront un peu plus prudents. »",
+    )
 
 
 class FinalPick(BaseModel):

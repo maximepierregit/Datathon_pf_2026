@@ -12,7 +12,7 @@ import json
 
 from ..constraints import catalog_prompt
 from ..events import EventBus
-from ..schemas import ConstraintPlan, PepiteCheck
+from ..schemas import ConstraintPlan, PepiteCheck, PepiteReview
 from .base import run_agent
 
 LEGEND = """LÉGENDE DU JSON DU QUESTIONNAIRE
@@ -31,15 +31,15 @@ TONE = (
 )
 
 CHECK_SYSTEM = f"""Tu es Pépite, l'analyste de MonPort, un outil éducatif de courtage direct canadien (CAD).
-Tu reçois en JSON les réponses d'un client au questionnaire. Tu établis son profil de risque, puis tu vérifies que
-ses préférences sont cohérentes avec ce profil. Tu ne construis aucun portefeuille.
+Tu reçois en JSON les réponses d'un client au questionnaire. Tu vérifies que ses préférences sont cohérentes avec
+son profil de risque. Tu ne construis aucun portefeuille.
 
 {LEGEND}
 
 PROFIL DE RISQUE
-- Volatilité annualisée maximale suggérée: conservateur 5 à 8 %; modéré 8 à 11 %; équilibré 11 à 14 %;
-  dynamique 14 à 18 %; agressif 18 à 25 %. Un horizon court (moins de 3 ans) réduit la tolérance réelle.
-- Poids maximal par titre: 5 à 10 % prudent, 10 à 15 % équilibré, 15 à 25 % agressif, jamais plus de 40 %.
+Il est calculé par le code (`profil_calcule`), tu ne le recalcules pas: capacité (âge, horizon) et tolérance
+(réaction à une baisse, objectif, aisance), de 0 à 1, combinées en un coefficient d'aversion au risque A
+(1 très audacieux … 25 très prudent). La capacité limite toujours la tolérance. Sers-t'en pour juger la cohérence.
 
 COHÉRENCE
 - Le profil est incohérent quand les préférences contredisent nettement la tolérance au risque, l'horizon ou
@@ -70,9 +70,10 @@ RÈGLES COMMUNES AUX 3 PROFILS
 - Traduction de l'échelle: Imposer -> min_*_weight dur (0.05 à 0.15); Plus -> min_*_weight préférence (hard=false);
   Moins -> max_*_weight préférence; Exclure -> exclude_*. Utilise exactement les libellés de cibles du catalogue.
   Une préférence sans équivalent dans le catalogue (ex.: facteurs, IA) est ignorée.
-- Les limites du profil de risque passent par max_volatility (dur) et max_stock_weight. La part d'obligations
-  des portefeuilles qui suivent le profil (prudent quand le profil est incohérent, les 3 variantes sinon) est
-  ajoutée par le code selon le profil de risque: ne l'écris pas.
+- Le poids maximal par titre du profil passe par max_stock_weight. Le reste du profil de risque est ajouté par le
+  code: le plafond de volatilité, l'aversion au risque donnée à l'optimiseur et la part d'obligations des
+  portefeuilles qui suivent le profil (prudent quand le profil est incohérent, les 3 variantes sinon). N'écris ni
+  max_volatility ni plancher d'obligations.
 - Valeurs en fractions (0.10 = 10 %). `source` vaut "form".
 
 SI LE PROFIL EST INCOHÉRENT (coherent = false)
@@ -87,11 +88,14 @@ Trois variantes raisonnables du même profil, qui se feront concurrence: prudent
 equilibre = fidèle aux réponses, conviction = un cran plus audacieuse. Les trois respectent les préférences.
 
 AJUSTEMENT
-Si le client a écrit un ajustement, intègre-le aux 3 profils, sauf s'il contredit une limite de sécurité."""
+Si le client a écrit un ajustement, intègre-le aux 3 profils, sauf s'il contredit une limite de sécurité.
+S'il parle du risque qu'il veut prendre (« je veux dormir tranquille », « je peux prendre plus de risque »), ne
+touche pas aux contraintes pour ça: mets risk_adjustment (-2 à 2) et explique-le dans risk_adjustment_reason.
+Le code déplace alors son aversion au risque d'au plus une demi-catégorie. Sans ajustement, risk_adjustment vaut 0."""
 
 
-async def run_check(bus: EventBus, questionnaire: dict, facts: list[str]) -> PepiteCheck:
-    payload = {"questionnaire": questionnaire, "faits_calcules": facts}
+async def run_check(bus: EventBus, questionnaire: dict, computed: dict, facts: list[str]) -> PepiteReview:
+    payload = {"questionnaire": questionnaire, "profil_calcule": computed, "faits_calcules": facts}
     return await run_agent(
         bus=bus,
         label="Pépite",
@@ -99,7 +103,7 @@ async def run_check(bus: EventBus, questionnaire: dict, facts: list[str]) -> Pep
         kind="fast",
         system_prompt=CHECK_SYSTEM,
         user_prompt="Vérifie ce questionnaire.\n\n" + json.dumps(payload, ensure_ascii=False, indent=2),
-        schema=PepiteCheck,
+        schema=PepiteReview,
         start_text="Je relis tes réponses",
         done_text="Vérification terminée",
     )
@@ -119,7 +123,7 @@ async def run_plan(
     payload = {
         "questionnaire": questionnaire,
         "verification": check.model_dump(mode="json", include={
-            "coherent", "risk_label", "suggested_max_volatility", "suggested_max_position_weight", "issues", "flags",
+            "coherent", "risk_label", "risk_aversion", "suggested_max_position_weight", "issues", "flags",
         }),
         "ajustement_du_client": adjustment or None,
     }

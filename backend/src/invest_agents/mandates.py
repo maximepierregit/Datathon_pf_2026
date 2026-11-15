@@ -20,6 +20,7 @@ class Mandate:
     description: str
     guidance: str
     vol_cap_factor: Optional[float]  # fraction de la volatilité maximale du profil; None = pas de plafond propre
+    risk_aversion: Optional[float] = None  # coefficient A de l'objectif mean_variance
 
 
 MANDATES: list[Mandate] = [

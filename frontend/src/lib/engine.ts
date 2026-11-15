@@ -36,16 +36,26 @@ export function emptyConstraints(): Constraints {
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 
+// Mêmes règles que risk_position() de backend/src/invest_agents/monport.py, qui en tire l'aversion au risque A
+// donnée à l'optimiseur. Une catégorie par tranche de 0,2 de S.
+const OBJECTIVE_TOLERANCE = { securiser: 0, fructifier: 0.5, 'viser-haut': 1 }
+const RISK_LABELS = ['Très prudent', 'Prudent', 'Équilibré', 'Audacieux', 'Très audacieux']
+
+/** S, de 0 (très prudent) à 1 (très audacieux) : capacité (horizon, âge) et tolérance (baisse, objectif, aisance). */
+export function riskPosition(p: Profile): number {
+  const capacity = 0.6 * clamp((Math.min(p.horizon, 20) - 1) / 19, 0, 1) + 0.4 * clamp((75 - p.age) / 50, 0, 1)
+  const tolerance = 0.5 * clamp(p.lossReaction / 3, 0, 1) + 0.3 * OBJECTIVE_TOLERANCE[p.objective] + 0.2 * clamp((p.comfort - 1) / 4, 0, 1)
+  // La tolérance ne dépasse pas la capacité de plus de 3 crans sur 24.
+  return clamp(Math.min((capacity + tolerance) / 2, capacity + 0.125), 0, 1)
+}
+
 /** Score de risque 5–95 tiré du profil. */
 export function riskScore(p: Profile): number {
-  const age = p.age < 30 ? 20 : p.age < 45 ? 12 : p.age < 60 ? 4 : -10
-  const horizon = Math.min(p.horizon, 25)
-  const objective = { securiser: 0, fructifier: 15, 'viser-haut': 30 }[p.objective]
-  return clamp(Math.round(age + horizon + objective + p.lossReaction * 10), 5, 95)
+  return Math.round(5 + 90 * riskPosition(p))
 }
 
 export function riskLabel(score: number): string {
-  return score < 35 ? 'Prudent' : score < 65 ? 'Modéré' : 'Audacieux'
+  return RISK_LABELS[Math.min(4, Math.floor(clamp((score - 5) / 90, 0, 1) / 0.2))]
 }
 
 const level = (c: Constraints, block: ConstraintBlock, id: string): Level => c[block][id] ?? 0

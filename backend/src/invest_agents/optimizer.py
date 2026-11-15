@@ -18,7 +18,7 @@ from .data import UNKNOWN
 from .data import Market
 from .schemas import Constraint, ConstraintCheck, ConstraintType as T, PortfolioMetrics
 
-Objective = Literal["min_volatility", "max_sharpe", "max_return"]
+Objective = Literal["min_volatility", "max_sharpe", "max_return", "mean_variance"]
 MIN_POSITION_WEIGHT = 0.01  # chaque titre retenu pèse au moins 1 %
 
 
@@ -51,12 +51,17 @@ def optimize(
     constraints: list[Constraint],
     *,
     vol_cap: Optional[float] = None,
+    risk_aversion: Optional[float] = None,
 ) -> OptimizationResult:
     """Optimise les poids d'une sélection de titres.
 
     `vol_cap` est un plafond de volatilité propre au mandat. Il s'ajoute aux contraintes de l'utilisateur
     (le plus strict gagne). Il est indispensable pour `max_return`, sinon le résultat se concentre.
+    `risk_aversion` est le coefficient A de `mean_variance` (1 très audacieux … 25 très prudent):
+    on maximise μᵀw − (A/2)·wᵀΣw.
     """
+    if objective == "mean_variance" and not risk_aversion:
+        raise ValueError("L'objectif mean_variance exige un coefficient d'aversion au risque.")
     s = get_settings()
     hard = [c for c in constraints if c.hard]
 
@@ -163,6 +168,10 @@ def optimize(
     elif objective == "max_return":
         fun = lambda w: float(-(mu @ w))  # noqa: E731
         jac = lambda w: -mu  # noqa: E731
+    elif objective == "mean_variance":
+        a = float(risk_aversion or 1.0)
+        fun = lambda w: float(-(mu @ w) + a / 2 * (w @ cov @ w))  # noqa: E731
+        jac = lambda w: -mu + a * (cov @ w)  # noqa: E731
     else:
 
         def fun(w: np.ndarray) -> float:

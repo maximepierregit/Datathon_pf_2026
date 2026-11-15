@@ -45,6 +45,7 @@ from .schemas import (
     InvestorProfile,
     JudgeVerdict,
     PepiteCheck,
+    PepiteReview,
     Portfolio,
     Position,
 )
@@ -125,11 +126,20 @@ CRYPTO_TARGETS = ("Crypto", "Alternative")
 NO_CRYPTO = {"conservateur", "modere"}  # pas de crypto dans un portefeuille qui suit un profil prudent
 PROFILE_NOTE = "Répartition du profil"
 
-# Objectif d'optimisation de chaque gestionnaire. Cohérent: trois objectifs pour que la concurrence ait un sens
-# (les mandats Défensif / Équilibré / Croissance de mandates.py). Incohérent: « Ton profil » suit le profil de risque.
-VARIANT_OBJECTIVES = {"prudent": "min_volatility", "equilibre": "max_sharpe", "conviction": "max_return"}
-PROFILE_OBJECTIVES = {"conservateur": "min_volatility", "modere": "min_volatility", "equilibre": "max_sharpe",
-                      "dynamique": "max_return", "agressif": "max_return"}
+# Aversion au risque. Le questionnaire donne une position S (0 très prudent … 1 très audacieux), convertie en
+# coefficient A (1 très audacieux … 25 très prudent) pour l'objectif moyenne-variance de l'optimiseur.
+# Mêmes règles que riskPosition() et riskAversion() de frontend/src/lib/engine.ts.
+OBJECTIVE_TOLERANCE = {"securiser": 0.0, "fructifier": 0.5, "viser-haut": 1.0}
+CAPACITY_MARGIN = 0.125  # la tolérance ne dépasse pas la capacité de plus de 3 crans sur 24
+ADJUSTMENT_STEP = 0.05  # un cran d'ajustement de Pépite (au plus 2 crans, une demi-catégorie)
+# Une catégorie par tranche de 0,2 de S, bornes de A du tableau des profils (interpolation logarithmique).
+AVERSION_ANCHORS = [(0.0, 25.0), (0.2, 14.0), (0.4, 7.0), (0.6, 3.5), (0.8, 1.5), (1.0, 1.0)]
+VOL_ANCHORS = [(0.0, 0.06), (0.2, 0.08), (0.4, 0.11), (0.6, 0.14), (0.8, 0.18), (1.0, 0.25)]  # filet de sécurité
+STOCK_ANCHORS = [(0.0, 0.07), (0.2, 0.09), (0.4, 0.11), (0.6, 0.13), (0.8, 0.17), (1.0, 0.22)]
+RISK_LABELS = ["conservateur", "modere", "equilibre", "dynamique", "agressif"]  # très prudent … très audacieux
+# Cohérent: trois variantes du même profil, à une demi-catégorie l'une de l'autre. Incohérent: « Ton profil » et
+# « Tes contraintes » suivent le profil; « Tes préférences » l'ignore (meilleur rendement pour le risque).
+SLOT_SHIFT = {"prudent": -0.1, "equilibre": 0.0, "conviction": 0.1}
 GUIDANCE = {
     "min_volatility": "Cherche les variations les plus douces: FNB d'obligations, titres défensifs, actifs peu corrélés.",
     "max_sharpe": "Cherche le meilleur rendement pour le risque pris. Diversifie par secteur, pays et classe d'actifs.",
@@ -217,11 +227,56 @@ def to_form(profile: dict, prefs: dict, market: Market) -> tuple[InvestorForm, l
 # --------------------------------------------------------------------------- #
 # Faits calculés: mêmes règles que riskScore() et coherenceWarnings() de frontend/src/lib/engine.ts
 # --------------------------------------------------------------------------- #
+def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
+    return min(hi, max(lo, v))
+
+
+def capacity(profile: dict) -> float:
+    """Ce que le client peut se permettre: horizon et âge, de 0 à 1."""
+    h = (min(float(profile.get("horizon", 10)), 20) - 1) / 19
+    a = (75 - float(profile.get("age", 35))) / 50
+    return 0.6 * _clamp(h) + 0.4 * _clamp(a)
+
+
+def tolerance(profile: dict) -> float:
+    """Ce que le client veut supporter: réaction à une baisse, objectif, aisance, de 0 à 1."""
+    r = float(profile.get("lossReaction", 2)) / 3
+    o = OBJECTIVE_TOLERANCE.get(str(profile.get("objective")), 0.5)
+    c = (float(profile.get("comfort", 3)) - 1) / 4
+    return 0.5 * _clamp(r) + 0.3 * o + 0.2 * _clamp(c)
+
+
+def risk_position(profile: dict, adjustment: int = 0) -> float:
+    """S, de 0 (très prudent) à 1 (très audacieux): moyenne des deux axes, la capacité limitant la tolérance."""
+    c = capacity(profile)
+    s = min((c + tolerance(profile)) / 2, c + CAPACITY_MARGIN)
+    return _clamp(s + ADJUSTMENT_STEP * max(-2, min(2, adjustment)))
+
+
+def _interpolate(s: float, anchors: list[tuple[float, float]], log: bool = False) -> float:
+    for (s0, v0), (s1, v1) in zip(anchors, anchors[1:]):
+        if s <= s1:
+            t = (_clamp(s) - s0) / (s1 - s0)
+            return v0 * (v1 / v0) ** t if log else v0 + (v1 - v0) * t
+    return anchors[-1][1]
+
+
+def risk_aversion(s: float) -> float:
+    """Coefficient A donné à l'optimiseur: 25 très prudent … 1 très audacieux."""
+    return round(_interpolate(s, AVERSION_ANCHORS, log=True), 2)
+
+
+def risk_label(s: float) -> str:
+    return RISK_LABELS[min(4, int(_clamp(s) / 0.2))]
+
+
 def risk_score(profile: dict) -> int:
-    age = int(profile.get("age", 35))
-    points = (20 if age < 30 else 12 if age < 45 else 4 if age < 60 else -10) + min(int(profile.get("horizon", 10)), 25)
-    points += {"securiser": 0, "fructifier": 15, "viser-haut": 30}.get(str(profile.get("objective")), 15)
-    return min(95, max(5, points + int(profile.get("lossReaction", 2)) * 10))
+    """Score 5–95 du frontend (riskScore()), tiré de S."""
+    return front_score(risk_position(profile))
+
+
+def front_score(s: float) -> int:
+    return math.floor(5 + 90 * s + 0.5)  # arrondi de Math.round, pas celui de round() (au pair)
 
 
 def coherence_facts(profile: dict, prefs: dict) -> list[str]:
@@ -243,18 +298,40 @@ def coherence_facts(profile: dict, prefs: dict) -> list[str]:
     return out
 
 
-def fallback_check(profile: dict, facts: list[str]) -> PepiteCheck:
-    """Si Pépite ne répond pas: profil tiré du score du frontend, cohérence tirée des faits calculés."""
-    score = risk_score(profile)
-    label = ("conservateur" if score < 25 else "modere" if score < 45 else "equilibre" if score < 65
-             else "dynamique" if score < 80 else "agressif")
-    vol = {"conservateur": 0.07, "modere": 0.10, "equilibre": 0.13, "dynamique": 0.16, "agressif": 0.20}[label]
-    weight = {"conservateur": 0.08, "modere": 0.10, "equilibre": 0.12, "dynamique": 0.15, "agressif": 0.20}[label]
+def computed_profile(profile: dict) -> dict:
+    """Le profil de risque calculé, tel que Pépite le reçoit."""
+    s = risk_position(profile)
+    return {"capacite": round(capacity(profile), 2), "tolerance": round(tolerance(profile), 2),
+            "libelle": risk_label(s), "aversion_au_risque": risk_aversion(s)}
+
+
+def assess(profile: dict, review: PepiteReview | PepiteCheck, adjustment: int = 0) -> PepiteCheck:
+    """Le profil de risque vient du code; Pépite apporte le texte, la cohérence et, au plus, ±2 crans d'ajustement."""
+    s = risk_position(profile, adjustment)
     return PepiteCheck(
-        risk_score=max(1, min(10, round(score / 10))), risk_label=label, suggested_max_volatility=vol,
-        suggested_max_position_weight=weight, summary="J’ai relu tes réponses.", coherent=not facts,
-        issues=[CoherenceIssue(title="À vérifier", detail=f) for f in facts],
+        **review.model_dump(include={"summary", "key_points", "flags", "coherent", "issues"}),
+        risk_score=max(1, min(10, round(1 + 9 * s))), risk_label=risk_label(s), risk_position=round(s, 3),
+        risk_aversion=risk_aversion(s), suggested_max_volatility=round(_interpolate(s, VOL_ANCHORS), 3),
+        suggested_max_position_weight=round(_interpolate(s, STOCK_ANCHORS), 3),
     )
+
+
+def fallback_check(profile: dict, facts: list[str]) -> PepiteCheck:
+    """Si Pépite ne répond pas: cohérence tirée des faits calculés."""
+    return assess(profile, PepiteReview(summary="J’ai relu tes réponses.", coherent=not facts,
+                                        issues=[CoherenceIssue(title="À vérifier", detail=f) for f in facts]))
+
+
+def slot_position(check: PepiteCheck, slot: str) -> Optional[float]:
+    """La position S que suit un gestionnaire; None pour « Tes préférences » (profil incohérent), qui ignore le profil."""
+    if not check.coherent:
+        return None if slot == "conviction" else check.risk_position
+    return _clamp(check.risk_position + SLOT_SHIFT[slot])
+
+
+def slot_volatility(check: PepiteCheck, slot: str) -> Optional[float]:
+    s = slot_position(check, slot)
+    return None if s is None else round(_interpolate(s, VOL_ANCHORS), 3)
 
 
 # --------------------------------------------------------------------------- #
@@ -308,9 +385,10 @@ def fallback_plan(check: PepiteCheck, prefs: list[Constraint]) -> dict[str, tupl
     exclusions = [c for c in prefs if c.type.value.startswith("exclude_")]
     if check.coherent:
         return {
-            "prudent": ("Un cran plus prudent que tes réponses.", prefs + _limits(vol * 0.85, weight)),
+            "prudent": ("Un cran plus prudent que tes réponses.", prefs + _limits(slot_volatility(check, "prudent"), weight)),
             "equilibre": ("Fidèle à tes réponses.", prefs + _limits(vol, weight)),
-            "conviction": ("Un cran plus audacieux que tes réponses.", prefs + _limits(vol * 1.15, weight)),
+            "conviction": ("Un cran plus audacieux que tes réponses.",
+                           prefs + _limits(slot_volatility(check, "conviction"), weight)),
         }
     return {
         "prudent": ("Seulement les limites de ton profil.", exclusions + _limits(vol, weight)),
@@ -319,13 +397,19 @@ def fallback_plan(check: PepiteCheck, prefs: list[Constraint]) -> dict[str, tupl
     }
 
 
-def objective_for(slot: str, check: PepiteCheck, constraints: list[Constraint]) -> str:
-    objective = (VARIANT_OBJECTIVES[slot] if check.coherent
-                 else PROFILE_OBJECTIVES.get(check.risk_label, "max_sharpe") if slot == "prudent" else "max_sharpe")
-    # max_return sans plafond de volatilité concentre le portefeuille (voir optimizer.optimize)
-    if objective == "max_return" and not any(c.hard and c.type is T.MAX_VOLATILITY for c in constraints):
-        return "max_sharpe"
-    return objective
+def objective_for(slot: str, check: PepiteCheck) -> tuple[str, Optional[float]]:
+    """Moyenne-variance avec le A du gestionnaire; « Tes préférences » (profil incohérent) vise le meilleur
+    rendement pour le risque, sans aversion tirée du profil."""
+    s = slot_position(check, slot)
+    return ("max_sharpe", None) if s is None else ("mean_variance", risk_aversion(s))
+
+
+def guidance_for(aversion: Optional[float]) -> str:
+    if aversion is None:
+        return GUIDANCE["max_sharpe"]
+    style = GUIDANCE["min_volatility" if aversion >= 7 else "max_sharpe" if aversion >= 3.5 else "max_return"]
+    return (f"Aversion au risque A = {aversion:g} (1 très audacieux, 25 très prudent): l'optimiseur maximise le "
+            f"rendement moins A/2 fois la variance. {style}")
 
 
 def bond_floors(check: PepiteCheck) -> dict[str, float]:
@@ -403,6 +487,10 @@ def build_profiles(plan: Optional[ConstraintPlan], check: PepiteCheck, prefs: li
             constraints = promote_preferences(constraints)
         if slot in floors:
             constraints = follow_profile(constraints, floors[slot], check.risk_label, allowed)
+        # Le plafond de volatilité vient du code, à la position du gestionnaire (filet de sécurité sous A).
+        constraints = [c for c in constraints if c.type is not T.MAX_VOLATILITY]
+        if (vol := slot_volatility(check, slot)) is not None:
+            constraints.append(Constraint(type=T.MAX_VOLATILITY, value=vol, hard=True, note="Limite du profil"))
         out[slot] = (rationale, constraints)
     return out, replaced
 
@@ -468,7 +556,7 @@ def front_class(row: Any) -> str:
 
 
 def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, risk_report: Optional[dict],
-                 risk_score_10: int, skipped: list[str], extra: list[str], name: str, tagline: str) -> dict:
+                 position: float, skipped: list[str], extra: list[str], name: str, tagline: str) -> dict:
     holdings, allocation, fees = [], {c: 0.0 for c in CLASSES}, 0.0
     for pos in p.positions:
         row = market.assets.loc[pos.symbol] if pos.symbol in market.assets.index else pos.model_dump()
@@ -492,7 +580,7 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
         "id": p.id,
         "name": name,
         "tagline": tagline,
-        "riskScore": min(95, max(5, risk_score_10 * 10)),
+        "riskScore": front_score(position),
         "holdings": holdings,
         "allocation": {k: round(v, 4) for k, v in allocation.items()},
         # Mêmes formules que metricsOf() dans frontend/src/lib/engine.ts, sur les chiffres de l'optimiseur.
@@ -580,7 +668,8 @@ def _questionnaire(payload: dict) -> tuple[dict, dict]:
 async def _check(bus: EventBus, profile: dict, prefs: dict) -> PepiteCheck:
     facts = coherence_facts(profile, prefs)
     try:
-        return await run_check(bus, {"profile": profile, "constraints": prefs}, facts)
+        review = await run_check(bus, {"profile": profile, "constraints": prefs}, computed_profile(profile), facts)
+        return assess(profile, review)
     except AgentError:
         logger.exception("Vérification de Pépite en échec, repli sur les règles du code")
         return fallback_check(profile, facts)
@@ -611,8 +700,8 @@ async def build_portfolios(payload: dict, bus: EventBus, translator: Translator)
     profile, prefs = _questionnaire(payload)
     market = await asyncio.to_thread(get_market)
     form, skipped = to_form(profile, prefs, market)
-    try:
-        check = PepiteCheck.model_validate(payload.get("check"))
+    try:  # le profil de risque est recalculé: seuls le texte et la cohérence de Pépite sont repris
+        check = assess(profile, PepiteCheck.model_validate(payload.get("check")))
     except ValidationError:
         check = await _check(bus, profile, prefs)
     coherent = check.coherent
@@ -628,6 +717,10 @@ async def build_portfolios(payload: dict, bus: EventBus, translator: Translator)
     except AgentError:
         logger.exception("Plan de Pépite en échec, repli sur les profils du code")
         plan = None
+    if plan and adjustment and plan.risk_adjustment:  # « je veux dormir tranquille »: au plus une demi-catégorie
+        check = assess(profile, check, plan.risk_adjustment)
+        if plan.risk_adjustment_reason:
+            front(bus, pepite(plan.risk_adjustment_reason))
     profiles, replaced = build_profiles(plan, check, list(form.constraints), allowed)
     if replaced:
         logger.info("%d profil(s) de Pépite remplacé(s) par ceux du code", replaced)
@@ -648,9 +741,9 @@ async def build_portfolios(payload: dict, bus: EventBus, translator: Translator)
     investors = {s: InvestorProfile(form=form, assessment=check, constraints=profiles[s][1]) for s in SLOTS}
 
     async def manage(slot: str) -> Portfolio:
-        objective = objective_for(slot, check, profiles[slot][1])
+        objective, aversion = objective_for(slot, check)
         mandate = Mandate(id=slot, name=names[slot], objective=objective, description=profiles[slot][0],
-                          guidance=GUIDANCE[objective], vol_cap_factor=None)
+                          guidance=guidance_for(aversion), vol_cap_factor=None, risk_aversion=aversion)
         try:
             return await run_portfolio_manager(bus, market, mandate, investors[slot], investors[slot].constraints)
         except Exception as exc:  # noqa: BLE001
@@ -709,7 +802,7 @@ async def build_portfolios(payload: dict, bus: EventBus, translator: Translator)
     # sur les portefeuilles.
     front(bus, status("risques", "done", f"{n} mise(s) en garde à lire." if n else "Rien de particulier à signaler."))
     front(bus, {"type": "portfolios", "portfolios": {
-        p.id: to_portfolio(p, v, market, report, check.risk_score, skipped, notes[p.id], name, tagline)
+        p.id: to_portfolio(p, v, market, report, check.risk_position, skipped, notes[p.id], name, tagline)
         for p, v, name, tagline in presented
     }})
     front(bus, pepite("Voilà! Ton portefeuille t’attend." if coherent
