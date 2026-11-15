@@ -19,7 +19,9 @@ from .runtime import get_runtime_settings
 from .catalog import DIMENSION_COLUMN, detect_conflicts, excluded_mask, validate_all
 from .market import Market
 from .events import EventBus
+from . import factors
 from .allocator import optimize
+from .tools import factor_fits
 from .schemas import (
     CoherenceIssue,
     Constraint,
@@ -86,6 +88,13 @@ THEME_SECTORS = {
 # d'actions ont la classe « Equity », comme les actions.
 DIRECT_TYPES = ("Stock", "Cryptocurrency")
 BLOCK_LABELS = {"classes": "classe", "regions": "région", "themes": "thématique", "factors": "facteur"}
+# Facteurs: identifiants du frontend (data/catalog.ts) -> facteurs du moteur (factors.py).
+FACTOR_TARGETS = {"taille": "small_cap", "qualite": "quality", "momentum": "momentum", "value": "value",
+                  "croissance": "growth"}
+# Exposition visée par niveau, en écarts-types: Plus/Moins = légère inclinaison, Imposer/Exclure = nette (dure).
+FACTOR_LEVELS = {2: 0.5, 1: 0.2, -1: -0.2, -2: -0.5}
+FACTOR_NOTE = "MonPort: factors."
+FRONT_FACTORS = {engine: front for front, engine in FACTOR_TARGETS.items()}
 
 # Poids associés à chaque niveau: (Moins = plafond souple, Plus = plancher souple, Imposer = plancher dur)
 LEVEL_WEIGHTS = {"classes": (0.25, 0.15, 0.10), "regions": (0.10, 0.10, 0.05), "themes": (0.10, 0.10, 0.05)}
@@ -164,6 +173,32 @@ def direct_types(allowed: dict[str, list[str]]) -> list[str]:
     return [present[t.lower()] for t in DIRECT_TYPES if t.lower() in present]
 
 
+def factor_constraints(prefs: dict, allowed: dict[str, list[str]]) -> tuple[list[Constraint], list[str]]:
+    """Échelle des facteurs -> exposition minimale ou maximale (z-score moyen des actions détenues en direct)."""
+    chosen = {f: level for f, level in (prefs.get("factors") or {}).items() if level}
+    if not chosen:
+        return [], []
+    if prefs.get("vehicles") == "fnb":
+        return [], ["facteurs (ils ne visent que les actions détenues en direct, et tu as choisi FNB seulement)"]
+    present = set(allowed.get("factor", []))
+    out, skipped = [], []
+    for item, level in chosen.items():
+        factor = FACTOR_TARGETS.get(item)
+        if factor not in present:
+            skipped.append(f"facteur « {item} »")
+            continue
+        kind = T.MIN_FACTOR_EXPOSURE if level > 0 else T.MAX_FACTOR_EXPOSURE
+        out.append(Constraint(type=kind, target=factor, value=FACTOR_LEVELS[level], hard=abs(level) == 2,
+                              note=f"{FACTOR_NOTE}{item} = {level}"))
+    return out, skipped
+
+
+def is_exclusion(c: Constraint) -> bool:
+    """Une exclusion du client, appliquée aux 3 profils: exclude_*, ou un facteur au niveau Exclure."""
+    return c.type.value.startswith("exclude_") or (
+        c.type is T.MAX_FACTOR_EXPOSURE and c.hard and (c.note or "").startswith(FACTOR_NOTE))
+
+
 def preference_constraints(prefs: dict, allowed: dict[str, list[str]]) -> tuple[list[Constraint], list[str]]:
     """Traduit l'échelle Exclure … Imposer en contraintes du catalogue. Retourne aussi ce qui n'a pas pu l'être."""
     out: list[Constraint] = []
@@ -187,7 +222,9 @@ def preference_constraints(prefs: dict, allowed: dict[str, list[str]]) -> tuple[
                 else:
                     out.append(Constraint(type=floor, target=t, value=impose if level == 2 else plus,
                                           hard=level == 2, note=note))
-    skipped += [f"facteur « {f} »" for f, level in (prefs.get("factors") or {}).items() if level]
+    factors_out, factors_skipped = factor_constraints(prefs, allowed)
+    out += factors_out
+    skipped += factors_skipped
 
     if prefs.get("vehicles") == "fnb":
         out += [Constraint(type=T.EXCLUDE_INSTRUMENT_TYPE, target=t, hard=True, note="MonPort: FNB seulement")
@@ -372,7 +409,7 @@ def promote_preferences(constraints: list[Constraint]) -> list[Constraint]:
 def fallback_plan(check: PepiteCheck, prefs: list[Constraint]) -> dict[str, tuple[str, list[Constraint]]]:
     """Profils écrits par le code si Pépite échoue ou si l'un des siens est inutilisable."""
     vol, weight = check.suggested_max_volatility, check.suggested_max_position_weight
-    exclusions = [c for c in prefs if c.type.value.startswith("exclude_")]
+    exclusions = [c for c in prefs if is_exclusion(c)]
     if check.coherent:
         return {
             "prudent": ("Un cran plus prudent que tes réponses.", prefs + _limits(slot_volatility(check, "prudent"), weight)),
@@ -436,7 +473,9 @@ def ensure_feasible(market: Market, constraints: list[Constraint]) -> tuple[list
     if not caps:
         return constraints, None
     eligible = market.assets[~excluded_mask(market, hard)]
-    picks = eligible.sort_values("ann_vol").index[:30].tolist()
+    picks = eligible.sort_values("ann_vol").index[:24].tolist()
+    # Les contraintes de facteurs exigent des actions qui les respectent: les moins volatiles d'entre elles.
+    picks += eligible.loc[factor_fits(eligible, hard)].sort_values("ann_vol").index[:8].tolist()
     for c in hard:  # les poids minimaux exigent des titres de leur groupe
         column = DIMENSION_COLUMN.get(c.type.value.removeprefix("min_").removesuffix("_weight"))
         if c.type.value.startswith("min_") and c.target and column:
@@ -457,7 +496,7 @@ def build_profiles(plan: Optional[ConstraintPlan], check: PepiteCheck, prefs: li
     """Retourne les 3 profils par slot et le nombre de profils remplacés par ceux du code."""
     fallback = fallback_plan(check, prefs)
     floors = bond_floors(check)
-    exclusions = [c for c in prefs if c.type.value.startswith("exclude_")]
+    exclusions = [c for c in prefs if is_exclusion(c)]
     proposed = {p.slot: p for p in (plan.profiles if plan else [])}
     out, replaced = {}, 0
     for slot in SLOTS:
@@ -589,7 +628,20 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
         },
         "warnings": warnings,
         "agentNotes": agent_notes,
+        "factors": factor_view(p),
     }
+
+
+def factor_view(p: Portfolio) -> dict:
+    """Expositions aux facteurs et actions notées (FactorView de frontend/src/types.ts), identifiants du frontend."""
+    weights = {pos.symbol: pos.weight for pos in p.positions}
+    exposure, coverage = factors.exposures(weights)
+    scores = factors.scores_for(weights)
+    names = {pos.symbol: pos.name for pos in p.positions}
+    stocks = [{"ticker": s, "name": names[s], "weight": weights[s],
+               "scores": {FRONT_FACTORS[f]: round(float(scores.at[s, f]), 2) for f in factors.FACTORS}}
+              for s in sorted(scores.index, key=lambda s: -weights[s])]
+    return {"coverage": coverage, "exposure": {FRONT_FACTORS[f]: v for f, v in exposure.items()}, "stocks": stocks}
 
 
 # --------------------------------------------------------------------------- #
@@ -598,6 +650,7 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
 TOOL_TEXT = {
     "describe_universe": "tour d’horizon des placements",
     "screen_assets": "recherche de placements",
+    "screen_factor": "recherche d’actions selon tes styles",
     "optimize_portfolio": "calcul des poids",
     "get_latest_macro_snapshot": "lecture du contexte économique",
     "get_macro_history": "comparaison avec des périodes passées",

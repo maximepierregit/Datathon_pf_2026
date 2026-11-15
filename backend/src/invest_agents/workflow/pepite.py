@@ -106,7 +106,10 @@ Règles communes
   exclude_asset_class pour ça: une classe d'actifs regroupe titres et FNB (« Equity » contient les FNB d'actions).
 - Traduction de l'échelle: Imposer -> min_*_weight dur (0.05 à 0.15); Plus -> min_*_weight préférence (hard=false);
   Moins -> max_*_weight préférence; Exclure -> exclude_*. Utilise exactement les libellés de cibles du catalogue.
-  Une préférence sans équivalent dans le catalogue (ex.: facteurs, IA) est ignorée.
+  Facteurs (taille -> small_cap, qualite -> quality, momentum, value, croissance -> growth): Imposer -> min_factor_exposure 0.5 dur;
+  Plus -> min_factor_exposure 0.2 préférence; Moins -> max_factor_exposure -0.2 préférence; Exclure ->
+  max_factor_exposure -0.5 dur, dans les 3 profils. Aucun facteur avec FNB seulement (ils ne visent que les actions).
+  Une préférence sans équivalent dans le catalogue (ex.: IA) est ignorée.
 - Le reste du profil de risque est ajouté par le code: plafond de volatilité, aversion au risque donnée à l'optimiseur,
   part d'obligations des portefeuilles qui suivent le profil. N'écris ni max_volatility ni plancher d'obligations.
 - Valeurs en fractions (0.10 = 10 %). `source` vaut "form".

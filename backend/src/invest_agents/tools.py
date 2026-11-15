@@ -13,14 +13,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+import pandas as pd
 from strands import tool
 
+from . import factors
 from .runtime import get_runtime_settings
-from .catalog import evaluate, excluded_mask
+from .catalog import DIMENSION_COLUMN, evaluate, excluded_mask
 from .macro import get_macro, history, latest_snapshot
 from .market import Market
 from .allocator import Objective, OptimizationResult, optimize
-from .schemas import Constraint
+from .schemas import Constraint, ConstraintType as T
 
 
 # --------------------------------------------------------------------------- #
@@ -169,6 +171,58 @@ def make_pm_tools(market: Market, state: PMState) -> list:
         return {"n_results": int(len(a)), "assets": market._rows(a)}
 
     @tool
+    def screen_factor(
+        factor: str,
+        direction: str = "high",
+        sector: Optional[str] = None,
+        country: Optional[str] = None,
+        max_volatility: Optional[float] = None,
+        min_score: Optional[float] = None,
+        sort_by: str = "score",
+        limit: int = 20,
+    ) -> dict:
+        """Actions détenues en direct de l'univers admissible, avec leurs scores de facteurs (z-score dans leur
+        secteur: 0 = moyenne du secteur, +1 = un écart-type mieux). Les FNB n'ont pas de score. Sers-t'en quand le
+        profil contient min_factor_exposure ou max_factor_exposure: l'exposition du portefeuille est la moyenne des
+        scores de ses actions, pondérée par leur poids, et au moins 10 % du portefeuille doit être en actions notées.
+        Les actions les mieux notées sont souvent très volatiles: sous un plafond de volatilité, filtre par
+        `min_score` (le seuil du profil) et trie par `ann_vol`.
+
+        Args:
+            factor: "momentum", "quality", "value", "growth" ou "small_cap" (petites capitalisations).
+            direction: "high" pour les scores élevés (min_factor_exposure), "low" pour les bas (max_factor_exposure).
+            sector: Secteur exact à conserver (optionnel).
+            country: Pays exact à conserver (optionnel).
+            max_volatility: Volatilité annualisée maximale d'une action, en fraction (0.25 = 25 %) (optionnel).
+            min_score: Seuil de score à respecter: au moins ce score pour "high", au plus pour "low" (optionnel).
+            sort_by: "score" (le plus extrême d'abord), "ann_vol" (le moins volatil d'abord) ou "sharpe".
+            limit: Nombre maximal de résultats (max 50).
+        """
+        if factor not in factors.FACTORS:
+            return {"error": f"Facteur inconnu: {factor!r}. Valeurs possibles: {', '.join(factors.FACTORS)}."}
+        a = eligible_assets()
+        if sector:
+            a = a[a["sector"].str.lower() == sector.lower()]
+        if country:
+            a = a[a["country"].str.lower() == country.lower()]
+        if max_volatility is not None:
+            a = a[a["ann_vol"] <= max_volatility]
+        scores = factors.scores_for(a.index)
+        if min_score is not None and not scores.empty:
+            scores = scores.loc[factors.meets(scores, [(factor, direction != "low", float(min_score))])]
+        if scores.empty:
+            return {"n_results": 0, "assets": [], "message": "Aucune action notée ne correspond à ces filtres."}
+        if sort_by in ("ann_vol", "sharpe"):
+            index = a.loc[scores.index].sort_values(sort_by, ascending=(sort_by == "ann_vol")).index
+        else:
+            index = scores[factor].sort_values(ascending=(direction == "low")).index
+        order = pd.Index(index[: max(1, min(limit, 50))])
+        rows = market._rows(a.loc[order])
+        for row in rows:
+            row["factor_scores"] = {f: round(float(scores.at[row["symbol"], f]), 2) for f in factors.FACTORS}
+        return {"n_results": len(rows), "factor": factor, "assets": rows}
+
+    @tool
     def optimize_portfolio(symbols: list[str]) -> dict:
         """Calcule les poids optimaux pour une sélection de titres, selon l'objectif de ton mandat et en
         respectant toutes les contraintes dures de l'utilisateur. Le dernier appel réussi devient ton portefeuille.
@@ -199,9 +253,16 @@ def make_pm_tools(market: Market, state: PMState) -> list:
                 "country_weights": m.country_weights,
                 "asset_class_weights": m.asset_class_weights,
             }
+        if result.weights:
+            exposure, covered = factors.exposures(result.weights)
+            if exposure:
+                out["factor_exposure"] = {"by_factor": exposure, "scored_weight": covered}
         return out
 
-    return [describe_universe, screen_assets, optimize_portfolio, *make_macro_tools()]
+    tools = [describe_universe, screen_assets, optimize_portfolio, *make_macro_tools()]
+    if market.allowed_values()["factor"]:
+        tools.insert(2, screen_factor)
+    return tools
 
 
 def fallback_selection(market: Market, constraints: list[Constraint], objective: Objective) -> list[str]:
@@ -210,7 +271,34 @@ def fallback_selection(market: Market, constraints: list[Constraint], objective:
     a = market.assets[~excluded_mask(market, hard)]
     n = min(15, get_runtime_settings().max_assets_per_portfolio)
     key, asc = ("ann_vol", True) if objective == "min_volatility" else ("sharpe", False)
-    return a.sort_values(key, ascending=asc).head(n).index.tolist()
+    picks: list[str] = []
+    # Un poids minimal (plancher d'obligations, crypto imposée…) exige des titres de son groupe, d'abord: sur l'univers
+    # réel, les 15 meilleurs ratios de Sharpe sont tous des actions. 4 titres, pour tenir sous la limite de 40 %.
+    for c in hard:
+        column = DIMENSION_COLUMN.get(c.type.value.removeprefix("min_").removesuffix("_weight"))
+        if c.type.value.startswith("min_") and c.target and column:
+            group = a[a[column].astype(str).str.lower() == c.target.lower()]
+            picks += group.sort_values(key, ascending=asc).index[:4].tolist()
+    # Contraintes de facteurs: des actions qui respectent tous les seuils à la fois, les moins volatiles d'abord.
+    # Les mieux notées sont souvent très volatiles (sur l'univers réel, APP ou SNDK en qualité) et feraient
+    # dépasser le plafond de volatilité.
+    # Sous un plafond de volatilité, les actifs les plus calmes: sans eux, un profil prudent n'a aucune sélection valide.
+    if any(c.type is T.MAX_VOLATILITY for c in hard):
+        picks += a.sort_values("ann_vol").index[:10].tolist()
+    fits = factor_fits(a, hard)
+    picks += a.loc[fits].sort_values("ann_vol").index[:8].tolist()
+    picks += a.loc[fits].sort_values("sharpe", ascending=False).index[:4].tolist()
+    picks += a.sort_values(key, ascending=asc).head(n).index.tolist()
+    return list(dict.fromkeys(picks))[: get_runtime_settings().max_assets_per_portfolio]
+
+
+def factor_fits(eligible, hard: list[Constraint]) -> list[str]:
+    """Actions admissibles qui respectent à elles seules toutes les contraintes de facteurs dures; [] sans contrainte."""
+    scores = factors.scores_for(eligible.index)
+    tilts = [c for c in hard if c.type in (T.MIN_FACTOR_EXPOSURE, T.MAX_FACTOR_EXPOSURE) and c.target in scores.columns]
+    if not tilts:
+        return []
+    return factors.meets(scores, [(c.target, c.type is T.MIN_FACTOR_EXPOSURE, float(c.value or 0)) for c in tilts])
 
 
 # --------------------------------------------------------------------------- #
