@@ -48,9 +48,11 @@ LEGEND = """LÉGENDE DU JSON DU QUESTIONNAIRE
 - profile.comfort: aisance avec les placements, de 1 (débutant) à 5 (expert).
 - constraints.vehicles: "fnb" = FNB seulement (aucun titre détenu en direct), "titres" = titres individuels seulement
   (actions et crypto détenues en direct, aucun FNB, donc aucune obligation), "tous" = FNB et titres individuels.
-- constraints.classes, regions, themes: "exclure", ou un pourcentage de 0 à 100 que le client impose. Une clé absente
-  vaut Neutre: libre. Classes: % du portefeuille entier. Régions et thématiques: % des actions détenues en direct
-  (un FNB n'a ni pays ni secteur connu). Les pourcentages d'un même bloc font au plus 100.
+- constraints.classes, regions, themes: "exclure" (0 % exactement), ou un pourcentage EXACT de 0 à 100 que le client
+  impose. Une clé absente vaut Neutre: libre. Classes: % du portefeuille entier, tous les placements, FNB compris
+  (crypto = crypto détenue en direct). Régions et thématiques: % de la poche actions (actions en direct et FNB
+  d'actions), tenu par les seules actions détenues en direct, jamais par un FNB. Les pourcentages d'un même bloc font
+  au plus 100.
 - constraints.factors: échelle -2 Exclure, -1 Moins, 0 Neutre, 1 Plus, 2 Imposer. Une clé absente vaut Neutre."""
 
 TONE = (
@@ -108,8 +110,10 @@ Règles communes
 - Les exclusions du client (« exclure ») s'appliquent aux 3 profils.
 - Le code traduit lui-même le questionnaire et l'ajoute aux profils: les exclusions dans les 3, « FNB seulement »
   ({direct}) et « titres individuels seulement » (exclude_instrument_type), et les pourcentages saisis par le client,
-  imposés à ± 2 points dans les profils qui suivent ses préférences (min/max_asset_class_weight pour les classes,
-  min/max_country_share et min/max_sector_share pour les régions et les thématiques), et les facteurs (taille ->
+  imposés EXACTEMENT dans les profils qui suivent ses préférences (exact_asset_class_weight pour les classes,
+  exact_instrument_type_weight pour la crypto, en part du portefeuille entier; exact_country_weight,
+  exact_sector_weight et exact_theme_weight pour les régions et les thématiques, en part de la poche actions), et les
+  facteurs (taille ->
   small_cap, qualite -> quality, momentum, value, croissance -> growth: Imposer -> min_factor_exposure 0.5 dur;
   Plus -> min_factor_exposure 0.2; Moins -> max_factor_exposure -0.2; Exclure -> max_factor_exposure -0.5 dur,
   dans les 3 profils; aucun avec FNB seulement). Ne les réécris pas: ce que tu écris sur les mêmes cibles est
@@ -454,7 +458,8 @@ REBUILD_TASK = """Le client a confirmé les changements dont vous avez parlé da
    qu'il veut prendre, utilise `adjust_risk_position`. La cohérence du profil ne change pas.
 2. Réécris les 3 profils et envoie-les avec `submit_constraint_plan`, avec les mêmes règles qu'à la construction, à
    une différence près: ici, le code n'ajoute plus les pourcentages du questionnaire. Écris-les toi-même dans les
-   profils qui suivent les préférences (± 2 points, en fractions), ceux que le client a changés compris.
+   profils qui suivent les préférences (exact_*_weight, en fractions: du portefeuille entier pour les classes, de la
+   poche actions pour les régions et les thématiques), ceux que le client a changés compris.
    Corrige et renvoie si le code les refuse.
 3. `build_portfolios` (les trois), puis `judge_portfolios`. Si le juge demande de reconstruire et qu'il reste des
    relances: `build_portfolios` avec ces `slots` et leurs `instructions`, puis `judge_portfolios` de nouveau.

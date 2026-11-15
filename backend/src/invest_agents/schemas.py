@@ -41,6 +41,14 @@ class ConstraintType(str, Enum):
     MAX_COUNTRY_SHARE = "max_country_share"
     MIN_FACTOR_EXPOSURE = "min_factor_exposure"
     MAX_FACTOR_EXPOSURE = "max_factor_exposure"
+    # Questionnaire: pourcentage EXACT du portefeuille total (cash inclus). Classe d'actifs et type d'instrument:
+    # tous les instruments admissibles. Pays, secteur, thématique: actions détenues en direct seulement.
+    EXACT_ASSET_CLASS_WEIGHT = "exact_asset_class_weight"
+    EXACT_INSTRUMENT_TYPE_WEIGHT = "exact_instrument_type_weight"
+    EXACT_COUNTRY_WEIGHT = "exact_country_weight"
+    EXACT_SECTOR_WEIGHT = "exact_sector_weight"
+    EXACT_THEME_WEIGHT = "exact_theme_weight"
+    EXCLUDE_THEME = "exclude_theme"  # tags du Parquet, actions détenues en direct seulement
 
 
 class Constraint(BaseModel):
@@ -49,8 +57,9 @@ class Constraint(BaseModel):
     type: ConstraintType
     target: Optional[str] = Field(
         default=None,
-        description="Secteur, pays, classe d'actifs ou symbole visé. Pour les *_share, un ou plusieurs libellés "
-        "séparés par « | » (ex.: \"France|Germany\"). Null si le type n'a pas de cible.",
+        description="Secteur, pays, classe d'actifs, thématique ou symbole visé. Pour les *_share et les "
+        "exact_country/sector/theme_weight, un ou plusieurs libellés séparés par « | » (ex.: \"France|Germany\"). "
+        "Null si le type n'a pas de cible.",
     )
     value: Optional[float] = Field(
         default=None,

@@ -25,7 +25,8 @@ from .schemas import PortfolioMetrics
 logger = logging.getLogger(__name__)
 
 UNKNOWN = "Non classé"
-META_COLUMNS = ["name", "sector", "industry", "country", "currency", "asset_class", "instrument_type", "market"]
+# `theme`: tags vérifiés du Parquet (« ia;tech »), lus par les préférences thématiques des actions détenues en direct.
+META_COLUMNS = ["name", "sector", "industry", "country", "currency", "asset_class", "instrument_type", "market", "theme"]
 
 
 # --------------------------------------------------------------------------- #
@@ -204,6 +205,10 @@ class Market:
             "instrument_type": sorted(a["instrument_type"].dropna().astype(str).unique().tolist()),
             "symbol": sorted(a.index.tolist()),
             "factor": available_factors(a.index),
+            # Thématiques portées par au moins une action détenue en direct (les seules qui comptent).
+            "theme": sorted({t.strip() for kind, tags in zip(a["instrument_type"].astype(str),
+                                                             a["theme"] if "theme" in a else [None] * len(a))
+                             if kind == "Stock" and isinstance(tags, str) for t in tags.split(";") if t.strip()}),
         }
 
     def search(self, query: str, limit: int = 10) -> list[dict]:

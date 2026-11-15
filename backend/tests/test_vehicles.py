@@ -6,6 +6,7 @@ import pandas as pd
 
 from invest_agents import monport
 from invest_agents.catalog import agent_request, evaluate
+from invest_agents.config import INSTRUMENT_SELECTION
 from invest_agents.monport import drop_unreachable_floors, preference_constraints
 from invest_agents.schemas import Constraint, ConstraintType as T
 
@@ -49,10 +50,12 @@ def test_fnb_only_excludes_instrument_types_not_classes():
 
 
 def test_fnb_only_keeps_equity_etfs():
+    """Le moteur reçoit le mode d'instruments, pas une liste de symboles: les FNB d'actions restent admissibles."""
     mk, allowed = market()
     request = agent_request(mk, fnb_only(allowed))
-    assert set(request["excluded_symbols"]) == {"AAPL", "RY.TO", "BTC-CAD"}
-    assert request["excluded_asset_classes"] == []
+    assert request["instrument_selection"] == "etf_only"
+    assert request["excluded_symbols"] == [] and request["excluded_asset_classes"] == []
+    assert set(mk.assets.index[agent_mask(mk, fnb_only(allowed))]) == {"AAPL", "RY.TO", "BTC-CAD"}
 
 
 def test_fnb_only_flags_a_direct_stock():
@@ -82,6 +85,7 @@ def test_unreachable_floor_is_dropped_with_a_note(monkeypatch):
 
 
 def agent_mask(mk, constraints):
-    """Ce que le moteur exclurait, d'après la requête que lui envoie le catalogue."""
-    excluded = set(agent_request(mk, constraints)["excluded_symbols"])
-    return mk.assets.index.isin(sorted(excluded))
+    """Ce que le moteur exclurait, d'après la requête que lui envoie le catalogue (mode d'instruments et symboles)."""
+    request = agent_request(mk, constraints)
+    allowed_types = INSTRUMENT_SELECTION[request["instrument_selection"]]
+    return ~mk.assets["instrument_type"].isin(allowed_types) | mk.assets.index.isin(request["excluded_symbols"])
