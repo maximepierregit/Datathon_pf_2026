@@ -283,6 +283,10 @@ PORTFOLIO_HOLDINGS = {
     "max_marginal_utility_cost": 0.0001,
 }
 
+# Juge final, profil cohérent: points retirés (sur 10) à la note d'un portefeuille qui a dû être relancé avec des
+# contraintes assouplies (`allocator.optimize_with_relaxation`). Le gagnant se départage sur la note pénalisée.
+JUDGE_RELAUNCH_PENALTY = 3
+
 # Présélection du pipeline autonome (optimizer.run_pipeline) ; MonPort n'en a plus besoin (Markowitz global).
 CANDIDATES = {
     "enabled": True,

@@ -18,7 +18,7 @@ from ..catalog import describe
 from ..market import Market
 from ..events import EventBus
 from ..mandates import Mandate, vol_cap_for
-from ..allocator import optimize_universe
+from ..allocator import optimize_with_relaxation
 from ..schemas import Constraint, InvestorProfile, PMNarrative, Portfolio, Position
 from ..tools import MACRO_PROMPT, PMState, make_explain_tools
 from .base import AgentError, AgentHandle
@@ -128,17 +128,34 @@ async def run_pm_worker(
     state.vol_cap = vol_cap_for(mandate, profile.assessment.suggested_max_volatility)
     state.best, state.attempts, state.read_only = None, 0, True  # aucun outil ne modifie le portefeuille
 
+    card = f"gestionnaire-{mandate.id}"
     bus.emit("tool", step="5", agent=label, name="optimize_portfolio")
-    result = await asyncio.to_thread(optimize_universe, market, mandate.objective, pm_constraints,
-                                     vol_cap=state.vol_cap, risk_aversion=mandate.risk_aversion)
-    state.log.append(f"Markowitz global: {result.status} ({result.message})")
+    # Échec sur les contraintes dures: le code relance aussitôt avec des contraintes assouplies (préférences).
+    run = await asyncio.to_thread(optimize_with_relaxation, market, mandate.objective, pm_constraints,
+                                  vol_cap=state.vol_cap, risk_aversion=mandate.risk_aversion)
+    result = run.result
+    relaxed = [describe(c.model_copy(update={"hard": True})) for c in run.relaxed]  # libellé sans « (préférence) »
+    if run.first_failure:
+        state.log.append(f"Markowitz global: infeasible ({run.first_failure})")
+        state.log.append(f"Relance avec contraintes assouplies: {result.status} ({result.message})")
+        if result.ok:
+            bus.emit("front", event=_card(card, "running", "Contraintes trop serrées : nouveau calcul avec des limites assouplies…"))
+            bus.emit("front", event={"type": "warning", "text": relaunch_text(mandate.name, relaxed)})
+    else:
+        state.log.append(f"Markowitz global: {result.status} ({result.message})")
     if not result.ok:
+        bus.emit("front", event=_card(card, "done", "Aucun portefeuille possible, même avec des limites assouplies."))
         return Portfolio(id=mandate.id, mandate=mandate.name, mandate_description=mandate.description,
                          status="failed", failure_reason=result.message, diagnostics=result.diagnostics)
-    state.best = result
+    state.best, state.constraints = result, run.constraints
+    if run.first_failure:
+        feedback = "\n\n".join(filter(None, [feedback, (
+            "Le premier calcul a échoué (" + run.first_failure + "). Le code l'a relancé avec des contraintes "
+            "assouplies, devenues des préférences: " + (", ".join(relaxed) or "plafond de risque du mandat") +
+            ". Dis-le clairement dans tes compromis.")]))
     try:
         worker.narrative = await worker.handle.run(
-            bus, _prompt(mandate, profile, pm_constraints, feedback, rebuild), PMNarrative,
+            bus, _prompt(mandate, profile, run.constraints, feedback, rebuild), PMNarrative,
             start_text=f"{'Explication renouvelée' if rebuild else 'Explication'} du portefeuille « {mandate.name} »",
             done_text="Portefeuille construit",
         )
@@ -156,5 +173,19 @@ async def run_pm_worker(
         metrics=result.metrics,
         summary=narrative.summary if narrative else result.message,
         tradeoffs=narrative.tradeoffs if narrative else "",
+        relaunch_reason=run.first_failure,
+        relaxed=relaxed,
         diagnostics=result.diagnostics,
     )
+
+
+def _card(card: str, state: str, message: str) -> dict:
+    return {"type": "agent_status", "agent": card, "status": state, "message": message}
+
+
+def relaunch_text(name: str, relaxed: list[str]) -> str:
+    """L'avertissement montré au client quand un portefeuille a été relancé avec des contraintes assouplies."""
+    what = ("Ces limites sont devenues de simples préférences : " + "; ".join(relaxed) + "." if relaxed
+            else "Le plafond de risque prévu pour ce portefeuille a été levé.")
+    return (f"Le portefeuille « {name} » n’a pas pu respecter toutes tes limites. Je l’ai recalculé avec des "
+            f"limites assouplies. {what}")

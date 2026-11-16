@@ -324,10 +324,7 @@ def make_pepite_tools(session: Session) -> list:
             _say(session, "Je demande de reconstruire : " + ", ".join(session.portfolios[s].mandate for s in rebuild))
         else:
             _say(session, "Mes trois gestionnaires construisent leur portefeuille en parallèle…")
-        await build_slots(session, targets, instructions)
-        n = sum(1 for r in session.reports.values() for w in r.warnings if w.severity in ("medium", "high"))
-        if session.bus:
-            front(session.bus, status("risques", "done", f"{n} mise(s) en garde à lire." if n else "Rien de particulier à signaler."))
+        await build_slots(session, targets, instructions)  # ferme aussi la carte des agents Risque
         return {"portefeuilles": {s: _summary(session, s) for s in targets}, "relances_restantes": session.rebuilds_left}
 
     @tool
@@ -341,7 +338,8 @@ def make_pepite_tools(session: Session) -> list:
             await judge_round(session)
         return {
             "conformite": {s: {"conforme": v.compliant, "limites_non_respectees": v.hard_violations,
-                               "note_du_juge": v.fit_score} for s, v in session.verdicts.items()},
+                               "note_du_juge": v.fit_score, "penalite_de_relance": v.penalty}
+                           for s, v in session.verdicts.items()},
             "gagnant": session.portfolios[session.winner].mandate if session.winner else None,
             "justification": session.justification,
             "a_reoptimiser": session.reoptimize,
