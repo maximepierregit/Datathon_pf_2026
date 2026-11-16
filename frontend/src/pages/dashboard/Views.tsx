@@ -42,6 +42,9 @@ export function Beginner({ p, amount }: { p: Portfolio; amount: number }) {
       <div className="grid gap-6 md:grid-cols-2">
         <Card className="p-8">
           <SectionTitle>À quoi t’attendre</SectionTitle>
+          <div className="mb-6">
+            <BacktestWarning />
+          </div>
           <dl className="m-0 flex flex-col gap-8">
             <div className="flex flex-col gap-2">
               <dt className="text-sm text-slate">Une année normale</dt>
@@ -57,8 +60,7 @@ export function Beginner({ p, amount }: { p: Portfolio; amount: number }) {
               <dd className="m-0 text-[34px] font-light leading-10 text-red">{signedPct(p.metrics.worstYear, 0)}</dd>
               {a && (
                 <dd className="m-0 text-[15px] leading-6 text-ink-soft">
-                  Tes {money(a.start)} pourraient descendre à {money(a.worstYearValue)}, soit {money(Math.abs(a.worstYearLoss))} de moins. Avec le temps, les marchés ont toujours fini par
-                  remonter.
+                  Tes {money(a.start)} pourraient descendre à {money(a.worstYearValue)}, soit {money(Math.abs(a.worstYearLoss))} de moins.
                 </dd>
               )}
             </div>
@@ -253,6 +255,7 @@ export function Intermediate({ p, amount }: { p: Portfolio; amount: number }) {
           <Breakdown p={p} />
         </Card>
       )}
+      <BacktestWarning />
       <div className="grid gap-6 lg:grid-cols-2">
         <ProjectionChart p={p} />
         <DistributionChart p={p} />
