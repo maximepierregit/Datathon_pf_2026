@@ -1,0 +1,55 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Logs",
+      "Effect": "Allow",
+      "Action": ["logs:CreateLogGroup", "logs:DescribeLogStreams", "logs:CreateLogStream", "logs:PutLogEvents"],
+      "Resource": [
+        "arn:aws:logs:${REGION}:${ACCOUNT}:log-group:/aws/bedrock-agentcore/runtimes/*",
+        "arn:aws:logs:${REGION}:${ACCOUNT}:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*",
+        "arn:aws:logs:${REGION}:${ACCOUNT}:log-group:aws/spans:*"
+      ]
+    },
+    {
+      "Sid": "UnifiedSpans",
+      "Effect": "Allow",
+      "Action": "logs:PutResourcePolicy",
+      "Resource": "arn:aws:logs:${REGION}:${ACCOUNT}:log-group:/aws/bedrock-agentcore/runtimes/monport_*"
+    },
+    { "Sid": "LogGroups", "Effect": "Allow", "Action": "logs:DescribeLogGroups", "Resource": "arn:aws:logs:${REGION}:${ACCOUNT}:log-group:*" },
+    {
+      "Sid": "Traces",
+      "Effect": "Allow",
+      "Action": ["xray:PutTraceSegments", "xray:PutTelemetryRecords", "xray:GetSamplingRules", "xray:GetSamplingTargets"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Metrics",
+      "Effect": "Allow",
+      "Action": "cloudwatch:PutMetricData",
+      "Resource": "*",
+      "Condition": { "StringEquals": { "cloudwatch:namespace": "bedrock-agentcore" } }
+    },
+    {
+      "Sid": "WorkloadIdentity",
+      "Effect": "Allow",
+      "Action": ["bedrock-agentcore:GetWorkloadAccessToken", "bedrock-agentcore:GetWorkloadAccessTokenForJWT"],
+      "Resource": [
+        "arn:aws:bedrock-agentcore:${REGION}:${ACCOUNT}:workload-identity-directory/default",
+        "arn:aws:bedrock-agentcore:${REGION}:${ACCOUNT}:workload-identity-directory/default/workload-identity/monport_*"
+      ]
+    },
+    {
+      "Sid": "Dataset",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::monport-datasets-${ACCOUNT}/universe/*",
+        "arn:aws:s3:::monport-datasets-${ACCOUNT}/macro/*",
+        "arn:aws:s3:::monport-datasets-${ACCOUNT}/factors/*",
+        "arn:aws:s3:::monport-datasets-${ACCOUNT}/code/*"
+      ]
+    }
+  ]
+}

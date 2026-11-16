@@ -4,8 +4,8 @@ Chaque fabrique lie les outils à un contexte (contraintes, mandat, portefeuille
 ne puisse pas modifier ce qui est imposé. Les outils retournent des chiffres calculés par du code;
 les agents ne doivent citer que ces chiffres.
 
-Pour exposer ces outils via AgentCore Gateway (MCP), il suffit de déplacer les fonctions pures
-(`optimize`, `evaluate`, `Market.*`) derrière une Lambda. Les signatures ne changent pas.
+Le calcul vit dans `tool_core` (sans état). `gateway.run` l'exécute ici ou à travers AgentCore Gateway (MCP), selon
+TOOLS_BACKEND: chaque closure y ajoute par le code le contexte imposé (contraintes, objectif, plafond de volatilité).
 """
 
 from __future__ import annotations
@@ -16,13 +16,12 @@ from typing import Optional
 import pandas as pd
 from strands import tool
 
-from . import factors
+from . import factors, gateway
 from .runtime import get_runtime_settings
-from .catalog import DIMENSION_COLUMN, evaluate, excluded_mask
-from .macro import get_macro, history, latest_snapshot
+from .catalog import DIMENSION_COLUMN, SHARE_TYPES, excluded_mask, share_members
 from .market import Market
-from .allocator import Objective, OptimizationResult, optimize
-from .schemas import Constraint, ConstraintType as T
+from .allocator import Objective, OptimizationResult
+from .schemas import Constraint, ConstraintType as T, PortfolioMetrics
 
 
 # --------------------------------------------------------------------------- #
@@ -49,10 +48,7 @@ def make_macro_tools() -> list:
         z_full (z-score sur tout l'historique), history_start_date, ref_period (période décrite par la valeur) et
         days_stale (jours entre cette ligne et la date la plus récente du fichier). À appeler en premier pour situer
         le régime macro actuel."""
-        try:
-            return latest_snapshot(get_macro())
-        except Exception as exc:  # noqa: BLE001  (S3 inaccessible, fichier absent...)
-            return {"error": f"Contexte macro indisponible: {exc}"}
+        return gateway.run("get_latest_macro_snapshot")
 
     @tool
     def get_macro_history(
@@ -74,28 +70,10 @@ def make_macro_tools() -> list:
                 mensuel pour l'inflation et le chômage).
             max_rows: Nombre maximal de lignes (au plus 1000). Au-delà, les lignes les plus récentes sont retournées.
         """
-        try:
-            return history(get_macro(), country, metric, start_date, end_date, frequency, max_rows)
-        except Exception as exc:  # noqa: BLE001
-            return {"error": f"Historique macro indisponible: {exc}"}
+        return gateway.run("get_macro_history", country=country, metric=metric, start_date=start_date,
+                           end_date=end_date, frequency=frequency, max_rows=max_rows)
 
     return [get_latest_macro_snapshot, get_macro_history]
-
-
-# --------------------------------------------------------------------------- #
-# Extraction
-# --------------------------------------------------------------------------- #
-def make_extraction_tools(market: Market) -> list:
-    @tool
-    def search_universe(query: str) -> dict:
-        """Cherche un titre dans l'univers par nom d'entreprise ou par symbole.
-
-        Args:
-            query: Nom de l'entreprise (ex. "Apple") ou début de symbole.
-        """
-        return {"matches": market.search(query, limit=8)}
-
-    return [search_universe]
 
 
 # --------------------------------------------------------------------------- #
@@ -115,8 +93,10 @@ class PMState:
 
 
 def make_pm_tools(market: Market, state: PMState) -> list:
+    # Les contraintes du gestionnaire changent à chaque relance: on les lit dans `state` à chaque appel.
+
     def eligible_assets():
-        """Univers admissible. Recalculé à chaque appel: les contraintes du gestionnaire changent à chaque relance."""
+        """Univers admissible (pour screen_factor, calculé ici: les scores de facteurs restent dans le processus)."""
         hard = [c for c in state.constraints if c.hard]
         return market.assets[~excluded_mask(market, hard)]
 
@@ -124,15 +104,7 @@ def make_pm_tools(market: Market, state: PMState) -> list:
     def describe_universe() -> dict:
         """Résume l'univers d'investissement admissible (après exclusions imposées): nombre d'actifs par classe,
         secteur et pays, et fourchettes de volatilité et de rendement historiques."""
-        a = eligible_assets()
-        return {
-            "n_assets": int(len(a)),
-            "by_asset_class": a["asset_class"].value_counts().to_dict(),
-            "by_sector": a["sector"].value_counts().to_dict(),
-            "by_country": a["country"].value_counts().to_dict(),
-            "ann_vol_range": [round(float(a["ann_vol"].min()), 3), round(float(a["ann_vol"].max()), 3)],
-            "ann_return_range": [round(float(a["ann_return"].min()), 3), round(float(a["ann_return"].max()), 3)],
-        }
+        return gateway.run("describe_universe", market=market, constraints=state.constraints)
 
     @tool
     def screen_assets(
@@ -143,6 +115,7 @@ def make_pm_tools(market: Market, state: PMState) -> list:
         min_sharpe: Optional[float] = None,
         sort_by: str = "sharpe",
         limit: int = 20,
+        theme: Optional[str] = None,
     ) -> dict:
         """Filtre l'univers admissible et retourne les meilleurs actifs selon un critère.
 
@@ -154,21 +127,11 @@ def make_pm_tools(market: Market, state: PMState) -> list:
             min_sharpe: Ratio de Sharpe historique minimal.
             sort_by: Critère de tri: "sharpe", "ann_return" ou "ann_vol" (croissant pour ann_vol).
             limit: Nombre maximal de résultats (max 50).
+            theme: Étiquette de thématique à conserver, actions et FNB (ex. energie-propre, ia) (optionnel).
         """
-        a = eligible_assets()
-        if sector:
-            a = a[a["sector"].str.lower() == sector.lower()]
-        if country:
-            a = a[a["country"].str.lower() == country.lower()]
-        if asset_class:
-            a = a[a["asset_class"].str.lower() == asset_class.lower()]
-        if max_volatility is not None:
-            a = a[a["ann_vol"] <= max_volatility]
-        if min_sharpe is not None:
-            a = a[a["sharpe"] >= min_sharpe]
-        key = sort_by if sort_by in ("sharpe", "ann_return", "ann_vol") else "sharpe"
-        a = a.sort_values(key, ascending=(key == "ann_vol")).head(max(1, min(limit, 50)))
-        return {"n_results": int(len(a)), "assets": market._rows(a)}
+        return gateway.run("screen_assets", market=market, constraints=state.constraints, sector=sector,
+                           country=country, asset_class=asset_class, max_volatility=max_volatility,
+                           min_sharpe=min_sharpe, sort_by=sort_by, limit=limit, **({"theme": theme} if theme else {}))
 
     @tool
     def screen_factor(
@@ -233,14 +196,18 @@ def make_pm_tools(market: Market, state: PMState) -> list:
         if state.read_only:
             return {"status": "read_only", "message": "Le portefeuille est figé: explique-le, ne le recalcule pas."}
         state.attempts += 1
-        result = optimize(market, symbols, state.objective, state.constraints, vol_cap=state.vol_cap,
-                          risk_aversion=state.risk_aversion)
+        raw = gateway.run("optimize_portfolio", market=market, symbols=list(symbols), objective=state.objective,
+                          constraints=state.constraints, vol_cap=state.vol_cap, risk_aversion=state.risk_aversion)
+        result = OptimizationResult(
+            status=raw["status"], message=raw.get("message", ""), weights=dict(raw.get("weights") or {}),
+            metrics=PortfolioMetrics.model_validate(raw["metrics"]) if raw.get("metrics") else None,
+        )
         state.log.append(f"essai {state.attempts}: {result.status}")
         if result.ok:
             state.best = result
         out: dict = {"status": result.status, "message": result.message}
         if result.weights:
-            out["weights"] = {s: w for s, w in sorted(result.weights.items(), key=lambda kv: -kv[1])}
+            out["weights"] = result.weights
         if result.metrics:
             m = result.metrics
             out["metrics"] = {
@@ -310,6 +277,8 @@ def fallback_selection(market: Market, constraints: list[Constraint], objective:
         if c.type.value.startswith("min_") and c.target and column:
             group = a[a[column].astype(str).str.lower() == c.target.lower()]
             picks += group.sort_values(key, ascending=asc).index[:4].tolist()
+        elif c.type in SHARE_TYPES and SHARE_TYPES[c.type][1] == "min" and c.target:  # une part: titres du groupe
+            picks += a[share_members(a, c)].sort_values(key, ascending=asc).index[:4].tolist()
     # Contraintes de facteurs: des actions qui respectent tous les seuils à la fois, les moins volatiles d'abord.
     # Les mieux notées sont souvent très volatiles (sur l'univers réel, APP ou SNDK en qualité) et feraient
     # dépasser le plafond de volatilité.
@@ -330,29 +299,3 @@ def factor_fits(eligible, hard: list[Constraint]) -> list[str]:
     if not tilts:
         return []
     return factors.meets(scores, [(c.target, c.type is T.MIN_FACTOR_EXPOSURE, float(c.value or 0)) for c in tilts])
-
-
-# --------------------------------------------------------------------------- #
-# Juge
-# --------------------------------------------------------------------------- #
-def make_judge_tools(market: Market, weights: dict[str, float], constraints: list[Constraint]) -> list:
-    @tool
-    def check_portfolio_constraints() -> dict:
-        """Vérifie le portefeuille évalué contre chaque contrainte de l'utilisateur (dures et préférences).
-        Retourne, pour chacune, si elle est respectée, la valeur observée et la limite."""
-        checks = evaluate(market, weights, constraints)
-        return {
-            "all_hard_respected": all(c.passed for c in checks if c.constraint.hard),
-            "checks": [
-                {
-                    "label": c.label,
-                    "hard": c.constraint.hard,
-                    "passed": c.passed,
-                    "actual": c.actual,
-                    "limit": c.limit,
-                }
-                for c in checks
-            ],
-        }
-
-    return [check_portfolio_constraints, *make_macro_tools()]

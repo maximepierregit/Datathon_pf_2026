@@ -1,0 +1,112 @@
+{
+  "description": "MonPort: encadre ce que le client écrit à Pépite (injections de prompt, propos haineux, activités illégales, données personnelles).",
+  "blockedInputMessaging": "Je ne peux pas t’aider avec ça. Je suis là pour parler de ton portefeuille et de tes placements : pose-moi une question à ce sujet!",
+  "blockedOutputsMessaging": "Je préfère ne pas répondre de cette façon. Pose-moi une autre question sur ton portefeuille!",
+  "contentPolicyConfig": {
+    "filtersConfig": [
+      {
+        "type": "PROMPT_ATTACK",
+        "inputStrength": "MEDIUM",
+        "outputStrength": "NONE"
+      },
+      {
+        "type": "HATE",
+        "inputStrength": "MEDIUM",
+        "outputStrength": "MEDIUM"
+      },
+      {
+        "type": "INSULTS",
+        "inputStrength": "MEDIUM",
+        "outputStrength": "MEDIUM"
+      },
+      {
+        "type": "SEXUAL",
+        "inputStrength": "MEDIUM",
+        "outputStrength": "MEDIUM"
+      },
+      {
+        "type": "VIOLENCE",
+        "inputStrength": "LOW",
+        "outputStrength": "LOW"
+      },
+      {
+        "type": "MISCONDUCT",
+        "inputStrength": "LOW",
+        "outputStrength": "LOW"
+      }
+    ],
+    "tierConfig": {
+      "tierName": "STANDARD"
+    }
+  },
+  "topicPolicyConfig": {
+    "topicsConfig": [
+      {
+        "name": "activites-financieres-illegales",
+        "definition": "Demandes d'aide pour commettre une infraction financière : délit d'initié, manipulation de marché, blanchiment d'argent, fraude ou évasion fiscale.",
+        "examples": [
+          "Comment acheter des actions avant une annonce que je connais grâce à mon travail?",
+          "Aide-moi à cacher de l'argent au fisc avec des cryptos.",
+          "Comment faire monter le prix d'une petite action pour la revendre?"
+        ],
+        "type": "DENY"
+      }
+    ],
+    "tierConfig": {
+      "tierName": "STANDARD"
+    }
+  },
+  "sensitiveInformationPolicyConfig": {
+    "piiEntitiesConfig": [
+      {
+        "type": "CA_SOCIAL_INSURANCE_NUMBER",
+        "action": "BLOCK",
+        "inputAction": "BLOCK",
+        "inputEnabled": true,
+        "outputEnabled": false
+      },
+      {
+        "type": "CA_HEALTH_NUMBER",
+        "action": "BLOCK",
+        "inputAction": "BLOCK",
+        "inputEnabled": true,
+        "outputEnabled": false
+      },
+      {
+        "type": "CREDIT_DEBIT_CARD_NUMBER",
+        "action": "BLOCK",
+        "inputAction": "BLOCK",
+        "inputEnabled": true,
+        "outputEnabled": false
+      },
+      {
+        "type": "US_BANK_ACCOUNT_NUMBER",
+        "action": "BLOCK",
+        "inputAction": "BLOCK",
+        "inputEnabled": true,
+        "outputEnabled": false
+      },
+      {
+        "type": "PASSWORD",
+        "action": "BLOCK",
+        "inputAction": "BLOCK",
+        "inputEnabled": true,
+        "outputEnabled": false
+      }
+    ],
+    "regexesConfig": [
+      {
+        "name": "nas-canadien",
+        "description": "Numéro d'assurance sociale (9 chiffres, groupés par 3)",
+        "pattern": "\\b\\d{3}[ -]\\d{3}[ -]\\d{3}\\b|\\b\\d{9}\\b",
+        "action": "BLOCK",
+        "inputAction": "BLOCK",
+        "inputEnabled": true,
+        "outputEnabled": false
+      }
+    ]
+  },
+  "crossRegionConfig": {
+    "guardrailProfileIdentifier": "us.guardrail.v1:0"
+  }
+}

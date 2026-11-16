@@ -5,6 +5,7 @@ import { Pepite, PepiteSays } from '../components/Pepite'
 import { Arrow, Button, Card, Separator } from '../components/ui'
 import { riskScore } from '../lib/engine'
 import { useApp } from '../store'
+import { RiskNotebook } from './RiskNotebook'
 
 /**
  * Pépite relit le questionnaire avant tout envoi aux gestionnaires.
@@ -75,6 +76,7 @@ export default function Verification() {
       ) : check.coherent ? (
         <>
           <PepiteSays pose="thumbsup">{check.summary}</PepiteSays>
+          <RiskNotebook profile={profile} constraints={constraints} check={check} />
           <div className="flex flex-col gap-2">
             <label htmlFor="adjustment" className="font-semibold text-navy">
               Un ajustement avant que j’envoie tes consignes aux gestionnaires? <span className="font-normal text-ink-soft">(facultatif)</span>
@@ -104,6 +106,7 @@ export default function Verification() {
       ) : (
         <>
           <PepiteSays pose="question">{check.summary}</PepiteSays>
+          <RiskNotebook profile={profile} constraints={constraints} check={check} />
           <ul className="m-0 flex list-none flex-col gap-3 p-0">
             {check.issues.map((issue) => (
               <li key={issue.title + issue.detail}>
@@ -173,8 +176,7 @@ function Thinking({ stage }: { stage: number }) {
   return (
     <div className="fade-in flex flex-col items-center gap-6 rounded-[var(--radius-card)] bg-sky px-6 py-10 text-center">
       <div className="relative">
-        <span className="halo absolute inset-4 rounded-full bg-white" aria-hidden />
-        <Pepite pose="thinking" size={200} className="relative" />
+        <Pepite pose="pondering" size={200} />
         <span className="absolute -right-6 top-2 flex items-end gap-1.5" aria-hidden>
           {[10, 14, 20].map((d, i) => (
             <span key={d} className="think-dot rounded-full bg-navy" style={{ width: d, height: d, animationDelay: `${i * 0.2}s` }} />

@@ -36,11 +36,11 @@ const VEHICLE_PEPITE: Partial<Record<Vehicles, string>> = {
   titres: 'Que des titres? Tu verras chaque entreprise que tu détiens.',
 }
 
-/** Le modèle de thématiques en cours : celui qui, appliqué maintenant, ne changerait rien. */
+/** Le modèle de thématiques en cours : celui dont les réglages sont exactement ceux de la page. */
 function activePreset(themes: Record<string, Share>): string | undefined {
   const same = (a: Record<string, Share>, b: Record<string, Share>) =>
     Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([k, v]) => b[k] === v)
-  return THEME_PRESETS.find((p) => same(p.apply(themes), themes))?.id
+  return THEME_PRESETS.find((p) => same(p.values, themes))?.id
 }
 
 /** Les facteurs ne s'affichent que pour une aisance de 4 ou 5. */
@@ -69,6 +69,8 @@ export default function Preferences() {
   const valid = !share || (sharesValid(c[s], ids) && !noneKept)
   const preset = s === 'themes' ? activePreset(c.themes) : undefined
   const last = step === steps.length
+  // Rien à réinitialiser si tout est déjà neutre (un facteur à 0 est neutre).
+  const touched = s !== 'vehicles' && Object.values(c[s]).some((v) => v !== 0)
   return (
     <QuestionShell
       chapter="Tes préférences"
@@ -94,6 +96,21 @@ export default function Preferences() {
         )
       }
     >
+      {s !== 'vehicles' && (
+        <div className="-mb-2 flex justify-end">
+          <button
+            onClick={() => state.resetBlock(s)}
+            disabled={!touched}
+            className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium text-blue hover:bg-sky hover:text-blue-dark disabled:text-slate-light disabled:hover:bg-transparent"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M3 12a9 9 0 1 0 3-6.7" />
+              <path d="M3 4v5h5" />
+            </svg>
+            Tout remettre à « Neutre »
+          </button>
+        </div>
+      )}
       {s === 'vehicles' ? (
         <ChoiceList label="FNB, titres individuels ou les deux" options={VEHICLE_OPTIONS} value={c.vehicles} onChange={state.setVehicles} />
       ) : s === 'factors' ? (
@@ -106,7 +123,7 @@ export default function Preferences() {
                 label="Modèle de thématiques"
                 options={THEME_PRESETS.map((p) => ({ value: p.id, label: p.label }))}
                 value={preset}
-                onChange={(id) => state.setShares('themes', THEME_PRESETS.find((p) => p.id === id)!.apply(c.themes))}
+                onChange={(id) => state.setShares('themes', { ...THEME_PRESETS.find((p) => p.id === id)!.values })}
               />
               <p className="m-0 text-center text-base text-ink-soft">
                 {THEME_PRESETS.find((p) => p.id === preset)?.desc ?? 'Choisis un modèle, ou règle chaque thématique toi-même.'}
@@ -122,6 +139,13 @@ export default function Preferences() {
             </p>
           )}
           {noneKept && <p className="m-0 text-center text-base font-semibold text-red-dark">Garde au moins un type de placement.</p>}
+          {s === 'themes' && (
+            <Alert tone="info" title="À savoir">
+              Les thématiques s’appliquent aux titres individuels et à quelques FNB thématiques (énergie propre, IA, armement…). La plupart des FNB sont
+              généraux : faute de données sur les titres qu’ils contiennent, on ne peut pas les filtrer. Un FNB d’actions mondiales peut donc contenir une
+              entreprise d’une thématique que tu exclus.
+            </Alert>
+          )}
         </div>
       )}
     </QuestionShell>

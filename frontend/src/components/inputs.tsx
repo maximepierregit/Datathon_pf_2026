@@ -1,6 +1,6 @@
 import { useId, useState } from 'react'
 import { LEVELS, shareTotal, type CatalogItem } from '../data/catalog'
-import { pct } from '../lib/format'
+import { share, shareNumber } from '../lib/format'
 import type { Level, Share } from '../types'
 
 export interface Option<T> {
@@ -178,7 +178,7 @@ export function ShareTuner({ items, value, onChange, percent = true }: { items: 
       {items.map((it) => {
         const cur = value[it.id]
         const num = typeof cur === 'number'
-        const seg = (on: boolean, style: string) => `min-h-11 rounded-md px-3.5 text-sm font-semibold transition-colors ${on ? style : 'text-ink-soft hover:text-navy'}`
+        const seg = (on: boolean, style: string) => `min-h-11 rounded-md px-3 text-sm font-semibold transition-colors ${on ? style : 'text-ink-soft hover:text-navy'}`
         return (
           <div key={it.id} role="group" aria-label={it.label} className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[var(--radius-card)] border border-line-soft bg-white py-3 pl-5 pr-3">
             <span className="flex min-w-[150px] flex-1 flex-col">
@@ -192,20 +192,11 @@ export function ShareTuner({ items, value, onChange, percent = true }: { items: 
               <button aria-pressed={cur === undefined} onClick={() => onChange(it.id, null)} className={seg(cur === undefined, 'bg-white text-navy ring-1 ring-line')}>
                 Neutre
               </button>
+              {/* Même largeur avec ou sans champ : la colonne de choix ne bouge pas quand on saisit un pourcentage. */}
               {percent &&
                 (num ? (
-                  <label className="flex min-h-11 items-center gap-1 rounded-md bg-navy px-2.5 text-sm font-semibold text-white">
-                    <input
-                      type="number"
-                      inputMode="numeric"
-                      min={0}
-                      max={100}
-                      autoFocus={opened === it.id}
-                      aria-label={`Pourcentage pour ${it.label}`}
-                      value={cur}
-                      onChange={(e) => onChange(it.id, Math.min(100, Math.max(0, Math.round(Number(e.target.value) || 0))))}
-                      className="w-12 bg-transparent text-right text-white outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
-                    />
+                  <label className="flex min-h-11 w-[4.25rem] items-center justify-center gap-1 rounded-md bg-navy text-sm font-semibold text-white">
+                    <ShareInput value={cur} label={it.label} autoFocus={opened === it.id} onChange={(s) => onChange(it.id, s)} />
                     %
                   </label>
                 ) : (
@@ -216,7 +207,7 @@ export function ShareTuner({ items, value, onChange, percent = true }: { items: 
                       setOpened(it.id)
                       onChange(it.id, Math.max(0, Math.round((100 - total) / Math.max(1, free))))
                     }}
-                    className={seg(false, '')}
+                    className={`${seg(false, '')} w-[4.25rem]`}
                   >
                     %
                   </button>
@@ -229,6 +220,55 @@ export function ShareTuner({ items, value, onChange, percent = true }: { items: 
   )
 }
 
+/** Le texte saisi, nettoyé : chiffres et une virgule, une décimale au plus, sans zéro en tête, 100 au plus. */
+function cleanShare(raw: string): string {
+  const [whole = '', ...rest] = raw.replace(/\./g, ',').replace(/[^\d,]/g, '').split(',')
+  const int = whole.replace(/^0+(?=\d)/, '')
+  const text = rest.length ? `${int || '0'},${rest.join('').slice(0, 1)}` : int
+  return (parseShare(text) ?? 0) > 100 ? '100' : text
+}
+
+/** Le nombre d'un texte nettoyé ; null s'il est vide. */
+function parseShare(text: string): number | null {
+  if (!text || text === ',') return null
+  return Math.round(Number(text.replace(',', '.')) * 10) / 10
+}
+
+/**
+ * Champ de pourcentage : virgule ou point, une décimale. Pendant la saisie, le brouillon garde « 12, » tel quel ; à la
+ * sortie du champ, 0 ou un champ vide devient « Exclure ».
+ */
+function ShareInput({ value, label, autoFocus, onChange }: { value: number; label: string; autoFocus: boolean; onChange: (s: Share) => void }) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const shown = draft ?? shareNumber(value)
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      autoFocus={autoFocus}
+      aria-label={`Pourcentage pour ${label}`}
+      value={shown}
+      onFocus={(e) => {
+        setDraft(shown)
+        e.target.select()
+      }}
+      onChange={(e) => {
+        const text = cleanShare(e.target.value)
+        setDraft(text)
+        const n = parseShare(text)
+        if (n !== null) onChange(n)
+      }}
+      onBlur={() => {
+        const n = draft === null ? value : parseShare(draft)
+        setDraft(null)
+        if (!n) onChange('exclure')
+      }}
+      onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+      className="w-10 bg-transparent text-right text-white outline-none"
+    />
+  )
+}
+
 /** Total des pourcentages d'un bloc : ce qui est fixé, ce qui reste libre, ce qui manque ou dépasse. */
 export function ShareTotal({ value, ids }: { value: Record<string, Share>; ids: string[] }) {
   const { total, entered, free } = shareTotal(value, ids)
@@ -236,12 +276,12 @@ export function ShareTotal({ value, ids }: { value: Record<string, Share>; ids: 
   const over = total > 100
   const short = !free && total < 100
   const message = over
-    ? `Tes pourcentages font ${pct(total / 100, 0)} : enlève ${total - 100} points.`
+    ? `Tes pourcentages font ${share(total)} : enlève ${shareNumber(total - 100)} points.`
     : short
-      ? `Tout est fixé, mais il manque ${100 - total} points pour arriver à ${pct(1, 0)}.`
+      ? `Tout est fixé, mais il manque ${shareNumber(100 - total)} points pour arriver à ${share(100)}.`
       : total === 100
-        ? `${pct(1, 0)} fixés : tout est réparti.`
-        : `${pct(total / 100, 0)} fixés · ${pct((100 - total) / 100, 0)} laissés libres aux gestionnaires.`
+        ? `${share(100)} fixés : tout est réparti.`
+        : `${share(total)} fixés · ${share(100 - total)} laissés libres aux gestionnaires.`
   return (
     <div className="flex flex-col gap-2" role="status">
       <div className="h-2 overflow-hidden rounded-full bg-mist" aria-hidden>

@@ -158,16 +158,3 @@ async def run_pm_worker(
         tradeoffs=narrative.tradeoffs if narrative else "",
         diagnostics=result.diagnostics,
     )
-
-
-async def run_portfolio_manager(
-    bus: EventBus,
-    market: Market,
-    mandate: Mandate,
-    profile: InvestorProfile,
-    pm_constraints: list[Constraint],
-    feedback: Optional[str] = None,
-) -> Portfolio:
-    """Une construction sans suite (ancien pipeline `orchestrator.py`)."""
-    worker = make_pm_worker(market, mandate, profile, pm_constraints)
-    return await run_pm_worker(bus, market, worker, mandate, profile, pm_constraints, feedback)

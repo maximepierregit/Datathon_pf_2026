@@ -1,6 +1,6 @@
 # Backend - Pipeline multi-agents de profil d'investisseur
 
-Strands Agents + Amazon Bedrock, hébergé sur Bedrock AgentCore Runtime. Voir `../architecture-workflow.md` pour le schéma.
+Strands Agents + Amazon Bedrock, hébergé sur Bedrock AgentCore Runtime, outils derrière AgentCore Gateway. Voir `../docs/architecture-workflow.md` pour le schéma et le rôle de chaque service AWS.
 
 ## Démarrage local
 
@@ -17,8 +17,9 @@ cp .env.example .env            # puis exporter les variables (ou laisser les va
 # c) SYNTHÉTIQUE, pour le développement:
 .venv/bin/python scripts/make_sample_dataset.py
 
-.venv/bin/python scripts/run_local.py                          # parcours initial (appelle Bedrock)
-.venv/bin/python scripts/run_local.py --refine "exclus la techno"  # relance
+.venv/bin/python scripts/run_local.py                          # vérification puis construction (appelle Bedrock)
+.venv/bin/python scripts/run_local.py --chat "exclus la techno"   # puis un message à Pépite
+.venv/bin/python -m pytest -q                                   # tests, sans Bedrock
 PORT=8091 .venv/bin/python main.py                             # serveur AgentCore local (POST /invocations)
 ```
 
@@ -30,8 +31,11 @@ Colonnes lues dans le dataset: `date`, `symbol`, `total_return_cad` (obligatoire
 | Fichier | Rôle |
 |---|---|
 | `main.py` | Point d'entrée AgentCore (`@app.entrypoint`, générateur asynchrone, SSE) |
-| `orchestrator.py` | Flux déterministe: extraction, fusion, profil, 3 PM, 3 juges, nouvel essai, CRO, résultat |
-| `agents/` | Profil, Extraction, PM, Juge, CRO (prompts et sorties structurées) |
+| `workflow/` | Parcours MonPort (`flow.py`), Pépite (`pepite.py`), gestionnaires, agents Risque et juge final (`workers.py`), sessions (`session.py`) |
+| `agents/` | `AgentHandle` (`base.py`) et gestionnaire de portefeuille |
+| `tool_core.py`, `gateway.py` | Outils métier sans état; appel par AgentCore Gateway (MCP, SigV4) ou dans le processus |
+| `mcp_server/main.py` | Serveur MCP des outils (runtime `monport_tools`) |
+| `guardrail.py`, `memory.py` | Bedrock Guardrails sur le texte du client; sessions dans AgentCore Memory |
 | `mandates.py` | Les 3 mandats des PM (Défensif, Équilibré, Croissance) |
 | `constraints.py` | Catalogue de contraintes, validation, fusion, conflits, vérification (code pur) |
 | `optimizer.py` | Optimisation moyenne-variance sous contraintes (SLSQP) |
@@ -43,57 +47,41 @@ Colonnes lues dans le dataset: `date`, `symbol`, `total_return_cad` (obligatoire
 | `events.py` | Bus d'événements pour le streaming (réflexion, outils, statuts) |
 | `schemas.py` | Contrats Pydantic (formulaire, contraintes, portefeuilles, rapport) |
 | `monport.py` | Parcours du frontend MonPort: vérification par Pépite, profils de contraintes, gestionnaires, juges, mélanges 80/20 ou juge final |
-| `agents/pepite.py` | Pépite, l'analyste: cohérence du questionnaire, puis les 3 profils de contraintes (MonPort) |
-| `agents/final_judge.py` | Juge final: garde un seul portefeuille quand le profil est cohérent (MonPort) |
 
 ## Contrat d'entrée
 
 ```jsonc
-// Premier passage
-{"mode": "initial", "form": { /* InvestorForm, voir schemas.py */ }}
-
-// Relance: `context` est copié tel quel depuis le dernier événement `result`
-{"mode": "refine", "message": "texte libre", "context": { /* result.data.context */ }}
-
-// Frontend MonPort: Profile et Constraints de frontend/src/types.ts. Les événements renvoyés sont ceux de
+// Frontend MonPort (seuls modes acceptés): Profile et Constraints de frontend/src/types.ts. Les événements renvoyés sont ceux de
 // `PipelineEvent` (check, agent_status, pepite, universe, portfolios, error, done), pas ceux décrits plus bas.
 {"mode": "monport_check", "profile": { /* Profile */ }, "constraints": { /* Constraints */ }}
-{"mode": "monport", "profile": {}, "constraints": {}, "check": { /* PepiteCheck reçu */ }, "adjustment": "texte libre"}
+{"mode": "monport", "profile": {}, "constraints": {}, "check": { /* PepiteCheck reçu */ }, "adjustment": "texte libre", "session": "id"}
+{"mode": "monport_chat", "session": "id", "message": "texte libre"}
 ```
 
 ## Contrat de sortie (SSE, un JSON par événement)
 
-Tous les événements ont `type`, `step` et `agent`.
+Les événements reçus par le frontend sont ceux de `PipelineEvent` (`frontend/src/types.ts`): `check`, `agent_status`,
+`pepite`, `universe`, `rerun`, `warning`, `portfolios`, `error`, `done`. En interne, les agents émettent sur l'`EventBus`
+(`status`, `thinking`, `tool`, `heartbeat`), traduits par `monport.Translator`.
 
-| `type` | Contenu | Usage frontend |
-|---|---|---|
-| `status` | `state` (start, done, retry, warning, error, skipped), `text` | Ligne de statut par agent |
-| `thinking` | `text` (réflexion du modèle, par blocs) | Panneau repliable |
-| `tool` | `name` | « Outil en cours » |
-| `profile` | `data`, `labels` | Affichage anticipé du profil |
-| `clarification` | `questions`, `understood` | Afficher les questions dans le chat; le parcours s'arrête |
-| `result` | `data` (profil, portefeuilles + verdicts, rapport CRO, `context`) | Visualisation finale |
-| `error` | `code`, `message`, `details` | Message d'erreur; le flux s'arrête |
-| `heartbeat` | rien | Ignorer |
+## Déploiement sur AWS
 
-`step`: `3` orchestrateur, `3b` extraction, `3c` fusion, `4` profil, `5` PM, `8` juges, `9` CRO, `10` assemblage.
-
-## Déploiement sur AgentCore Runtime (déploiement par code, arm64)
+Tout passe par les scripts de `../deploy/` (idempotents, AWS CLI). Ordre pour un compte vide:
 
 ```bash
-./scripts/build_package.sh        # produit build/deployment_package.zip (~130 Mo, limite 250 Mo)
+./deploy/deploy-gateway.sh      # serveur MCP (runtime monport_tools), Gateway monport-tools, cible
+./deploy/deploy-guardrail.sh    # guardrail de Pépite
+./deploy/deploy-memory.sh       # mémoire des conversations
+echo gateway > deploy/state/tools-backend
+./deploy/deploy-agentcore.sh    # runtime monport_agents (lit deploy/state/*)
+./deploy/deploy-proxy.sh        # Lambda Function URL en streaming
+./deploy/deploy-cloudfront.sh   # front HTTPS + WAF
 ```
 
-Puis créer le runtime (console, CLI `agentcore` ou `create_agent_runtime`, voir la
-[documentation](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-get-started-code-deploy-python.html)).
-Point d'entrée `main.py`, runtime `PYTHON_3_13`, réseau `PUBLIC`. Variables d'environnement: `MODEL_STRONG`, `MODEL_FAST`,
-`MONPORT_UNIVERSE_PARQUET_URI=s3://monport-datasets-381491955506/universe/universe.parquet`. Le zip n'inclut le dataset qu'avec
-`EMBED_DATASET=1 ./scripts/build_package.sh`.
-
-Le rôle d'exécution doit autoriser `bedrock:InvokeModel` et `bedrock:InvokeModelWithResponseStream` sur les profils
-d'inférence utilisés (et sur les modèles sous-jacents dans les régions concernées). Pour le dataset, attacher la politique
-gérée `arn:aws:iam::381491955506:policy/MonPortDatasetRead` (`s3:GetObject` sur `universe/*` seulement). Pour l'appel
-depuis l'EC2: `bedrock-agentcore:InvokeAgentRuntime` sur l'ARN du runtime.
+Les rôles d'exécution sont créés par les scripts (`../deploy/agentcore/*-policy.json`), avec le minimum de droits.
+Réglages lus dans l'environnement du runtime: `MODEL_PEPITE`, `MODEL_STRONG`, `MODEL_EFFORT`, `TOOLS_BACKEND`,
+`GATEWAY_URL`, `GUARDRAIL_ID`, `GUARDRAIL_VERSION`, `MEMORY_ID`, `MONPORT_UNIVERSE_PARQUET_URI`, `MONPORT_MACRO_PARQUET_URI`.
+Sans les quatre du milieu, le backend se comporte comme en local (outils dans le processus, pas de filtre, pas de mémoire).
 
 ## Dataset sur S3
 
@@ -118,7 +106,7 @@ redémarrage, sans redéployer. `WSParticipantRole` (local, EC2) lit déjà le b
   revérifiée indépendamment par le Juge.
 - Les défauts du profil (volatilité maximale, poids maximal par titre) sont des préférences. L'optimiseur les applique
   tant qu'ils n'entrent pas en conflit avec les contraintes de l'utilisateur.
-- Aucune donnée n'est conservée côté serveur. Le frontend renvoie `context` à chaque relance.
+- L'état d'une conversation reste dans sa microVM AgentCore et dans AgentCore Memory (7 jours), jamais ailleurs.
 
 ## Limites connues
 

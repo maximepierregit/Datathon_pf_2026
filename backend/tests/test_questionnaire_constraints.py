@@ -364,7 +364,7 @@ FRONT = {
     "vehicles": "tous",
     "classes": {"obligations": 30, "crypto": "exclure"},
     "regions": {"canada": 30, "europe": "exclure"},
-    "themes": {"tech": 45, "finance": 10},
+    "themes": {"tech": 35, "ia": 20, "finance": 10},
 }
 
 
@@ -378,8 +378,9 @@ def test_frontend_answers_become_engine_preferences():
     assert prefs["asset_class"] == {"Fixed Income": exact(0.30)}
     assert prefs["country"]["Canada"] == exact(0.30)
     assert prefs["country"]["Germany"] == EXCLUDE  # l'Europe, pays par pays
-    assert prefs["theme"] == {"tech": exact(0.45)}  # tag vérifié du Parquet
-    assert prefs["sector"] == {"Financials": exact(0.10)}
+    assert prefs["theme"] == {"ia": exact(0.20)}  # étiquette vérifiée du Parquet
+    # Technologie = secteur GICS « Information Technology » (choix de main), comme les autres thématiques sectorielles.
+    assert prefs["sector"] == {"Information Technology": exact(0.35), "Financials": exact(0.10)}
     assert not detect_conflicts(out)
     # Et le moteur l'accepte tel quel.
     config.get_agent_settings(request)

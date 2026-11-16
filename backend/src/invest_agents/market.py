@@ -29,6 +29,12 @@ UNKNOWN = "Non classé"
 META_COLUMNS = ["name", "sector", "industry", "country", "currency", "asset_class", "instrument_type", "market", "theme"]
 
 
+def theme_tags(value: Any) -> set[str]:
+    """Les étiquettes de thématique d'un actif (« ia;tech » -> {"ia", "tech"}); vide sans étiquette."""
+    tags = {t.strip().lower() for t in value.split(";")} if isinstance(value, str) else set()
+    return tags - {"", UNKNOWN.lower()}
+
+
 # --------------------------------------------------------------------------- #
 # Rendements espérés (annualisés, en CAD)
 # --------------------------------------------------------------------------- #
@@ -330,10 +336,9 @@ class Market:
             "instrument_type": sorted(a["instrument_type"].dropna().astype(str).unique().tolist()),
             "symbol": sorted(a.index.tolist()),
             "factor": available_factors(a.index),
-            # Thématiques portées par au moins une action détenue en direct (les seules qui comptent).
-            "theme": sorted({t.strip() for kind, tags in zip(a["instrument_type"].astype(str),
-                                                             a["theme"] if "theme" in a else [None] * len(a))
-                             if kind == "Stock" and isinstance(tags, str) for t in tags.split(";") if t.strip()}),
+            # Thématiques portées par au moins une action détenue en direct: les FNB étiquetés ne comptent jamais.
+            "theme": sorted(set().union(*map(theme_tags, a.loc[a["instrument_type"].astype(str) == "Stock", "theme"])))
+            if "theme" in a else [],
         }
 
     def search(self, query: str, limit: int = 10) -> list[dict]:
@@ -364,6 +369,7 @@ class Market:
                     "ann_return": round(float(r["ann_return"]), 4),
                     "ann_vol": round(float(r["ann_vol"]), 4),
                     "sharpe": round(float(r["sharpe"]), 3),
+                    **({"themes": sorted(tags)} if (tags := theme_tags(r.get("theme"))) else {}),
                 }
             )
         return out

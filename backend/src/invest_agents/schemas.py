@@ -26,6 +26,7 @@ class ConstraintType(str, Enum):
     EXCLUDE_ASSET_CLASS = "exclude_asset_class"
     EXCLUDE_INSTRUMENT_TYPE = "exclude_instrument_type"
     EXCLUDE_SYMBOL = "exclude_symbol"
+    EXCLUDE_THEME = "exclude_theme"
     MAX_SECTOR_WEIGHT = "max_sector_weight"
     MIN_SECTOR_WEIGHT = "min_sector_weight"
     MAX_COUNTRY_WEIGHT = "max_country_weight"
@@ -39,6 +40,10 @@ class ConstraintType(str, Enum):
     MAX_SECTOR_SHARE = "max_sector_share"
     MIN_COUNTRY_SHARE = "min_country_share"
     MAX_COUNTRY_SHARE = "max_country_share"
+    # Thématiques étiquetées dans le Parquet (colonne `theme`): seules les actions détenues en direct étiquetées
+    # comptent pour la part (un FNB étiqueté est dans la poche actions, jamais dans le groupe).
+    MIN_THEME_SHARE = "min_theme_share"
+    MAX_THEME_SHARE = "max_theme_share"
     MIN_FACTOR_EXPOSURE = "min_factor_exposure"
     MAX_FACTOR_EXPOSURE = "max_factor_exposure"
     # Questionnaire: pourcentage EXACT du portefeuille total (cash inclus). Classe d'actifs et type d'instrument:
@@ -48,7 +53,6 @@ class ConstraintType(str, Enum):
     EXACT_COUNTRY_WEIGHT = "exact_country_weight"
     EXACT_SECTOR_WEIGHT = "exact_sector_weight"
     EXACT_THEME_WEIGHT = "exact_theme_weight"
-    EXCLUDE_THEME = "exclude_theme"  # tags du Parquet, actions détenues en direct seulement
 
 
 class Constraint(BaseModel):
@@ -57,7 +61,7 @@ class Constraint(BaseModel):
     type: ConstraintType
     target: Optional[str] = Field(
         default=None,
-        description="Secteur, pays, classe d'actifs, thématique ou symbole visé. Pour les *_share et les "
+        description="Secteur, pays, thématique, classe d'actifs ou symbole visé. Pour les *_share et les "
         "exact_country/sector/theme_weight, un ou plusieurs libellés séparés par « | » (ex.: \"France|Germany\"). "
         "Null si le type n'a pas de cible.",
     )
@@ -241,6 +245,11 @@ class RiskIssue(BaseModel):
     detail: str
     severity: Literal["low", "medium", "high"]
     portfolio_id: Optional[str] = Field(default=None, description="Null si l'enjeu concerne le profil en général")
+    sources: list[str] = Field(
+        default_factory=list,
+        description="1 à 3 identifiants de `preuves` qui prouvent ce point (ex.: pire_baisse, crypto, inflation_ca). "
+        "Seulement des identifiants de la liste reçue.",
+    )
 
 
 class RiskReport(BaseModel):
@@ -279,6 +288,11 @@ class PepiteReview(BaseModel):
         description="Questions tutoyées à poser au client pour clarifier une incohérence ou une réponse ambiguë. "
         "Liste vide si le profil est cohérent.",
     )
+    risk_explanation: str = Field(
+        default="",
+        description="2 ou 3 phrases tutoyées, sans formule: quelles réponses ont le plus pesé sur ton niveau de risque, "
+        "et ce que ton aversion au risque change pour les gestionnaires. Seulement les chiffres de compute_risk_profile.",
+    )
 
 
 class PepiteCheck(ProfileAssessment):
@@ -288,6 +302,7 @@ class PepiteCheck(ProfileAssessment):
     coherent: bool
     issues: list[CoherenceIssue] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
+    risk_explanation: str = ""
     risk_position: float = Field(default=0.5, ge=0, le=1, description="0 très prudent … 1 très audacieux")
     risk_aversion: float = Field(default=7.0, ge=1, le=25, description="Coefficient A: 1 très audacieux … 25 très prudent")
 
