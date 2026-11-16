@@ -394,9 +394,19 @@ CASH = {
     "permitted_with_etf_only": True,
 }
 
+# Pénalités souples ajoutées à l'utilité de Markowitz (pas des contraintes), identiques pour les 3 variantes:
+#   U = w'mu - A/2 w'Sigma w - lambda_D * sum(w_i^2) - lambda_V * sum(q_i * w_i^2),
+#   q_i = max(0, sigma_i^2 - seuil^2), sigma_i = sqrt(Sigma_ii) de la covariance annualisée de l'optimiseur.
+# À 0,0, l'optimiseur se comporte exactement comme avant (coefficients non calibrés).
+REGULARIZATION = {
+    "diversification_penalty": 0.0,   # lambda_D: décourage les poids concentrés, uniformément
+    "high_volatility_penalty": 0.0,   # lambda_V: décourage les gros poids dans les titres au-delà du seuil
+    "volatility_threshold": 0.25,     # 25 % de volatilité annualisée
+}
+
 OPTIMIZATION = {
     "objective": "maximize_mean_variance_utility",
-    "formula": "U = expected_return - 0.5 * A * variance",
+    "formula": "U = expected_return - 0.5 * A * variance - lambda_D * sum(w^2) - lambda_V * sum(q * w^2)",
     "risk_aversion_parameter": "A",
     "solver": "SLSQP",           # scipy.optimize.minimize (continu)
     "solver_options": {
@@ -635,6 +645,7 @@ def _get_engine_defaults() -> dict[str, Any]:
         "preferences": PREFERENCES,
         "cash": CASH,
         "optimization": OPTIMIZATION,
+        "regularization": REGULARIZATION,
         "backtest": BACKTEST,
         "regimes": REGIMES,
         "agent_preferences": {},
@@ -1039,6 +1050,10 @@ def validate_settings(settings: Mapping[str, Any] | None = None) -> None:
         raise ValueError("Solveur non couvert par la configuration actuelle.")
     if optim["constraint_tolerance"] <= 0 or optim["sum_weights_tolerance"] <= 0:
         raise ValueError("Les tolérances d'optimisation doivent être positives.")
+    reg = cfg.get("regularization", REGULARIZATION)  # absente d'une ancienne configuration: pénalités nulles
+    for key in ("diversification_penalty", "high_volatility_penalty", "volatility_threshold"):
+        if _finite_number(reg[key], f"regularization.{key}") < 0:
+            raise ValueError(f"regularization.{key} doit être fini et non négatif.")
     if "etf_only" in constraints:
         raise ValueError("etf_only est remplacé par instrument_selection (etf_only | mixed | stocks_only).")
     if constraints["instrument_selection"] not in INSTRUMENT_SELECTION:
