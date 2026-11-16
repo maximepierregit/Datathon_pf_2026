@@ -71,11 +71,11 @@ sequenceDiagram
   R->>GR: ApplyGuardrail sur l'ajustement écrit par le client
   R->>B: Pépite écrit les 3 profils de contraintes
   par 3 gestionnaires en parallèle
-    R->>B: choix des titres
-    R->>GW: screen_assets, optimize_portfolio, macro
+    R->>R: Markowitz global (relancé avec limites assouplies si impossible)
+    R->>GW: macro
+    R->>B: explication du portefeuille, puis relecture par l'agent Risque
   end
-  R->>B: 3 agents Risque relisent, juge final compare
-  R-->>GW: reconstruction si le juge l'exige
+  R->>B: juge final : vérifie les limites, compare (pénalité si relance assouplie)
   R->>M: CreateEvent (état compressé de la session)
   R-->>L: événements SSE (statuts, récit de Pépite, portefeuilles)
   L-->>N: flux relayé sans tampon, battement toutes les 15 s
@@ -116,7 +116,7 @@ La version actuelle (v4) remplace chaque rôle de l'EC2 par un service géré. L
 
 **Pourquoi.**
 - Pépite parle au client et répond dans le chat : la latence compte, Sonnet suffit pour vérifier un questionnaire et rédiger.
-- Les gestionnaires et les juges raisonnent sur des contraintes croisées (exclusions, parts régionales, facteurs, plafond de volatilité) et doivent corriger une sélection refusée par l'optimiseur. Ce sont les tâches les plus exigeantes : elles reçoivent le modèle le plus fort.
+- Les gestionnaires, les agents Risque et le juge raisonnent sur des contraintes croisées (exclusions, parts régionales, facteurs, plafond de volatilité) pour expliquer un portefeuille calculé par le code, en signaler les risques et départager trois variantes. Ce sont les tâches les plus exigeantes : elles reçoivent le modèle le plus fort.
 - Les profils d'inférence globaux répartissent la charge entre régions et réduisent le risque de limitation de débit pendant la démo.
 - Chaque sortie d'agent passe par un schéma. Les schémas ne contiennent que du texte et des scores qualitatifs : aucun champ ne permet à un modèle de fournir un poids ou un rendement.
 
@@ -227,8 +227,10 @@ Les rôles des runtimes ne peuvent être assumés que par AgentCore, depuis notr
 | Limites réglementaires : 40 % au plus par ligne, pas de levier | `constraints.py` |
 | Preuves chiffrées citées par les agents Risque | `evidence.py` |
 | Mélanges 80/20 d'un profil incohérent | `monport.py` |
+| Relance avec limites assouplies quand les limites dures sont impossibles à tenir | `allocator.optimize_with_relaxation` |
+| Pénalité de 3 points sur 10 d'une variante relancée, au choix du gagnant (profil cohérent) | `monport.pick_winner`, `config.JUDGE_RELAUNCH_PENALTY` |
 
-Les modèles choisissent les titres, rédigent les profils de contraintes et expliquent. Toute contrainte extraite d'un texte est validée contre les valeurs réelles du jeu de données ; une cible inconnue devient une question au client.
+Le code choisit les titres et les poids. Les modèles rédigent les profils de contraintes, expliquent, signalent les risques et comparent. Toute contrainte extraite d'un texte est validée contre les valeurs réelles du jeu de données ; une cible inconnue devient une question au client.
 
 ### 5.2 Résilience
 
@@ -237,7 +239,9 @@ Le parcours du client ne s'arrête pas sur une panne partielle :
 | Panne | Comportement |
 |---|---|
 | Gateway indisponible | l'outil tourne dans le processus des agents |
-| Gestionnaire en échec | sélection de repli calculée par le code (`fallback_selection`) |
+| Limites dures impossibles à tenir | le code relance le calcul avec des limites assouplies (pourcentages visés, puis plafonds, puis exclusions ; jamais la limite de 40 % par ligne) et le client est averti |
+| Explication d'un gestionnaire en échec | portefeuille calculé gardé, carte « Portefeuille prêt (explication indisponible) » |
+| Gestionnaire en échec | carte fermée « Portefeuille impossible à construire », les autres portefeuilles continuent |
 | Juge en échec | verdict calculé par le code |
 | Agent Risque en échec | avertissement dans le flux, portefeuille présenté sans rapport |
 | Mémoire indisponible | erreur journalisée, conversation gardée dans la microVM |

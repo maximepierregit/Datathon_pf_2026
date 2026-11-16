@@ -1,21 +1,32 @@
 # AlphaForge / MonPort — Audit des paramètres et des calculs front-end
 
 > **Nature du document.** Analyse en lecture seule du dépôt `datathon-pf-2026`. Aucun code, paramètre ni formule n'a été modifié.
-> **Date de l'analyse :** 2026-11-16.
+> **Version 2** (2026-11-16), recalée sur le code du commit `9729f50`. Elle remplace la version 1.
 > **Langue :** français.
+
+### Ce qui a changé par rapport à la version 1
+
+| Changement du code | Effet sur le document |
+|---|---|
+| **Deux pénalités souples sur l'utilité** (`REGULARIZATION` : `diversification_penalty` λ_D et `high_volatility_penalty` λ_V, plus un seuil de volatilité), qui s'appuient sur la diagonale de la matrice de covariance Σ | Nouvelle section [1.B.2](#1b2-pénalités-de-régularisation-liées-à-σ-deux-pénalités), mises à jour de 1.E, 1.G, 3.A et 3.C |
+| Le mélange 80/20 (`blend`) applique désormais « 0 ou au moins 1 % », des plafonds par titre et une plage de positions (`enforce_minimum`, `position_range`, `stock_cap`) | 1.F et 1.G.4 |
+| Relance avec limites assouplies : pénalité de note du juge (`JUDGE_RELAUNCH_PENALTY = 3`) appliquée par le code (`workers._penalty`), notes pénalisées dans `pick_winner` | 1.E et 1.G.4 |
+| Numéros de ligne décalés dans `config.py` (après `CASH`), `optimizer.py`, `allocator.py`, `monport.py`, `workers.py` | Toutes les références ont été relevées à nouveau par `grep -n` |
+| Demande : pour chaque concept applicable, indiquer où il s'affiche dans le front-end | Nouvelle section [2.6](#26-où-chaque-concept-saffiche-dans-le-front-end), ligne ajoutée au tableau 2.2 et ligne P9 corrigée |
 
 ## Table des matières
 
 0. [Périmètre, méthode et conventions](#0-périmètre-méthode-et-conventions)
 1. [Partie 1 — Cartographie des paramètres (backend)](#partie-1--cartographie-des-paramètres-backend)
    - [1.A Rendements espérés et CAPM](#1a-rendements-espérés-et-capm)
-   - [1.B Matrice de covariance](#1b-matrice-de-covariance)
+   - [1.B Matrice de covariance](#1b-matrice-de-covariance) et [1.B.2 Pénalités liées à Σ](#1b2-pénalités-de-régularisation-liées-à-σ-deux-pénalités)
    - [1.C Aversion au risque et profils](#1c-aversion-au-risque-et-profils-investisseur)
    - [1.D Agent, sentiment et ajustements](#1d-agent-sentiment-et-ajustements)
    - [1.E Optimisation de portefeuille](#1e-optimisation-de-portefeuille)
    - [1.F Autres paramètres](#1f-autres-paramètres)
    - [1.G Section spéciale : profils et aversion au risque](#1g-section-spéciale--profils-et-aversion-au-risque)
 2. [Partie 2 — Audit des calculs du front-end](#partie-2--audit-des-calculs-du-front-end)
+   - [2.6 Où chaque concept s'affiche dans le front-end](#26-où-chaque-concept-saffiche-dans-le-front-end)
 3. [Partie 3 — Synthèse consolidée](#partie-3--synthèse-consolidée)
    - [3.A Inventaire maître](#3a-inventaire-maître-des-paramètres)
    - [3.B Matrice de responsabilités front vs backend](#3b-matrice-de-responsabilités-front-vs-backend)
@@ -32,31 +43,31 @@
 |---|---|
 | Langue | Français |
 | Code déployé seulement | Les chemins actifs depuis `backend/main.py` sont documentés. Le code inactif n'apparaît que lorsqu'il crée un doublon ou une valeur en conflit avec le chemin actif. Il est alors étiqueté **legacy**. |
-| Tests, `data-prep/`, dossiers générés | **Exclus** (`backend/tests/`, `data-prep/`, `.venv`, `node_modules`, `dist`, `build`, caches). La consigne « Prend les pas en compte » a été lue comme « ne les prends pas en compte ». |
+| Tests, `data-prep/`, dossiers générés | **Exclus** (`backend/tests/`, `data-prep/`, `.venv`, `node_modules`, `dist`, `build`, caches). La consigne « Prend les pas en compte » a été lue comme « ne les prends pas en compte ». Le fichier `backend/tests/test_regularization.py` existe pour les nouvelles pénalités ; il n'a pas été utilisé comme source de valeurs. |
 
 ### 0.2 Chemin actif (vérifié par lecture des imports)
 
-- Point d'entrée : `backend/main.py` (l.22 à 44) associe les modes `monport_check`, `monport`, `monport_chat`, `monport_rebuild` aux flux de `workflow/flow.py` (l.294 à 311).
+- Point d'entrée : `backend/main.py` (l.22 à 44) associe les modes `monport_check`, `monport`, `monport_chat`, `monport_rebuild` aux flux de `workflow/flow.py` (`stream_check` l.305, `stream_monport` l.310, `stream_chat` l.315, `stream_rebuild` l.320).
 - Chaîne : `workflow/flow.py` → `monport.py` (profils, S, A, contraintes) → `workflow/workers.py` → `agents/portfolio_manager.py` → `allocator.py` (`optimize_with_relaxation`, `optimize_universe`, `select_holdings`) → `optimizer.py` (`_linear_lp`, `_solve_slsqp`, `optimize_weights`) ; `catalog.py` (`settings_for`, `plan_for`, `agent_request`) → `config.get_agent_settings` ; `market.py` (`get_market`, `estimate_expected_returns`, `universe_covariance`) ; `backtest.py`, `projection.py`, `factors.py`, `guardrail.py`, `runtime.py`.
-- **Mode agent actif.** `catalog.settings_for` (`catalog.py:604`) appelle `get_agent_settings`, donc `CONSTRAINTS` est la base en production, pas `BASE_CONSTRAINTS`.
+- **Mode agent actif.** `catalog.settings_for` (`catalog.py:604`) appelle `get_agent_settings`, donc `CONSTRAINTS` est la base en production, pas `BASE_CONSTRAINTS`. `REGULARIZATION` est copiée dans les réglages par `config.py:652` (clé `regularization`), donc elle est active dans les deux modes.
 - Point d'entrée distinct : `backend/mcp_server/main.py` → `tool_core.py`. Il utilise `allocator.optimize` (legacy pour le workflow principal, voir 0.3).
 
 ### 0.3 Code legacy ou inerte (signalé pour éviter les faux positifs)
 
 | Élément | Où | Statut | Preuve |
 |---|---|---|---|
-| `BASE_CONSTRAINTS`, `BASE_PROFILE`, `get_base_settings` | `config.py:464`, `:573` | Simulation et CLI `optimizer.main` seulement | `settings_for` n'utilise que le mode agent |
+| `BASE_CONSTRAINTS`, `BASE_PROFILE`, `get_base_settings` | `config.py:474`, `:583` | Simulation et CLI `optimizer.main` seulement | `settings_for` n'utilise que le mode agent |
 | `CANDIDATES`, `constraints.select_candidates` | `config.py:291` | Inutilisé par MonPort (« MonPort n'en a plus besoin ») | Commentaire `config.py:~287` |
 | `optimizer.estimate_expected_returns`, `optimizer.estimate_covariance` | `optimizer.py:174`, `:276` | Pipeline autonome (`optimize_portfolio`, CLI). Doublons de `market.estimate_expected_returns` | `build_market` appelle `market.py:439` |
 | `MANDATES` (`mandates.py:26-61`) | `mandates.py` | Non référencé. Le workflow construit ses `Mandate` avec `vol_cap_factor=None` (`workers.py:191`) | `vol_cap_for` renvoie toujours `None` |
-| `allocator.optimize` | `allocator.py:183` | Hors sélection du workflow. Reste actif via `_raise_volatility_cap` (`monport.py:742`) et `mcp_server` | |
+| `allocator.optimize` | `allocator.py:183` | Hors sélection du workflow. Reste actif via `_raise_volatility_cap` (`monport.py:720-745`) et `mcp_server` | |
 | `BOND_SHIFT` | `monport.py:138` | Tout à 0.0, non utilisé | |
-| `config.BACKTEST`, `config.REGIMES` | `config.py:418`, `:430` | `enabled: False`, sans lien avec `backtest.py` | |
+| `config.BACKTEST`, `config.REGIMES` | `config.py:428`, `:440` | `enabled: False`, sans lien avec `backtest.py` | |
 
 ### 0.4 Légende
 
 - **Type** : *Constante en dur* (littéral dans une fonction ou un module), *Réglage configurable* (clé de `config.py`), *Argument de fonction*, *Paramètre dérivé*, *Entrée utilisateur dynamique*, *Estimé* (calculé sur les données, non choisi).
-- **Lignes** : numéros relevés par `grep -n` sur les fichiers du dépôt. Un `~` signale une valeur approximative.
+- **Lignes** : numéros relevés par `grep -n` sur le code du commit `9729f50`. Un `~` signale une valeur approximative.
 - **non vérifié** : je n'ai pas pu confirmer l'information dans le code.
 - Les chemins sont relatifs à `backend/src/invest_agents/` (abrégé **`ia/`**), sauf indication contraire. Le front-end est sous `frontend/src/`.
 - Les tableaux fusionnent certaines des 13 colonnes demandées pour rester lisibles : *Composant et Catégorie* ensemble, *Objectif et Formule* ensemble, *Dépendances et Configurabilité* ensemble.
@@ -77,7 +88,7 @@ Formules (`ia/market.py:47-115`, méthode active ; `ia/optimizer.py:174` est son
 | Paramètre | Valeur actuelle | Fonction | Fichier : lignes | Comp. / Cat. | Type | Objectif et formule | Impact | Dépendances et configurabilité |
 |---|---|---|---|---|---|---|---|---|
 | `RF_ANNUAL` | `0.035` | `Market.risk_free_rate`, `build_market`, `_best_sharpe`, `backtest()` | `ia/config.py:94` ; lu `ia/market.py:293`, `:438` ; `ia/allocator.py:119` | Config / Returns | Réglage configurable (défini une seule fois) | Taux sans risque. Cible CAPM `rf + β·ERP`, et Sharpe `(μ−rf)/σ` | Hausse : cible CAPM plus haute, Sharpe plus bas | Copié dans `capm_shrinkage.rf_annual` (l.132) et `capm_benchmark_shrinkage.rf_annual` (l.141). Modifiable en éditant `config.py` seulement. Hypothèse de démonstration (commentaire l.92-93) |
-| `ESTIMATION.mode` | `"by_asset_class"` | `get_return_method` | `ia/config.py:99` ; `:746` | Config / Returns | Réglage configurable | Sélection de la méthode par classe, type ou symbole | Change la formule de μ par titre | `single_method` (l.100, `"historical"`) ne s'applique que si `mode == "single_method"` |
+| `ESTIMATION.mode` | `"by_asset_class"` | `get_return_method` | `ia/config.py:99` ; `:757` | Config / Returns | Réglage configurable | Sélection de la méthode par classe, type ou symbole | Change la formule de μ par titre | `single_method` (l.100, `"historical"`) ne s'applique que si `mode == "single_method"` |
 | `method_by_asset_class` | Equity→`capm_shrinkage` ; Fixed Income, Multi-Asset, Real Estate, Commodities, Alternative→`historical` | `get_return_method` | `ia/config.py:104-111` | Config / Returns | Réglage configurable | Règle de choix de méthode | Les obligations ont un μ purement historique. Les ETF d'actions passent aussi par le CAPM (ils sont `Equity`) | Priorité : symbole > type d'instrument > classe (non relu ligne à ligne : non vérifié) |
 | `method_by_instrument_type` | `{"Cryptocurrency": "ewma"}` | idem | `ia/config.py:114` | Config / Returns | Réglage configurable | EWMA pour la crypto directe | | |
 | `method_by_symbol` | `{"BITW": "ewma"}` | idem | `ia/config.py:115` | Config / Returns | Réglage configurable | EWMA pour l'ETP crypto | | |
@@ -92,11 +103,11 @@ Formules (`ia/market.py:47-115`, méthode active ; `ia/optimizer.py:174` est son
 | `capm_shrinkage.historical_lookback_observations` | `None` | `_historical_mu` | `ia/config.py:135` | Config / Returns | Réglage configurable | Fenêtre de la composante historique | | « avant : 1260 » |
 | β | Estimé (cov/var avec SPY) | `_beta` | `ia/market.py:62-72` | Backend / Returns | **Estimé** (non choisi) | Sensibilité au marché | | `None` si variance du benchmark ≤ 0 |
 | `capm_benchmark_shrinkage.*` | `alpha 0.50`, `min_paired_observations 120`, `erp_annual_by_benchmark {}`, `missing_premium_policy "error"`, `missing_benchmark_policy "error"` | `estimate_expected_returns` | `ia/config.py:137-148` | Config / Returns | Réglage configurable | Méthode CAPM par benchmark | **Aucune classe ne la sélectionne** : inactive en production | `erp_annual_by_benchmark` est vide : l'activer sans la remplir lève une erreur |
-| `BENCHMARKS.single_market_proxy` | `"SPY"` | `get_capm_benchmark` | `ia/config.py:157+` | Config / Returns | Réglage configurable | Proxy global | | Utilisé seulement par `capm_benchmark_shrinkage` (inactive) |
+| `BENCHMARKS.single_market_proxy` | `"SPY"` | `get_capm_benchmark` | `ia/config.py:157+` ; fonction `:782` | Config / Returns | Réglage configurable | Proxy global | | Utilisé seulement par `capm_benchmark_shrinkage` (inactive) |
 | `BENCHMARKS.symbol_overrides` | `{"NVDA": "SMH"}` | `get_capm_benchmark` | `ia/config.py:163` | Config / Returns | Réglage configurable | Benchmark individuel | | Inactif en production (méthode inactive) |
 | `BENCHMARKS.etf_overrides` | 13 paires (SPY↔IYY, QQQ→SPY, XLK→SPY, VGT→SPY, SMH→SPY, XIU.TO↔XIC.TO, EFA→ACWX, EEM→ACWX, EWQ/EWG/EWU→VGK) | idem | `ia/config.py:~168-184` | Config / Returns | Réglage configurable | Mapping ETF → benchmark | | Inactif en production |
 | `BENCHMARKS.stock_country_sector` | 17 clés (« United States\|Information Technology »→XLK, … « Canada\|Financials »→XFN.TO, …) | idem | `ia/config.py:~187-204` | Config / Returns | Réglage configurable | Mapping pays et secteur → ETF | | Inactif en production |
-| `DATA.periods_per_year` | `252` | `_historical_mu`, `_ewma_mu`, `build_market` | `ia/config.py:40` ; `ESTIMATION.periods_per_year` l.98 | Config / Returns | Réglage configurable | Annualisation de μ et de `ann_vol` | Mal calibré : biais proportionnel de μ | Validé identique entre DATA, ESTIMATION et COVARIANCE (`validate_settings`, `config.py:911`). **Autre valeur : voir 1.B (annualisation de Σ)** |
+| `DATA.periods_per_year` | `252` | `_historical_mu`, `_ewma_mu`, `build_market` | `ia/config.py:40` ; `ESTIMATION.periods_per_year` l.98 | Config / Returns | Réglage configurable | Annualisation de μ et de `ann_vol` | Mal calibré : biais proportionnel de μ | Validé identique entre DATA, ESTIMATION et COVARIANCE (`validate_settings`, `config.py:922`). **Autre valeur : voir 1.B (annualisation de Σ)** |
 | `ESTIMATION.forecast_horizon_years` | `1` | non vérifié | `ia/config.py:97` | Config / Returns | Réglage configurable | Horizon de prévision | non vérifié | Usage non confirmé |
 
 **Constats de la section A**
@@ -130,18 +141,73 @@ Formules (`ia/market.py:119-322`, active) :
 | `sample.eigenvalue_floor` | `1e-10` | idem | `ia/config.py:239` ; `ia/market.py:~148` | Config / Covariance | Réglage configurable | Plancher de valeur propre | | Inactif |
 | `COVARIANCE_HISTORY.start_date` | `"2021-01-01"` | `history_filter` | `ia/config.py:265` ; `ia/market.py:~179` | Config / Covariance | Réglage configurable | Début de l'horizon. Un titre sans rendement à cette date est exclu de l'univers d'optimisation | Reculer la date : plus de titres admissibles, historique commun plus long | **Paramètre structurant** pour la taille de l'univers |
 | `COVARIANCE_HISTORY.require_full_horizon` | `True` | `history_filter` | `ia/config.py:266` | Config / Covariance | Réglage configurable | Exige l'historique complet | `False` : n'exclut plus aucun titre | |
-| `COVARIANCE_HISTORY.max_start_delay_business_days` | `5` | `history_filter` | `ia/config.py:268` ; `ia/market.py:~190` | Config / Covariance | Réglage configurable | Tolérance de calendrier | Hausse : accepte des titres plus récents | Borné à 0-10 par `validate_settings` (`config.py:911`) |
+| `COVARIANCE_HISTORY.max_start_delay_business_days` | `5` | `history_filter` | `ia/config.py:268` ; `ia/market.py:~190` | Config / Covariance | Réglage configurable | Tolérance de calendrier | Hausse : accepte des titres plus récents | Borné à 0-10 par `validate_settings` (`config.py:922`) |
 | `periods_per_year_effective` | Estimé : `n_communes / (jours/365.25)` | `synchronized_returns`, `Market.universe_covariance` | `ia/market.py:250`, `:257`, `:312` | Backend / Covariance | **Estimé** (dérivé) | Annualise Σ | Une période effective ≠ 252 change la volatilité de tous les titres | **Incohérence : voir ci-dessous** |
-| Tolérance PSD (optimiseur) | `-1e-8` | `optimize_weights` | `ia/optimizer.py:478` | Backend / Covariance | Constante en dur | Refuse Σ non semi-définie positive | | |
-| Symétrisation | `(Σ+Σᵀ)/2` | `ledoit_wolf_universe`, `optimize_weights` | `ia/market.py:~286` ; `ia/optimizer.py:477` | Backend / Covariance | Constante en dur (opération) | | | |
+| Tolérance PSD (optimiseur) | `-1e-8` | `optimize_weights` | `ia/optimizer.py:519` | Backend / Covariance | Constante en dur | Refuse Σ non semi-définie positive | | |
+| Symétrisation | `(Σ+Σᵀ)/2` | `ledoit_wolf_universe`, `optimize_weights` | `ia/market.py:~286` ; `ia/optimizer.py:~518` | Backend / Covariance | Constante en dur (opération) | | | |
 | Tolérances PSD legacy | `-1e-10`, floor `sample.eigenvalue_floor` | `optimizer.estimate_covariance` | `ia/optimizer.py:349` | Backend / Covariance | Constante en dur (legacy) | | | Pipeline autonome seulement |
 
 **Incohérence d'annualisation (constat vérifié dans le code)**
 
 - μ et `ann_vol` annualisent avec **252** (`DATA.periods_per_year`).
 - Σ de l'univers annualise avec `periods_per_year_effective` (`n / (jours/365.25)`), qui n'est pas forcément 252 (`market.py:312` : `info["periods_per_year_effective"] or float(252)`).
-- Conséquence : `ann_vol` (écrans, tri, Sharpe de screening) et `sqrt(diag Σ)` (volatilité du portefeuille) ne sont pas calculés avec la même base. L'écart dépend du nombre de dates communes retenues. Je n'ai pas exécuté le code, donc l'ampleur de l'écart n'est **pas vérifiée**.
-- `market.moments` utilise `estimate_covariance` (LW non synchronisé, annualisé à 252) pour tout symbole **hors** de l'univers d'optimisation (`market.py:~383`).
+- Conséquence : `ann_vol` (écrans, tri, Sharpe de screening) et `sqrt(diag Σ)` (volatilité du portefeuille, et seuil des pénalités de 1.B.2) ne sont pas calculés avec la même base. L'écart dépend du nombre de dates communes retenues. Je n'ai pas exécuté le code, donc l'ampleur de l'écart n'est **pas vérifiée**.
+- `market.moments` utilise `estimate_covariance` (LW non synchronisé, annualisé à 252) pour tout symbole **hors** de l'univers d'optimisation (`market.py:391`).
+
+## 1.B.2 Pénalités de régularisation liées à Σ (deux pénalités)
+
+**Nouveauté.** Deux pénalités souples sont ajoutées à l'utilité de Markowitz. Elles ne sont pas des contraintes. Elles lisent la **diagonale de Σ** (la variance de chaque titre dans la matrice annualisée de l'optimiseur). Elles sont définies dans `config.REGULARIZATION` (`config.py:405-409`) et calculées par trois fonctions de `optimizer.py`.
+
+### Formule
+
+```
+U = wᵀμ − (A/2)·wᵀΣw − λ_D · Σᵢ wᵢ² − λ_V · Σᵢ qᵢ·wᵢ²
+qᵢ = max(0, Σᵢᵢ − seuil²)        (Σᵢᵢ = variance annualisée du titre i ; seuil = σ maximal toléré)
+```
+
+- **λ_D** (`diversification_penalty`) : pénalise la somme des carrés des poids, donc la concentration (indice de Herfindahl), de façon uniforme.
+- **λ_V** (`high_volatility_penalty`) : pénalise les gros poids dans les titres dont la volatilité dépasse `volatility_threshold`. Les titres sous le seuil ont `q = 0` et ne sont pas pénalisés.
+- Gradient : `∇pénalité = 2·λ_D·w + 2·λ_V·(q ⊙ w)`. Le gradient de l'utilité vaut donc `μ − A·Σw − 2·λ_D·w − 2·λ_V·(q ⊙ w)`.
+
+**Équivalence mathématique (dérivée à la main, non présente dans le code).** `U = wᵀμ − ½·wᵀ(A·Σ + 2λ_D·I + 2λ_V·diag(q))·w`. Les deux pénalités reviennent donc à **ajouter un terme diagonal à Σ** (un « ridge ») : `Σ_eff = Σ + (2λ_D/A)·I + (2λ_V/A)·diag(q)`. Les corrélations ne changent pas, seules les variances propres des titres sont gonflées. À λ_D = λ_V = 0, l'optimiseur est identique à celui d'avant.
+
+### Paramètres
+
+| Paramètre | Valeur actuelle | Fonction | Fichier : lignes | Comp. / Cat. | Type | Objectif et formule | Impact | Dépendances et configurabilité |
+|---|---|---|---|---|---|---|---|---|
+| `REGULARIZATION.diversification_penalty` (λ_D) | `0.0` | `regularization_coefficients`, `regularization_penalty`, `regularization_gradient` | `ia/config.py:406` ; `ia/optimizer.py:391-422` | Config / Covariance (pénalité) | Réglage configurable (**non calibré**, commentaire `config.py:~402-404`) | `λ_D·Σ wᵢ²` | Hausse : portefeuille plus dispersé. Exemple à la main : poids 0.5 sur un seul titre → pénalité `λ_D·0.25` ; deux titres à 0.25 → `λ_D·0.125` | Validé fini et ≥ 0 (`config.py:1057-1060`). **Absent des champs autorisés de `apply_portfolio_request`** (`config.py:1091-1098`) : ni l'agent ni le client ne peuvent le changer. Modifiable en éditant `config.py` |
+| `REGULARIZATION.high_volatility_penalty` (λ_V) | `0.0` | idem | `ia/config.py:407` | Config / Covariance (pénalité) | Réglage configurable (**non calibré**) | `λ_V·Σ qᵢ·wᵢ²` | Hausse : réduit les poids des titres très volatils. Exemple à la main : titre à σ = 40 %, seuil 25 % → `q = 0.16 − 0.0625 = 0.0975` ; poids 0.5 → pénalité `λ_V·0.0975·0.25 ≈ λ_V·0.0244` | Idem. Interagit avec A (voir ci-dessus) |
+| `REGULARIZATION.volatility_threshold` | `0.25` (25 % annualisé) | `excess_variance` | `ia/config.py:408` ; `ia/optimizer.py:398-401` | Config / Covariance (pénalité) | Réglage configurable (hypothèse) | Seuil de `qᵢ` | Hausse : moins de titres pénalisés. `0.25` coïncide avec le dernier ancrage de `VOL_ANCHORS` (0.25), sans lien dans le code | Compare `√Σᵢᵢ` de **l'optimiseur** (annualisé avec `periods_per_year_effective`, voir ci-dessus), pas `ann_vol` de `market.py`. Défaut du code si la clé manque : `0.25` (`optimizer.py:392-396`) |
+| `qᵢ` (variance en excès) | Calculé : `max(0, Σᵢᵢ − seuil²)` | `excess_variance` | `ia/optimizer.py:398-401` | Backend / Covariance | **Paramètre dérivé** | Mesure par titre de l'excès de variance | | Calculé une fois par résolution (`_solve_slsqp`, `optimizer.py:435`) et une fois dans `select_holdings` (`allocator.py:377`). Le cash (variance 0) a `q = 0` |
+| Clé `regularization` des réglages | `REGULARIZATION` | `_get_engine_defaults` | `ia/config.py:652` | Config / Autre | Réglage configurable | Transmet la section à l'optimiseur | | `cfg.get("regularization") or {}` : absente → pénalités nulles (`optimizer.py:393`). Validation tolérante à une ancienne configuration (`config.py:1057`) |
+| Formule de l'objectif | `U = … − λ_D·Σw² − λ_V·Σq·w²` | `OPTIMIZATION["formula"]` | `ia/config.py:413` | Config / Solver | Texte informatif | Documentation | | Texte, non évalué |
+
+### Propagation : où les pénalités agissent
+
+| Étape | Fonction | Fichier : lignes | Effet |
+|---|---|---|---|
+| Résolution continue | `_solve_slsqp` | `ia/optimizer.py:424-455` | La fonction à minimiser (`negative_utility`, l.437-439) et son gradient (`derivative`, l.441-442) incluent les pénalités |
+| Optimum continu global | `_continuous` | `ia/allocator.py:302` | Appelle `_solve_slsqp` avec les réglages (donc pénalisé) |
+| Optimum sur la sélection | `_floored` → `_continuous` | `ia/allocator.py:324` | Idem |
+| Résolution finale sur la sélection | `_solve` → `optimize_weights` → `_solve_slsqp` | `ia/allocator.py:108` ; `ia/optimizer.py:471` | Idem. Pour `max_sharpe`, `_best_sharpe` (l.115) parcourt `A_LADDER` avec des poids pénalisés |
+| Utilité reportée | `optimize_weights` | `ia/optimizer.py:569-576` | `PortfolioResult.utility = μ·w − ½·A·w'Σw − pénalité` (utilité pénalisée) |
+| Utilité de référence | `_utility` | `ia/allocator.py:339-344` | Remplace l'ancien calcul. Sert à `u0` (l.517), à la comparaison de `select_holdings` et à `utility_final` du diagnostic |
+| Gain marginal de sélection | `marginal` dans `select_holdings` | `ia/allocator.py:379-382` | `μ − A·Σw − 2λ_D·w − 2λ_V·(q ⊙ w)` : classe les titres à ajouter en tenant compte des pénalités |
+
+**Ce que les pénalités ne modifient pas.**
+
+- `portfolio_metrics` (`market.py:394`) : `expected_return`, `volatility`, Sharpe et drawdown affichés sont calculés sur les poids finaux **sans** pénalité. La pénalité n'agit que sur les poids.
+- Le calcul du Sharpe dans `_best_sharpe` : il utilise `run.expected_return_annual` et `run.volatility_annual`, non pénalisés. Seul le choix des poids est affecté.
+- `_under_cap` : le plafond de volatilité est vérifié sur `run.volatility_annual` non pénalisé.
+- μ, Σ, le cash, les contraintes et les trois variantes : **les mêmes** λ_D et λ_V s'appliquent aux trois portefeuilles (commentaire `config.py:401`). Ils ne dépendent ni du profil, ni de S, ni de A.
+
+**Incidences à retenir.**
+
+1. Avec les valeurs actuelles (0.0), l'effet est nul. Rien n'est calibré.
+2. λ_D et λ_V jouent comme une hausse de A *sur la diagonale seulement* (voir l'équivalence). Elles s'ajoutent à A sans que le diagnostic `A_effective` (`allocator.py:552`) en rende compte.
+3. Le seuil de 25 % s'applique à `√Σᵢᵢ` de la matrice Ledoit-Wolf rétrécie. Une variance rétrécie vers la moyenne peut placer un titre sous ou sur le seuil par rapport à son écart-type brut.
+4. La base d'annualisation de Σ (252 contre `periods_per_year_effective`) déplace directement l'ensemble des titres au-dessus ou en dessous du seuil.
+5. Pour le profil incohérent, le mélange 80/20 (`blend`) est recalculé par le code après coup (`enforce_minimum`) et ne repasse pas par l'optimiseur : les pénalités ne s'appliquent donc pas au mélange lui-même, mais seulement à ses bases.
 
 ## 1.C Aversion au risque et profils investisseur
 
@@ -150,7 +216,7 @@ Détail complet des formules en [1.G](#1g-section-spéciale--profils-et-aversion
 | Paramètre | Valeur actuelle | Fonction | Fichier : lignes | Comp. / Cat. | Type | Objectif et formule | Impact | Dépendances et configurabilité |
 |---|---|---|---|---|---|---|---|---|
 | `RISK_AVERSION.min` / `.max` | `1.0` / `25.0` | `apply_portfolio_request`, `catalog.agent_request` | `ia/config.py:310-311` ; `ia/catalog.py:573-575` | Config / Risk Aversion | Réglage configurable | Plage permise de A | | **Dupliqué** : `allocator.A_MIN, A_MAX = 1.0, 25.0` (`allocator.py:45`) et `PepiteCheck.risk_aversion` ge=1, le=25 (`ia/schemas.py:318`) |
-| `RISK_AVERSION.default` | `5.0` | `apply_portfolio_request` | `ia/config.py:312` | Config / Risk Aversion | Réglage configurable | A si aucun A fourni. Écrasé par `risk_aversion_A` de la requête | | `catalog.agent_request` envoie 5.0 si A est `None` |
+| `RISK_AVERSION.default` | `5.0` | `apply_portfolio_request` | `ia/config.py:312` | Config / Risk Aversion | Réglage configurable | A si aucun A fourni. Écrasé par `risk_aversion_A` de la requête | | `catalog.agent_request` envoie 5.0 si A est `None`. **Autre défaut : `PepiteCheck.risk_aversion` vaut `7.0` par défaut** (`schemas.py:318`) |
 | `RISK_AVERSION.bands` | très audacieux ≤ 1.5, audacieux ≤ 3.5, équilibré ≤ 7.0, prudent ≤ 14.0, très prudent ≤ 25.0 | **usage non vérifié** | `ia/config.py:~313-319` | Config / Risk Aversion | Réglage informatif | Étiquettes de bandes de A | | Aucun appelant confirmé |
 | `AVERSION_ANCHORS` | `(0,25) (0.2,14) (0.4,7) (0.6,3.5) (0.8,1.5) (1,1)` | `risk_aversion` | `ia/monport.py:151` | Backend / Risk Aversion | Constante en dur | Ancres de l'interpolation log S → A | Modifie la pente de A le long de S | **Dupliqué** dans `frontend/src/lib/engine.ts:69` |
 | `VOL_ANCHORS` | `(0,0.06) (0.2,0.08) (0.4,0.11) (0.6,0.14) (0.8,0.18) (1,0.25)` | `assess`, `slot_volatility` | `ia/monport.py:152` | Backend / Risk Aversion | Constante en dur | Plafond de volatilité par S (filet de sécurité) | Hausse : portefeuilles plus volatils permis | **Dupliqué** dans `engine.ts:92-101` |
@@ -164,13 +230,13 @@ Détail complet des formules en [1.G](#1g-section-spéciale--profils-et-aversion
 | `CAPACITY_MARGIN` | `0.125` | `risk_position` | `ia/monport.py:148` | Backend / Risk Aversion | Constante en dur | La tolérance ne dépasse pas la capacité de plus de 0.125 | Hausse : la tolérance peut tirer S plus haut | **Dupliqué** `engine.ts:46` |
 | `ADJUSTMENT_STEP` | `0.05` | `risk_position` | `ia/monport.py:149` | Backend / Sentiment | Constante en dur | Valeur d'un cran d'ajustement de Pépite | | **Absent du front** |
 | Pondérations de la capacité C | `0.6` (horizon), `0.4` (âge) | `capacity` | `ia/monport.py:344` | Backend / Risk Aversion | Constante en dur | `C = 0.6·h + 0.4·a` | | **Dupliqué** `engine.ts:55` et `RiskNotebook.tsx:125-126` |
-| Pondérations de la tolérance T | `0.5` (réaction), `0.3` (objectif), `0.2` (confort) | `tolerance` | `ia/monport.py:352` | Backend / Risk Aversion | Constante en dur | `T = 0.5·r + 0.3·o + 0.2·c` | | **Dupliqué** `engine.ts:56` et `RiskNotebook.tsx` |
+| Pondérations de la tolérance T | `0.5` (réaction), `0.3` (objectif), `0.2` (confort) | `tolerance` | `ia/monport.py:352` | Backend / Risk Aversion | Constante en dur | `T = 0.5·r + 0.3·o + 0.2·c` | | **Dupliqué** `engine.ts:56` et `RiskNotebook.tsx:139-141` |
 | Plafond d'horizon | `20` ans | `capacity` | `ia/monport.py:341-343` | Backend / Risk Aversion | Constante en dur | `h = (min(horizon,20) − 1)/19` | | |
 | Âge de référence | `75`, diviseur `50` | `capacity` | `ia/monport.py:343` | Backend / Risk Aversion | Constante en dur | `a = (75 − âge)/50` | | |
 | `LOSS_BY_REACTION` | `{0:10.0, 1:15.0, 2:25.0, 3:35.0}` (points de %) | `to_form` | `ia/monport.py:128` | Backend / Risk Aversion | Constante en dur | Perte acceptée selon la réaction. Sert au formulaire des agents, pas à S | | **Dupliqué** en fractions `engine.ts:303` |
-| `LINE_CAP` | `0.40` | `validate_profile`, `build_profiles`, `_limits` | `ia/monport.py:132` ; `ia/evidence.py:27` ; `engine.ts:9` | Backend / Constraints | Constante en dur | Plafond par ligne, jamais assoupli | | Triple duplication (backend ×2, front) |
-| `JUDGE_RELAUNCH_PENALTY` | `3` | juge final | `ia/config.py:288` | Config / Risk Aversion | Réglage configurable | Points (sur 10) retirés à un portefeuille relancé avec contraintes assouplies | | Usage dans le code du juge : non relu (non vérifié) |
-| `PepiteCheck.risk_aversion` | ge 1, le 25 | schéma | `ia/schemas.py:318` | Backend / Risk Aversion | Contrainte de schéma | | | Doublon de la plage de `config` |
+| `LINE_CAP` | `0.40` | `validate_profile`, `build_profiles`, `_limits`, `blend` | `ia/monport.py:132` ; `ia/evidence.py:27` ; `engine.ts:9` | Backend / Constraints | Constante en dur | Plafond par ligne, jamais assoupli | | Triple duplication (backend ×2, front) |
+| `JUDGE_RELAUNCH_PENALTY` | `3` | `_penalty` | `ia/config.py:288` ; `ia/workflow/workers.py:271-273` | Config / Risk Aversion | Réglage configurable | Points retirés à la note du juge d'un portefeuille relancé avec limites assouplies. Appliqué seulement si `session.coherent and p.relaunch_reason` | Hausse : un portefeuille relancé gagne moins souvent | Utilisé par `JudgeVerdict.ranked_score = max(0, fit_score − penalty)` (`schemas.py:246-248`) et par `pick_winner` (`monport.py:894`) |
+| `PepiteCheck.risk_aversion` | ge 1, le 25, défaut `7.0` | schéma | `ia/schemas.py:318` | Backend / Risk Aversion | Contrainte de schéma | | | Doublon de la plage de `config` ; défaut différent |
 
 ## 1.D Agent, sentiment et ajustements
 
@@ -178,76 +244,91 @@ Détail complet des formules en [1.G](#1g-section-spéciale--profils-et-aversion
 
 | Paramètre | Valeur actuelle | Fonction | Fichier : lignes | Comp. / Cat. | Type | Objectif et formule | Impact | Dépendances et configurabilité |
 |---|---|---|---|---|---|---|---|---|
-| `adjust_steps` (cumul des crans) | borné à `[−2, +2]` | `adjust_risk_position` | `ia/workflow/pepite.py:231`, `:243` : `max(-2, min(2, before + int(steps)))` | Agent / Sentiment | **Entrée dynamique** (décidée par le LLM) | Cumul des crans demandés. Chaque cran vaut `ADJUSTMENT_STEP` | ±2 crans = ±0.10 de S, soit une demi-catégorie | Désactivé en phase « chat » (message `IN_CHAT`, `pepite.py:240-241`). Bornage codé en dur |
+| `adjust_steps` (cumul des crans) | borné à `[−2, +2]` | `adjust_risk_position` | `ia/workflow/pepite.py:231`, `:243` : `max(-2, min(2, before + int(steps)))` | Agent / Sentiment | **Entrée dynamique** (décidée par le LLM) | Cumul des crans demandés. Chaque cran vaut `ADJUSTMENT_STEP` | ±2 crans = ±0.10 de S, soit une demi-catégorie | Désactivé en phase « chat » (message `IN_CHAT`, `pepite.py:208`, `:241`, `:278`). Bornage codé en dur |
 | `ADJUSTMENT_STEP` | `0.05` | `risk_position` | `ia/monport.py:149`, utilisé `:355-359` | Backend / Sentiment | Constante en dur | `S = clamp(min((C+T)/2, C+0.125) + 0.05·clamp(adj,−2,2), 0, 1)` | Hausse : chaque cran déplace plus S | Le plafond de capacité est appliqué **avant** l'ajustement : la marge `CAPACITY_MARGIN` ne limite donc pas les crans |
-| Décision de « combien de crans » | Décidée par le LLM | prompts `BUILD_TASK`, `REBUILD_TASK` | `ia/workflow/pepite.py:~428-431`, `:~474-475` | Agent / Sentiment | Entrée dynamique | Le prompt dit d'utiliser `adjust_risk_position` si le client parle du risque qu'il veut prendre | Non reproductible : dépend du modèle et du texte du client | Aucun seuil ni poids numérique côté code |
-| `MAX_ADJUSTMENT` | `1000` caractères | `stream_monport` | `ia/monport.py:133` ; `ia/workflow/flow.py:~201` | Backend / Autre | Constante en dur | Tronque le texte libre d'ajustement | | |
-| `session.adjust_steps` → `assess` | passé en 3ᵉ argument | `Session.check` | `ia/workflow/session.py:106-111` ; `ia/monport.py:528-536` | Backend / Sentiment | Paramètre dérivé | Recalcule S, A, plafond de vol., plafond par titre | | |
-| `coherent` | booléen décidé par Pépite | `set_coherence`, `fallback_check` | `ia/workflow/pepite.py:250-266` ; `ia/monport.py:539-542` | Agent / Sentiment | Entrée dynamique | Détermine « profil cohérent » ou non, donc la construction des 3 portefeuilles | Bascule la structure entière (voir 1.G) | Repli sans LLM : `coherent = not facts` avec `facts = coherence_facts` (`monport.py:424-443`) |
+| Décision de « combien de crans » | Décidée par le LLM | prompts `BUILD_TASK`, `REBUILD_TASK` | `ia/workflow/pepite.py:425`, `:471` (consigne `adjust_risk_position` vers `:428`) | Agent / Sentiment | Entrée dynamique | Le prompt dit d'utiliser `adjust_risk_position` si le client parle du risque qu'il veut prendre | Non reproductible : dépend du modèle et du texte du client | Aucun seuil ni poids numérique côté code |
+| `MAX_ADJUSTMENT` | `1000` caractères | `build_portfolios`, `chat`, `rebuild` | `ia/monport.py:133` ; `ia/workflow/flow.py:212`, `:239`, `:263` | Backend / Autre | Constante en dur | Tronque le texte libre d'ajustement | | |
+| `session.adjust_steps` → `assess` | passé en 3ᵉ argument | `Session.check` | `ia/workflow/session.py:63`, `:107-111` ; `ia/monport.py:528-536` | Backend / Sentiment | Paramètre dérivé | Recalcule S, A, plafond de vol., plafond par titre | | |
+| `coherent` | booléen décidé par Pépite | `set_coherence`, `fallback_check` | `ia/workflow/pepite.py:250` ; `ia/monport.py:539-542` | Agent / Sentiment | Entrée dynamique | Détermine « profil cohérent » ou non, donc la construction des 3 portefeuilles | Bascule la structure entière (voir 1.G) | Repli sans LLM : `coherent = not facts` avec `facts = coherence_facts` (`monport.py:424-443`) |
 | Seuils de `coherence_facts` | score < 40 et crypto demandée ; score < 40 et actions ≥ 0.7 ; score > 65 et actions exclues ou ≤ 0.3 ; score < 77 et `vehicles == "titres"` ; une seule classe gardée | `coherence_facts` | `ia/monport.py:424-443` | Backend / Sentiment | Constantes en dur | Détecte une contradiction entre profil et préférences | Modifie la cohérence, donc la structure des 3 portefeuilles | **Dupliqué** dans `engine.ts:306-323` (mêmes seuils 40, 0.7, 65, 0.3, 77) |
-| `preference_contradictions` | somme des % de classes ou régions > `1 + 1e-9` | `preference_contradictions` | `ia/monport.py:~388-418` | Backend / Contraintes | Constante en dur | | | |
-| `RULES` du front (regex) | tech→`themes.tech 30`, pétrole/fossile→exclusion, crypto/bitcoin→`classes.crypto 10`, prudent/moins de risque→`riskShift −15` | `proposeAdjustment` | `frontend/src/api.ts:~248-296` | Front-end / Sentiment | Constantes en dur (mock) | Simule la réponse de Pépite hors ligne | | **Équivalent backend : aucun** (LLM). Échelle différente (±15 points de score contre ±0.05 sur S par cran) |
+| `preference_contradictions` | somme des % de classes ou régions > `1 + 1e-9` | `preference_contradictions` | `ia/monport.py:388-422` | Backend / Contraintes | Constante en dur | | | |
+| `RULES` du front (regex) | tech→`themes.tech 30`, pétrole/fossile→exclusion, crypto/bitcoin→`classes.crypto 10`, prudent/moins de risque→`riskShift −15` | `proposeAdjustment` | `frontend/src/api.ts:252-299` | Front-end / Sentiment | Constantes en dur (mock) | Simule la réponse de Pépite hors ligne | | **Équivalent backend : aucun** (LLM). Échelle différente (±15 points de score contre ±0.05 sur S par cran) |
 
 **Conséquence.** Les « poids de sentiment » demandés par la consigne n'existent pas. L'influence du texte libre du client sur S passe par un jugement de LLM, borné à ±0.10 de S. C'est un point de calibration et de reproductibilité (voir 3.C).
 
 ## 1.E Optimisation de portefeuille
 
-Objectif (`ia/optimizer.py:397-402`) : maximiser `U = μᵀw − (A/2)·wᵀΣw`, avec gradient analytique `−μ + AΣw` (le code minimise `−U`).
+Objectif (`ia/optimizer.py:437-442`, `ia/allocator.py:339-344`), **version avec pénalités** : maximiser `U = μᵀw − (A/2)·wᵀΣw − λ_D·Σwᵢ² − λ_V·Σqᵢwᵢ²`. Le code minimise `−U`, avec le gradient analytique `−μ + AΣw + 2λ_D·w + 2λ_V·(q ⊙ w)`. À λ_D = λ_V = 0 (valeurs actuelles), l'objectif redevient `U = μᵀw − (A/2)·wᵀΣw`. Détail en [1.B.2](#1b2-pénalités-de-régularisation-liées-à-σ-deux-pénalités).
 
 ### Contraintes et plafonds
 
 | Paramètre | Valeur actuelle (production) | Fonction | Fichier : lignes | Comp. / Cat. | Type | Objectif et formule | Impact | Dépendances et configurabilité |
 |---|---|---|---|---|---|---|---|---|
 | `CONSTRAINTS.max_weight_per_asset` | `None` | `apply_portfolio_request`, `build_constraint_plan` | `ia/config.py:340` | Config / Constraints | Réglage configurable | Plafond par actif. **Aucun plafond global en production** | | Le plafond effectif vient de `MAX_POSITION_WEIGHT` (0.40) ajouté par `monport.validate_profile` et de `MAX_STOCK_WEIGHT` |
-| `BASE_CONSTRAINTS.max_weight_per_asset` | `0.10` | | `ia/config.py:481` | Config / Constraints | Réglage configurable | **Mode BASE seulement (inactif)** | | **Conflit de défaut** : 0.10 (BASE) contre `None` (production) |
-| `MAX_POSITION_WEIGHT` (`LINE_CAP`) | `0.40` | `validate_profile`, `_limits`, `agent_request` | `ia/monport.py:132`, `:666-681`, `:564-568` ; `ia/catalog.py:562` | Backend / Constraints | Constante en dur | Plafond par ligne, FNB compris. Jamais assoupli par `RELAXATION_STEPS` | | |
-| `MAX_STOCK_WEIGHT` | `min(STOCK_ANCHORS(S), 0.40)` | `build_profiles`, `validate_profile` | `ia/monport.py:781-783`, `:~675` | Backend / Constraints | Paramètre dérivé | Plafond par action en direct | | Non appliqué à « Tes préférences » du profil incohérent (`monport.py:781`) |
-| `min_held_weight` | `0.01` | `_active_set_plan`, `restrict_plan`, `_weights` | `ia/config.py:334`, `:280`, `:471` ; `ia/allocator.py:44` | Config / Constraints | Réglage configurable (**4 copies**) | « 0 ou au moins 1 % » | Hausse : moins de positions | **Dupliqué** : `CONSTRAINTS` (l.334), `PORTFOLIO_HOLDINGS` (l.280), `BASE_CONSTRAINTS` (l.471), `allocator.MIN_POSITION_WEIGHT` (l.44) et textes « 1 % » en dur (`constraints.py:~814`, `~934`) |
+| `BASE_CONSTRAINTS.max_weight_per_asset` | `0.10` | | `ia/config.py:491` | Config / Constraints | Réglage configurable | **Mode BASE seulement (inactif)** | | **Conflit de défaut** : 0.10 (BASE) contre `None` (production) |
+| `MAX_POSITION_WEIGHT` (`LINE_CAP`) | `0.40` | `validate_profile`, `_limits`, `agent_request` | `ia/monport.py:132`, `:666-681`, `:564-568` ; `ia/catalog.py:562` | Backend / Constraints | Constante en dur | Plafond par ligne, FNB compris. Jamais assoupli par `RELAXATION_STEPS` (`allocator.py:579`, `:602`) | | |
+| `MAX_STOCK_WEIGHT` | `min(STOCK_ANCHORS(S), 0.40)` | `build_profiles`, `validate_profile`, `stock_cap` | `ia/monport.py:781-783`, `:~675`, `:811-814` | Backend / Constraints | Paramètre dérivé | Plafond par action en direct. `stock_cap` renvoie le plus petit `MAX_STOCK_WEIGHT` dur, sinon `LINE_CAP` | | Non appliqué à « Tes préférences » du profil incohérent (`monport.py:781`) |
+| `min_held_weight` | `0.01` | `_active_set_plan`, `restrict_plan`, `_weights`, `enforce_minimum` | `ia/config.py:334`, `:280`, `:481` ; `ia/allocator.py:44` ; `ia/monport.py:817` (`MIN_POSITION_WEIGHT`) | Config / Constraints | Réglage configurable (**plusieurs copies**) | « 0 ou au moins 1 % » | Hausse : moins de positions | **Dupliqué** : `CONSTRAINTS` (l.334), `PORTFOLIO_HOLDINGS` (l.280), `BASE_CONSTRAINTS` (voir `config.py:474+`), `allocator.MIN_POSITION_WEIGHT` (l.44) et textes « 1 % » en dur (`constraints.py:~814`, `~934`) |
 | `minimum_holding_max_iterations` | `30` | `optimize_weights` | `ia/config.py:336` | Config / Solver | Réglage configurable | Itérations de la méthode prune/reoptimize | | Le code lit une boucle bornée par le nombre d'actifs (non vérifié que cette clé est lue) |
 | `minimum_holding_tolerance` | `1e-8` | `optimize_weights` | `ia/config.py:337` | Config / Solver | Réglage configurable | Tolérance de micro-position | | Distinct de `constraint_tolerance` |
 | `min_cash_weight` / `max_cash_weight` | `0.0` / `1.0` | `settings_for` | `ia/config.py:348-349` | Config / Constraints | Réglage configurable | **Neutralisé en production** : `settings["cash"]["enabled"]=False` et `min_cash_weight=0.0` | | `ia/catalog.py:605-606`. `max_cash_weight` n'est jamais transmis par `agent_request` |
-| `CASH.annual_expected_return` | `0.01` | `optimize_weights` | `ia/config.py:394` ; `ia/optimizer.py:467` | Config / Returns | Réglage configurable (hypothèse) | μ du cash synthétique | | **Inactif en production** (cash désactivé) |
-| `CASH.annual_volatility` | `0.0` | `optimize_weights` | `ia/config.py:395` | Config / Covariance | Réglage configurable | | | Un cash non nul en volatilité lève une erreur (`optimizer.py:471-472`) |
-| `group_limits` (`CONSTRAINTS`) | tous vides | `apply_portfolio_request` | `ia/config.py:~353-363` | Config / Constraints | Réglage configurable | Plafonds de groupe vides. Les groupes viennent des contraintes du client (`MIN_ASSET_CLASS_WEIGHT`, parts) | | `BASE_CONSTRAINTS.group_limits` (l.519-549) est **inactif** : Alternative 0.05, Commodities 0.10, Real Estate 0.15, Cryptocurrency 0.05, IT 0.25, Financials 0.30, Energy 0.20, emergents 0.15 |
-| `unknown_exposure_policy` | `"strict"` (défaut `constraints.py`, mode agent) ; `"flag"` (BASE) | `filter_eligible_universe` | `ia/constraints.py:~360` ; `ia/config.py:563` | Config / Constraints | Réglage configurable | Traitement d'un ETF à exposition inconnue face à un plafond | | |
+| `CASH.annual_expected_return` | `0.01` | `optimize_weights`, `_continuous` | `ia/config.py:394` ; `ia/optimizer.py:508` ; `ia/allocator.py:307` | Config / Returns | Réglage configurable (hypothèse) | μ du cash synthétique | | **Inactif en production** (cash désactivé) |
+| `CASH.annual_volatility` | `0.0` | `optimize_weights` | `ia/config.py:395` | Config / Covariance | Réglage configurable | | | Un cash non nul en volatilité lève une erreur (`optimizer.py:512-513`) |
+| `group_limits` (`CONSTRAINTS`) | tous vides | `apply_portfolio_request` | `ia/config.py:~353-363` | Config / Constraints | Réglage configurable | Plafonds de groupe vides. Les groupes viennent des contraintes du client (`MIN_ASSET_CLASS_WEIGHT`, parts) | | `BASE_CONSTRAINTS.group_limits` (l.529-559) est **inactif** : Alternative 0.05, Commodities 0.10, Real Estate 0.15, Cryptocurrency 0.05, IT 0.25, Financials 0.30, Energy 0.20, emergents 0.15 |
+| `unknown_exposure_policy` | `"strict"` (défaut `constraints.py`, mode agent) ; `"flag"` (BASE) | `filter_eligible_universe` | `ia/constraints.py:~360` ; `ia/config.py:573` | Config / Constraints | Réglage configurable | Traitement d'un ETF à exposition inconnue face à un plafond | | |
 | `instrument_selection` | `"mixed"` par défaut | `apply_portfolio_request` | `ia/config.py:~342` ; `INSTRUMENT_SELECTION` | Config / Constraints | Réglage configurable | etf_only, mixed, stocks_only | | |
 | `FACTOR_SLEEVE_MIN` | `0.10` | `plan_for`, `_factor_groups` | `ia/catalog.py:156` | Backend / Constraints | Constante en dur | Au moins 10 % en actions notées si un facteur est contraint | | |
 | `FACTOR_MARGIN` | `0.01` | idem | `ia/catalog.py:157` | Backend / Constraints | Constante en dur | L'optimiseur vise 1 point au-delà du seuil | | |
 | `FACTOR_LEVELS` | `{2:0.5, 1:0.2, −1:−0.2, −2:−0.5}` | `preference_constraints` | `ia/monport.py:113` | Backend / Constraints | Constante en dur | Niveau du questionnaire → exposition cible (écarts-types) | | **Dupliqué** `frontend/src/data/catalog.ts:160` |
 | `FTOL` / `EXACT_TOL` / `SCORE_RANGE` | `0.01` / `1e-3` / `3.0` | `evaluate`, `audit` | `ia/catalog.py:158`, `:154`, `:155` | Backend / Constraints | Constantes en dur | Tolérances et bornes des contraintes | | |
-| `TOL` / `WTOL` / `HELD` | `1e-3` / `2e-4` / `5e-4` | `evaluate`, `audit` | `ia/catalog.py:67-69` | Backend / Constraints | Constantes en dur | Tolérances volatilité, poids, seuil « détenu » | | Autres seuils « détenu » : `1e-7` (`optimizer.py:73`), `1e-9` (`constraints.TOL`, `:36`), `0.005` (`allocator._weights`) |
-| `RELAXATION_STEPS` | liste d'assouplissements | `optimize_with_relaxation` | `ia/allocator.py:~560-575`, `:~597-642` | Backend / Constraints | Constante en dur | Ordre d'assouplissement après échec : pourcentages visés, plafonds, exclusions | Détermine ce qui est sacrifié en premier | `MAX_POSITION_WEIGHT` jamais assoupli (`allocator.py:~582`) |
+| `TOL` / `WTOL` / `HELD` | `1e-3` / `2e-4` / `5e-4` | `evaluate`, `audit` | `ia/catalog.py:67-69` | Backend / Constraints | Constantes en dur | Tolérances volatilité, poids, seuil « détenu » | | Autres seuils « détenu » : `1e-7` (`optimizer.py:73`), `1e-9` (`constraints.TOL`, `:36`), `0.005` (`allocator._weights`, l.169) |
+| `RELAXATION_STEPS` | 3 familles : pourcentages visés, plafonds, exclusions | `optimize_with_relaxation`, `_soften` | `ia/allocator.py:580-596`, `:598-607`, `:617` | Backend / Constraints | Constante en dur | Ordre d'assouplissement après échec. Une contrainte assouplie devient une préférence (`hard=False`). Le plafond de volatilité du mandat tombe avec « plafonds » | Détermine ce qui est sacrifié en premier | `MAX_POSITION_WEIGHT` jamais assoupli (`allocator.py:602`) |
 | Cap de volatilité relevé | `ceil((vol_min + 0.003) × 100) / 100` | `_raise_volatility_cap` | `ia/monport.py:745` | Backend / Constraints | Constante en dur | Marge de 0.3 point sur la volatilité minimale atteignable | | |
 
 ### Nombre de positions et sélection
 
 | Paramètre | Valeur actuelle | Fonction | Fichier : lignes | Comp. / Cat. | Type | Objectif et formule | Impact | Dépendances et configurabilité |
 |---|---|---|---|---|---|---|---|---|
-| `PORTFOLIO_HOLDINGS.min_count` | `25` | `optimize_universe`, `select_holdings` | `ia/config.py:278` ; `ia/allocator.py:~461-471`, `:339` | Config / Constraints | Réglage configurable | Minimum de positions détenues | | Surchargé par `MIN_POSITIONS` dur du client |
+| `PORTFOLIO_HOLDINGS.min_count` | `25` | `holdings_range`, `select_holdings` | `ia/config.py:278` ; `ia/allocator.py:458-470`, `:347` | Config / Constraints | Réglage configurable | Minimum de positions détenues | | Surchargé par `MIN_POSITIONS` dur du client (`holdings_range`). Le mélange 80/20 utilise la même plage (`position_range`, `monport.py:802-808`) |
 | `PORTFOLIO_HOLDINGS.max_count` | `70` | idem | `ia/config.py:279` | Config / Constraints | Réglage configurable | Maximum de positions | | Surchargé par `MAX_POSITIONS` du client. La docstring de `portfolio_manager.py:4` dit « 25 à 60 (cible 50) » : périmée |
-| `PORTFOLIO_HOLDINGS.max_marginal_utility_cost` | `0.0001` | `select_holdings` | `ia/config.py:283` ; `ia/allocator.py:~395-410` | Config / Constraints | Réglage configurable | 1 point de base d'utilité par position ajoutée au-delà du minimum | Hausse : plus de positions | Lots d'ajout de 10 (minimum) et de 5 (diversification) en dur (`allocator.py:~376`, `~409`) |
-| `MAX_ASSETS_PER_PORTFOLIO` | `40` (env) | `_check_selection`, `_raise_volatility_cap` | `ia/runtime.py:49` ; `ia/allocator.py:~87` ; `ia/monport.py:740` | Config / Autre | Variable d'environnement | Plafond de titres d'une sélection | | Autre usage : `min(15, …)` dans `tools.py:270`, `:292` |
+| `PORTFOLIO_HOLDINGS.max_marginal_utility_cost` | `0.0001` | `select_holdings` | `ia/config.py:283` ; `ia/allocator.py:364`, `:430` | Config / Constraints | Réglage configurable | 1 point de base d'utilité par position ajoutée au-delà du minimum. **L'utilité comparée est désormais pénalisée** (`_utility`) | Hausse : plus de positions | Lots d'ajout de 10 (minimum, l.391) et de 5 (diversification, l.426) en dur |
+| `MAX_ASSETS_PER_PORTFOLIO` | `40` (env) | `_check_selection`, `_raise_volatility_cap` | `ia/runtime.py:49` ; `ia/allocator.py:87` ; `ia/monport.py:740` | Config / Autre | Variable d'environnement | Plafond de titres d'une sélection | | Autre usage : `min(15, …)` dans `tools.py:270`, `:292` |
 | `A_LADDER` | `(1.0, 1.5, 2.0, 3.0, 4.5, 7.0, 10.0, 14.0, 18.0, 25.0)` | `_best_sharpe`, `_under_cap` | `ia/allocator.py:47` | Backend / Solver | Constante en dur | Échelle de A parcourue pour max_sharpe et plafond de volatilité | Plus fine : portefeuille plus près de l'optimum | |
 | `CAP_REFINEMENTS` | `6` | `_under_cap` | `ia/allocator.py:48` | Backend / Solver | Constante en dur | Pas de dichotomie pour coller au plafond | | |
-| `POSITIVE` | `1e-6` | `select_holdings` | `ia/allocator.py:260` | Backend / Solver | Constante en dur | Poids « positif » de la solution continue | | |
-| `A_MIN`, `A_MAX` | `1.0`, `25.0` | `_solve`, `optimize_universe` | `ia/allocator.py:45` | Backend / Solver | Constante en dur (**doublon**) | Borne le A passé au solveur | | Doublon de `RISK_AVERSION` |
-| A initial `aversion0` | `A_MAX` si `min_volatility` ; `A_MIN` si `max_return` ; sinon `risk_aversion or A_MAX/5` (= 5.0) | `optimize_universe` | `ia/allocator.py:490` | Backend / Risk Aversion | Constante en dur (règle) | A de l'optimum continu et de `select_holdings` | | **Doublon legacy** : `allocator.optimize` utilise `A_MAX/2` (= 12.5) (`allocator.py:216`) |
-| Seuil des guides | A ≥ 7 → style « min_volatility » ; A ≥ 3.5 → « max_sharpe » ; sinon « max_return » | `guidance_for` | `ia/monport.py:650-654` | Backend / Autre | Constante en dur | Texte seulement | | |
+| `POSITIVE` | `1e-6` | `select_holdings`, `optimize_universe` | `ia/allocator.py:260` | Backend / Solver | Constante en dur | Poids « positif » de la solution continue | | |
+| `A_MIN`, `A_MAX` | `1.0`, `25.0` | `_solve`, `optimize_universe` | `ia/allocator.py:45`, `:111` | Backend / Solver | Constante en dur (**doublon**) | Borne le A passé au solveur | | Doublon de `RISK_AVERSION` |
+| A initial `aversion0` | `A_MAX` si `min_volatility` ; `A_MIN` si `max_return` ; sinon `risk_aversion or A_MAX/5` (= 5.0) | `optimize_universe` | `ia/allocator.py:510` | Backend / Risk Aversion | Constante en dur (règle) | A de l'optimum continu et de `select_holdings` | | **Doublon legacy** : `allocator.optimize` utilise `A_MAX/2` (= 12.5) (`allocator.py:216`) |
+| Seuil des guides | A ≥ 7 → style « min_volatility » ; A ≥ 3.5 → « max_sharpe » ; sinon « max_return » | `guidance_for` | `ia/monport.py:649-654` | Backend / Autre | Constante en dur | Texte seulement | | |
+| `λ_D`, `λ_V`, seuil | `0.0`, `0.0`, `0.25` | `_solve_slsqp`, `_utility`, `select_holdings` | `ia/config.py:405-408` | Config / Solver | Réglage configurable | Voir [1.B.2](#1b2-pénalités-de-régularisation-liées-à-σ-deux-pénalités) | | |
 
 ### Solveur
 
 | Paramètre | Valeur actuelle | Fonction | Fichier : lignes | Comp. / Cat. | Type | Objectif et formule | Impact | Dépendances et configurabilité |
 |---|---|---|---|---|---|---|---|---|
-| `OPTIMIZATION.solver` | `"SLSQP"` | `optimize_weights` | `ia/config.py:~403` | Config / Solver | Réglage configurable | Toute autre valeur lève une erreur | | |
-| `solver_options.maxiter` | `2000` | `_solve_slsqp` | `ia/config.py:407` ; `ia/optimizer.py:~412` | Config / Solver | Réglage configurable | Itérations maximales de SLSQP | | `options=dict(cfg["optimization"]["solver_options"])` |
-| `solver_options.ftol` | `1e-9` | idem | `ia/config.py:408` | Config / Solver | Réglage configurable | Tolérance de convergence | | |
-| `constraint_tolerance` | `1e-7` | `validate_weights` | `ia/config.py:411` | Config / Solver | Réglage configurable | | | |
-| `sum_weights_tolerance` | `1e-7` | `validate_weights` | `ia/config.py:412` | Config / Solver | Réglage configurable | | | |
+| `OPTIMIZATION.solver` | `"SLSQP"` | `optimize_weights` | `ia/config.py:~414` ; `ia/optimizer.py:493` | Config / Solver | Réglage configurable | Toute autre valeur lève une erreur | | |
+| `solver_options.maxiter` | `2000` | `_solve_slsqp` | `ia/config.py:417` ; `ia/optimizer.py:446-448` | Config / Solver | Réglage configurable | Itérations maximales de SLSQP | | `options=dict(cfg["optimization"]["solver_options"])` |
+| `solver_options.ftol` | `1e-9` | idem | `ia/config.py:418` | Config / Solver | Réglage configurable | Tolérance de convergence | | |
+| `constraint_tolerance` | `1e-7` | `validate_weights` | `ia/config.py:421` | Config / Solver | Réglage configurable | | | Validé > 0 (`config.py:1055`) |
+| `sum_weights_tolerance` | `1e-7` | `validate_weights` | `ia/config.py:422` | Config / Solver | Réglage configurable | | | |
 | Seuil de faisabilité LP | `1e-10`, `1e-9` | `_linear_lp` | `ia/optimizer.py:380-381` | Backend / Solver | Constante en dur | Cohérence des bornes | | |
-| Micro-position | `tol < w < min_held − tol` | `optimize_weights` | `ia/optimizer.py:~493` | Backend / Solver | Constante en dur (règle) | Déclenche la boucle prune/reoptimize | | |
-| `risk_free_rate` du Sharpe | `0.035` | `_best_sharpe`, `portfolio_metrics` | `ia/allocator.py:119` ; `ia/market.py:416` | Backend / Solver | Dérivé de `RF_ANNUAL` | `(μ−rf)/σ` | | |
+| Micro-position | `tol < w < min_held − tol` | `optimize_weights` | `ia/optimizer.py:534` | Backend / Solver | Constante en dur (règle) | Déclenche la boucle prune/reoptimize | | |
+| `risk_free_rate` du Sharpe | `0.035` | `_best_sharpe`, `portfolio_metrics` | `ia/allocator.py:119` ; `ia/market.py:401` | Backend / Solver | Dérivé de `RF_ANNUAL` | `(μ−rf)/σ` | | |
 
 ## 1.F Autres paramètres
+
+### Mélange 80/20 du profil incohérent (nouveau comportement)
+
+| Paramètre | Valeur | Fonction | Fichier : lignes | Type | Objectif et impact |
+|---|---|---|---|---|---|
+| `BLEND` | `0.8` | `blend` | `ia/monport.py:56`, `:856-891` | Constante en dur | 80 % du poids du cœur, 20 % du satellite : `w = 0.8·w_cœur + 0.2·w_satellite` |
+| Minimum d'un mélange | `MIN_POSITION_WEIGHT` (0.01) | `enforce_minimum` | `ia/monport.py:817-853` | Constante (importée) | Les positions sous 1 % sont retirées. S'il en reste moins que `min_count`, les plus grosses des retirées sont gardées à exactement 1 %. Plus que `max_count` : les plus petites sont retirées |
+| Plafond d'un titre en direct dans le mélange | `0.8·cap_cœur + 0.2·cap_satellite` | `blend` | `ia/monport.py:872-874`, `:811-814` | Paramètre dérivé | `cap(slot)` = `stock_cap` du profil (`MAX_STOCK_WEIGHT` dur, sinon `LINE_CAP`). Un FNB est limité à `LINE_CAP` (0.40) |
+| Plage de positions du mélange | 25 à 70 par défaut | `position_range` | `ia/monport.py:802-808` ; appel `ia/workflow/flow.py:153-158` | Dérivé de `PORTFOLIO_HOLDINGS` | Ajustée aux `min/max_positions` durs des deux profils |
+| Redistribution | jusqu'à 100 itérations, tolérance `1e-9` | `enforce_minimum` | `ia/monport.py:817-853` | Constantes en dur | Redistribue le poids libéré au prorata, sous les plafonds, sans descendre sous 1 % |
+| Héritage de la relance assouplie | `relaunch_reason`, `relaxed` | `blend` | `ia/monport.py:889-890` ; `ia/schemas.py:219-220` | Dérivé | Le mélange hérite de la relance de l'une ou l'autre de ses bases |
+| Pénalité de note | `JUDGE_RELAUNCH_PENALTY` = 3 | `_penalty`, `pick_winner` | `ia/workflow/workers.py:271-273` ; `ia/monport.py:894-910` | Réglage configurable | Profil cohérent seulement |
+
+**Conséquence pour les pénalités de 1.B.2.** Le mélange n'est **pas** réoptimisé : les pénalités s'appliquent aux portefeuilles de base, pas au résultat 80/20, dont les poids sont recalculés par `enforce_minimum`.
 
 ### Backtest, projection, risque affiché
 
@@ -258,20 +339,19 @@ Objectif (`ia/optimizer.py:397-402`) : maximiser `U = μᵀw − (A/2)·wᵀΣw`
 | `BIWEEKLY`, `SAMPLE_EVERY` | `10`, `5` | `rebalance_mask`, `summarize` | `ia/backtest.py:28-29` | Constantes en dur | Rééquilibrage aux deux semaines (10 séances) ; un point de série par semaine |
 | `DAILY_STEP`, `DAILY_LIMIT` | `0.5`, `5.0` | `daily_distribution` | `ia/backtest.py:30-31` | Constantes en dur | Tranches de la distribution (points de %), bornées à ±5 % |
 | `FREQUENCIES` | deux-semaines, mensuelle, annuelle, aucune | `backtest` | `ia/backtest.py:25` | Constante en dur | Fréquences simulées |
-| Quantile VaR/ES | `0.05` | `summarize` | `ia/backtest.py:~106` | Constante en dur | VaR et ES historiques à 1 jour |
-| `rf` du backtest | `market.risk_free_rate` | `to_portfolio` | `ia/monport.py:~996` | Dérivé de `RF_ANNUAL` | Sharpe réalisé du backtest |
+| Quantile VaR/ES | `0.05` | `summarize` | `ia/backtest.py:106-107` | Constante en dur | VaR et ES historiques à 1 jour, renvoyés en perte positive (`round(-q, 4)`) |
+| `rf` du backtest | `market.risk_free_rate` | `to_portfolio` | `ia/monport.py:1065` | Dérivé de `RF_ANNUAL` | Sharpe réalisé du backtest |
 | `PER_YEAR` | 26, 12, 1, 12 | `project` | `ia/projection.py:20` | Constante en dur | Versements par an. `aucune` composé sur 12 périodes |
 | `PATHS` | `1000` | `project` | `ia/projection.py:21` | Constante en dur | Nombre de trajectoires simulées |
 | `SEED` | `7` | `project` | `ia/projection.py:22` | Constante en dur | Graine fixe : résultat reproductible |
 | `MAX_AMOUNT` | `10 000 000` | `clean_contribution` | `ia/projection.py:23` | Constante en dur | Montant maximal accepté |
 | Horizon et centiles | 10 ans ; 5, 25, 75, 95 | `project` | `ia/projection.py:39` ; docstring | Constantes en dur | Cônes probable (25-75) et large (5-95) |
-| `BLEND` | `0.8` | `blend` | `ia/monport.py:56` | Constante en dur | Mélange 80/20 des portefeuilles du profil incohérent |
 | `FEES` | `{"ETF": 0.002}` | `to_portfolio` | `ia/monport.py:131` | Constante en dur | Frais 0.20 % par FNB, 0 pour un titre direct |
-| `worstYear` | `μ − 2.33σ` | `to_portfolio` | `ia/monport.py:989` | Constante en dur | VaR paramétrique 99 % à 1 an, loi normale. `WORST_YEAR_Z = 2.33` dupliqué (`ia/evidence.py:28`) |
-| `var95`, `es95` annuels | `−(μ − 1.645σ)`, `−(μ − 2.063σ)` | `to_portfolio` | `ia/monport.py:993-994` | Constantes en dur | Quantile et ES normaux |
-| `monthlyVolatility` | `σ/√12` | `to_portfolio` | `ia/monport.py:988` | Constante en dur | |
+| `worstYear` | `μ − 2.33σ` | `to_portfolio` | `ia/monport.py:1055` | Constante en dur | VaR paramétrique 99 % à 1 an, loi normale. `WORST_YEAR_Z = 2.33` dupliqué (`ia/evidence.py:28`) |
+| `var95`, `es95` annuels | `−(μ − 1.645σ)`, `−(μ − 2.063σ)` | `to_portfolio` | `ia/monport.py:1059-1060` | Constantes en dur | Quantile et ES normaux |
+| `monthlyVolatility` | `σ/√12` | `to_portfolio` | `ia/monport.py:1054` | Constante en dur | |
 | `MAX_CITED` | `3` | `evidence.cite` | `ia/evidence.py:29` | Constante en dur | Preuves citées par avertissement |
-| Seuils de `diagnostics` | drawdown > perte acceptée ; 2σ > perte acceptée ; `effective_n` < 8 ; secteur > 35 % ; pays > 70 % ; crypto > 5 % ; horizon < 3 ans et volatilité > 15 % | `diagnostics.py` | `ia/diagnostics.py:14-33` (relevés par un sous-agent, non revérifiés) | Constantes en dur | Génèrent les avertissements de risque |
+| Seuils de `diagnostics` | drawdown > perte acceptée ; 2σ > perte acceptée ; `effective_n` < 8 ; secteur > 35 % ; pays > 70 % ; crypto > 5 % ; horizon < 3 ans et volatilité > 15 % | `diagnostics.py` | `ia/diagnostics.py:14-33` | Constantes en dur | Génèrent les avertissements de risque (relu dans cette version) |
 
 ### Agents LLM et exécution (`ia/runtime.py:32-48`)
 
@@ -283,7 +363,7 @@ Objectif (`ia/optimizer.py:397-402`) : maximiser `U = μᵀw − (A/2)·wᵀΣw`
 | `MODEL_EFFORT` | `high` | variable d'env. |
 | `MODEL_MAX_TOKENS` | `16000` | variable d'env. |
 | `ENABLE_THINKING` | `True` | variable d'env. |
-| `MAX_PM_RETRIES` | `1` | variable d'env. Les demandes de réoptimisation du juge sont ignorées (`workers.py:~310-314`), la boucle ne s'exécute donc pas |
+| `MAX_PM_RETRIES` | `1` | variable d'env. Les demandes de réoptimisation du juge sont ignorées (bloc « Plus de relance » de `judge_round`, `workers.py:294+`) : le Markowitz global est déterministe |
 | `GUARDRAIL_ID` | non défini par défaut | Sans identifiant, aucun filtrage ; si le service échoue, le message passe (`ia/guardrail.py:77-92`) |
 
 ### Données (`ia/data.py`, `ia/config.py` DATA)
@@ -310,8 +390,8 @@ Tout ce qui suit est vérifié dans `ia/monport.py` (actif). Les trois portefeui
 
 - `SLOTS = ["prudent", "equilibre", "conviction"]` (`monport.py:48`).
 - Le nom affiché dépend de la cohérence du profil du client (`coherent`, fixée par Pépite) :
-  - **Cohérent** : « Variante prudente », « Variante fidèle », « Variante audacieuse » (`VARIANT_NAMES`, `monport.py:63`). Un seul portefeuille est ensuite présenté : le gagnant (`pick_winner`, `:828-836`, « Ton portefeuille »).
-  - **Incohérent** : « Ton profil », « Tes contraintes », « Tes préférences » (`BASE_NAMES`, `:54`). Le front présente un mélange 80/20 (`BLEND = 0.8`).
+  - **Cohérent** : « Variante prudente », « Variante fidèle », « Variante audacieuse » (`VARIANT_NAMES`, `monport.py:63`). Un seul portefeuille est ensuite présenté : le gagnant (`pick_winner`, `:894`, « Ton portefeuille », `WINNER_NAME` `:64`).
+  - **Incohérent** : « Ton profil », « Tes contraintes », « Tes préférences » (`BASE_NAMES`, `:54`). Le code présente deux mélanges 80/20 et « Tes contraintes » tel quel (`flow.present`, `workflow/flow.py:139-178`).
 
 ### 1.G.2 Formule du score de risque S (valeurs et lignes exactes)
 
@@ -336,7 +416,7 @@ Entrées : `profile` (âge, horizon, montant, `objective`, `lossReaction`, `comf
 - `risk_aversion(S) = round(_interpolate(S, AVERSION_ANCHORS, log=True), 2)` (`monport.py:370-372`).
 - Ancres : `S=0 → 25`, `0.2 → 14`, `0.4 → 7`, `0.6 → 3.5`, `0.8 → 1.5`, `1.0 → 1`.
 - Interpolation entre deux ancres `(s0,v0)`, `(s1,v1)` : `v0·(v1/v0)^t` avec `t = (S−s0)/(s1−s0)` (`_interpolate`, `:362-367`).
-- Valeurs de A aux bornes de bande : S=0.1 → ≈ 18.7 ; S=0.3 → ≈ 9.9 ; S=0.5 → ≈ 4.95 ; S=0.7 → ≈ 2.29 ; S=0.9 → ≈ 1.22. (Calculs à la main à partir des ancres, **non exécutés**.)
+- Valeurs de A aux milieux de bande : S=0.1 → ≈ 18.7 ; S=0.3 → ≈ 9.9 ; S=0.5 → ≈ 4.95 ; S=0.7 → ≈ 2.29 ; S=0.9 → ≈ 1.22. (Calculs à la main à partir des ancres, **non exécutés**.)
 - Bornes : aucun `clamp` dans `risk_aversion` ; elles viennent des ancres (1 et 25). Les clamps [1, 25] existent aussi dans `PepiteCheck.risk_aversion` (`schemas.py:318`), `catalog.agent_request` (`:573-575`) et `allocator._solve` (`:111`).
 
 ### 1.G.4 A et plafonds selon le portefeuille
@@ -349,49 +429,63 @@ Entrées : `profile` (âge, horizon, montant, `objective`, `lossReaction`, `comf
 | **Incohérent, « Ton profil »** (prudent) | `S` | `mean_variance`, `A(S)` | Ne garde que les exclusions du client et les limites du profil : plancher d'obligations `BOND_FLOOR[label]`, interdiction de crypto si label ∈ `NO_CRYPTO`, `MAX_STOCK_WEIGHT`, plafond de volatilité. Ignore les pourcentages du questionnaire (`follows = False`, `monport.py:772`) |
 | Incohérent, « Tes contraintes » (équilibre) | `S` | `mean_variance`, `A(S)` | Toutes les préférences + limites du profil (plafond de volatilité, `MAX_STOCK_WEIGHT`). **Pas** de plancher d'obligations (`bond_floors` ne renvoie que le slot prudent, `:657-663`) |
 | Incohérent, « Tes préférences » (conviction) | `None` | `max_sharpe`, A balayé sur `A_LADDER` | Préférences et exclusions, `MAX_POSITION_WEIGHT 0.40`, **sans** plafond de volatilité ni `MAX_STOCK_WEIGHT` (`monport.py:781`) |
+| **Présentation du profil incohérent** | | | Deux mélanges `blend(prudent, conviction)` et `blend(conviction, prudent)` à 80/20 (`flow.py:153-158`), après `enforce_minimum` (voir 1.F). Seul « Tes contraintes » garde son verdict du juge ; les mélanges n'en ont pas (`flow.py:168`) |
 
-Dans tous les cas : **μ et Σ sont identiques** pour les trois portefeuilles (`allocator.py:487-488`, `Market.universe_covariance`). Ni S ni A ne les modifient. Le cash est désactivé (`catalog.py:605-606`).
+Dans tous les cas : **μ et Σ sont identiques** pour les trois portefeuilles (`allocator.py:507-508`, `Market.universe_covariance`). Ni S ni A ne les modifient. Le cash est désactivé (`catalog.py:605-606`). **Les pénalités λ_D et λ_V de 1.B.2 sont identiques pour les trois** : elles ne dépendent pas du profil.
 
 ### 1.G.5 Plafond de volatilité : levier caché sur A
 
 - `slot_volatility(check, slot)` = `round(_interpolate(S, VOL_ANCHORS), 3)` (même plafond pour les trois variantes d'un profil cohérent).
 - `_under_cap` (`allocator.py:133-164`) monte A le long de `A_LADDER` (au-dessus du A courant), puis jusqu'à `A_MAX`, jusqu'à ce que la volatilité passe sous le plafond. Il affine ensuite par dichotomie (6 pas).
 - Si même `A = 25` ne suffit pas, le résultat est rejeté par `evaluate` (statut `infeasible`).
-- **Conséquence : le A effectif peut être supérieur au A du profil.** Les diagnostics exposent `A_requested`, `A_initial_optimization`, `A_effective` (`allocator.py:~532`).
+- **Conséquence : le A effectif peut être supérieur au A du profil.** Les diagnostics exposent `A_requested`, `A_initial_optimization`, `A_effective` (`allocator.py:552`).
 
-### 1.G.6 Chaîne d'exécution complète
+### 1.G.6 Relance avec limites assouplies et notes du juge (modifié)
+
+1. Si `optimize_universe` échoue sur les contraintes dures, `optimize_with_relaxation` (`allocator.py:617`) relance en transformant des contraintes dures en préférences (`_soften`, `:598`). D'abord celles que le calcul a enfreintes, puis les familles de `RELAXATION_STEPS` (`:580`) : pourcentages visés, plafonds, exclusions. `MAX_POSITION_WEIGHT` n'est jamais assouplie.
+2. Le portefeuille porte `relaunch_reason` et `relaxed` (`schemas.py:219-220`).
+3. `workers._penalty` (`workers.py:271-273`) retourne `JUDGE_RELAUNCH_PENALTY` (3) **si le profil est cohérent et le portefeuille relancé**, sinon 0.
+4. `JudgeVerdict.ranked_score = max(0, fit_score − penalty)` (`schemas.py:246-248`) sert au classement. `pick_winner` (`monport.py:894-910`) garde le choix du juge sauf si ce choix est pénalisé et qu'un autre portefeuille a un meilleur rang `(conforme, note pénalisée)`.
+5. `to_portfolio` ajoute l'avertissement « Calcul relancé avec des limites assouplies » (`monport.py:1030+`). Pour le profil incohérent, aucune pénalité de note n'est appliquée.
+
+### 1.G.7 Chaîne d'exécution complète
 
 ```
 Profil (questionnaire)                       frontend → POST /api/invocations {mode:'monport', profile, constraints,...}
   │                                          (le front n'envoie PAS de score ni de A)
   ▼
 S de base   = risk_position(profile)         ia/monport.py:340-359
-  │   + 0.05 · adjust_steps (−2…+2, LLM)     ia/workflow/pepite.py:243 ; session.py:106-111
+  │   + 0.05 · adjust_steps (−2…+2, LLM)     ia/workflow/pepite.py:243 ; session.py:107-111
   ▼
 assess(): S, A(S), label, vol. max, poids max par action        ia/monport.py:528-536
   ▼
-Cohérence (Pépite, repli coherence_facts)    ia/workflow/pepite.py:250-266 ; ia/monport.py:424-443
+Cohérence (Pépite, repli coherence_facts)    ia/workflow/pepite.py:250 ; ia/monport.py:424-443
   ▼
 Pour chaque slot : S_slot, objectif, A_slot  slot_position (:545) ; objective_for (:642)
   ▼
 Contraintes : build_profiles (:750) → follow_profile (:571) → plafond vol. (slot_volatility :552)
               → validate_profile (:666, LINE_CAP) → ensure_feasible (:711)
   ▼
-Mandate(risk_aversion=A_slot, vol_cap_factor=None)   ia/workflow/workers.py:181-214 (l.191)
+Mandate(risk_aversion=A_slot, vol_cap_factor=None)   ia/workflow/workers.py:182-214 (l.191)
   ▼
-optimize_with_relaxation → optimize_universe         ia/allocator.py:597 → :443
-   catalog.settings_for → get_agent_settings → apply_portfolio_request (A écrit dans risk_aversion.default)
-   A0 (:490) → _continuous → select_holdings (:339) → réoptimisation (:507-514)
+optimize_with_relaxation → optimize_universe         ia/allocator.py:617 → :473
+   catalog.settings_for → get_agent_settings → apply_portfolio_request (A écrit dans risk_aversion.default ;
+                                                REGULARIZATION copiée dans les réglages, config.py:652)
+   A0 (:510) → _continuous (:302) → select_holdings (:347) → réoptimisation (:528-534)
    → max_sharpe : _best_sharpe (:115)  |  plafond vol. : _under_cap (:133)
   ▼
-Objectif : max  U = μᵀw − (A/2)·wᵀΣw   (SLSQP)          ia/optimizer.py:397-402
+Objectif : max  U = μᵀw − (A/2)·wᵀΣw − λ_D·Σw² − λ_V·Σq·w²   (SLSQP)     ia/optimizer.py:424-455
   ▼
-Poids : _weights (:167) → portfolio_metrics (market.py:394) → evaluate + audit
+Poids : _weights (:167) → portfolio_metrics (market.py:394, sans pénalité) → evaluate + audit
   ▼
-Juge (workers.py:279-330) → pick_winner / blend 0.8 → to_portfolio (monport.py:930) → SSE 'portfolios' → front
+Relance assouplie si échec (allocator.py:617) → juge (workers.py:294) avec pénalité (workers.py:271)
+  ▼
+pick_winner (monport.py:894)  |  blend 0.8 + enforce_minimum (monport.py:817, :856)
+  ▼
+to_portfolio (monport.py:996) → SSE 'portfolios' (flow.py:139-178) → front
 ```
 
-### 1.G.7 Ce que le profil modifie ou non
+### 1.G.8 Ce que le profil modifie ou non
 
 | Élément | Modifié par le profil / S / A ? |
 |---|---|
@@ -399,22 +493,23 @@ Juge (workers.py:279-330) → pick_winner / blend 0.8 → to_portfolio (monport.
 | Plafond de volatilité | **Oui** (`VOL_ANCHORS(S)`) |
 | Plancher d'obligations, interdiction crypto, plafond par action | **Oui** (par label, via `follow_profile`) |
 | Cash | **Non** (désactivé en production) |
+| Pénalités λ_D, λ_V et seuil de volatilité | **Non** (globales, identiques pour les trois variantes) |
 | Sélection d'actifs | **Oui indirectement** (exclusions du client, contraintes, `select_holdings` au A du slot) |
 | μ (rendements espérés) | **Non** |
-| Σ (covariance) | **Non** |
+| Σ (covariance) | **Non** (mais les pénalités agissent comme un terme diagonal ajouté à Σ dans l'objectif) |
 | Univers | **Non** (même univers filtré par historique et exclusions du client) |
 
-### 1.G.8 Code actif et code legacy dans cette chaîne
+### 1.G.9 Code actif et code legacy dans cette chaîne
 
-- **Actif** : `monport.py` (S, A, ancres, `build_profiles`, `follow_profile`, `blend`), `workflow/*`, `allocator.optimize_universe` et ses aides, `catalog.settings_for`.
-- **Legacy** : `MANDATES` (`mandates.py:26-61`), `BOND_SHIFT`, `allocator.optimize` (hors `_raise_volatility_cap`), `BASE_PROFILE` (A = 5.0, `config.py:573-576`).
+- **Actif** : `monport.py` (S, A, ancres, `build_profiles`, `follow_profile`, `blend`, `enforce_minimum`), `workflow/*`, `allocator.optimize_universe` et ses aides, `catalog.settings_for`.
+- **Legacy** : `MANDATES` (`mandates.py:26-61`), `BOND_SHIFT`, `allocator.optimize` (hors `_raise_volatility_cap`), `BASE_PROFILE` (A = 5.0, `config.py:583-586`).
 - **Moteur hors ligne du front** (`frontend/src/lib/engine.ts`) : reproduit S, A, limites et `SLOT_SHIFT`. Voir la partie 2.
 
 ---
 
 # Partie 2 — Audit des calculs du front-end
 
-Chemins relatifs à `frontend/src/`. Backend : `backend/src/invest_agents/` (**`ia/`**).
+Chemins relatifs à `frontend/src/`. Backend : `backend/src/invest_agents/` (**`ia/`**). Le front ne contient **aucune référence** aux pénalités de régularisation (recherche de « regulariz » dans `frontend/src` : aucun résultat).
 
 ## 2.0 Verdict
 
@@ -423,7 +518,7 @@ Chemins relatifs à `frontend/src/`. Backend : `backend/src/invest_agents/` (**`
 1. **Un moteur d'exemple complet** (`lib/engine.ts` et `data/catalog.ts`) qui construit des portefeuilles, des métriques et des preuves sans backend. Il est actif lorsque le backend est injoignable ou qu'aucun portefeuille n'est reçu.
 2. **Une réplique des règles de profil** (score de risque S, A, limites, cohérence), utilisée **en usage normal** pendant le questionnaire, avant et pendant l'appel au backend.
 
-**Avec un backend qui répond**, les portefeuilles, métriques, backtest, projection, montants, répartitions et facteurs viennent du backend sans transformation économique (`setPortfolios`, `store.ts:164-170`). Le front ne ré-optimise pas ces résultats, **sauf dans un cas** : `withAdjustments` (voir 2.3, constat F1).
+**Avec un backend qui répond**, les portefeuilles, métriques, backtest, projection, montants, répartitions et facteurs viennent du backend sans transformation économique (`setPortfolios`, `store.ts:164-170`). Le front ne ré-optimise pas ces résultats, **sauf dans un cas** : `withAdjustments` (voir 2.5, constat F1).
 
 ## 2.1 Flux de données vérifié
 
@@ -435,11 +530,11 @@ Saisie (Profile.tsx, Preferences.tsx, inputs.tsx)
    ▼
 POST  PIPELINE_URL = VITE_API_URL || '/api/invocations'  (SSE, en-tête X-Session-Id)   api.ts:12, :73
    │  monport_check    {mode, profile, constraints}              (le `score` n'est PAS envoyé : api.ts:129)
-   │  monport          {mode, profile, constraints, contribution, check, adjustment, session}   api.ts:162-168
-   │  monport_chat     {mode, session, message}                  api.ts:174-179
-   │  monport_rebuild  {mode, session}                           api.ts:185-192
+   │  monport          {mode, profile, constraints, contribution, check, adjustment, session}   api.ts:162-165
+   │  monport_chat     {mode, session, message}                  api.ts:174-175
+   │  monport_rebuild  {mode, session}                           api.ts:185-188
    ▼
-Backend : flow.py → Pépite → monport.py → allocator.py → optimizer.py → to_portfolio
+Backend : flow.py → Pépite → monport.py → allocator.py → optimizer.py (utilité pénalisée) → to_portfolio
    ▼
 SSE événements : check, agent_status, pepite, universe, rerun, warning, portfolios, error, done   api.ts:37
    ▼
@@ -455,16 +550,17 @@ Le front n'envoie **aucun** score, aucune aversion et aucun poids au backend. Le
 
 | Métrique affichée | Où | Source backend | Transformation front |
 |---|---|---|---|
-| `expectedReturn` | `pages/dashboard/Views.tsx:127`, `Dashboard.tsx` | `m.expected_return` (optimiseur) via `to_portfolio` (`monport.py:~984`) | Aucune (format) |
-| `volatility` | `Views.tsx:134` | `m.volatility` (optimiseur) | Aucune |
-| `sharpe` | `Views.tsx:130` | `m.sharpe` = `(μ−rf)/σ` (`market.py:416`) | `toFixed(2)` et virgule |
-| `worstYear` | `Views.tsx:57`, `:147` | `μ − 2.33σ` (`monport.py:989`) | Aucune |
-| `var95` / `es95` annuels | champs de `Metrics` (`types.ts`) | `monport.py:993-994` | Non affichés dans les vues lues |
-| VaR / ES 1 jour | `Views.tsx:149`, `:237-238` | `backtest.stats.var95/es95` (perte positive : `ia/backtest.py:~108`) | `signedPct(−var95)` : inversion de signe pour afficher une perte négative. **Cohérent** avec le backend (vérifié) |
+| `expectedReturn` | `pages/dashboard/Views.tsx:127`, `Dashboard.tsx` | `m.expected_return` via `to_portfolio` (`monport.py:1051+`), calculé **sans** pénalité de régularisation | Aucune (format) |
+| `volatility` | `Views.tsx:134` | `m.volatility`, idem | Aucune |
+| `sharpe` | `Views.tsx:130` | `m.sharpe` = `(μ−rf)/σ` (`market.py:~416`) | `toFixed(2)` et virgule |
+| `worstYear` | `Views.tsx:57`, `:147` | `μ − 2.33σ` (`monport.py:1055`) | Aucune |
+| `var95` / `es95` annuels | champs de `Metrics` (`types.ts`) | `monport.py:1059-1060` | Non affichés dans les vues lues |
+| VaR / ES 1 jour | `Views.tsx:149`, `:237-238` | `backtest.stats.var95/es95` (perte positive : `backtest.py:107`) | `signedPct(−var95)` : inversion de signe pour afficher une perte négative. **Cohérent** avec le backend (vérifié) |
 | `maxDrawdown` | `Views.tsx:139` | `s?.maxDrawdown ?? m.maxDrawdown` : backtest en priorité, sinon optimiseur | Choix de source côté front (voir F8) |
 | Projection | `ProjectionChart`, `Views.tsx:155-200` | `p.projection` (`projection.py`) | `wide: [p05, p95]`, `likely: [p25, p75]` (mise en forme) |
 | Backtest | `PerformanceTab`, `Views.tsx:~270-300` | `p.backtest.runs[freq]` | Aucune |
-| Montants | `Views.tsx` | `p.amounts`, `holdings[].amount` | Aucune |
+| Montants | `Views.tsx:52-55`, `:61-64` ; `parts.tsx:107` | `p.amounts`, `holdings[].amount` | Aucune |
+| Contribution au risque | `Views.tsx:376-421` (`RiskTab`, onglet « Risque » du niveau Avancé) | `p.riskContribution` : `risk_by_class` (`monport.py:1095`), basé sur la même Σ que l'optimiseur | Aucune. Largeurs de barres `pct(poids)` et `pct(risque)` seulement |
 
 ## 2.3 Inventaire des calculs du front
 
@@ -486,7 +582,7 @@ Classification : **[F]** calcul financier · **[M]** logique métier · **[U]** 
 | E10 | Poids par classe (mock) | `classWeights` | `:143-176` | `s = clamp(score + (−20 prudent \| +10 conviction \| 0))` ; `eq = 0.15 + 0.7·s/100` ; immobilier `0.04`, or `0.03`, crypto `0`, liquidités `max(0.03, 0.12 − 0.001·s)`, obligations = reste | Score, contraintes | poids par classe | Optimiseur (`allocator`), `follow_profile` | [F] | **Fallback** : les décalages −20/+10 points ne correspondent pas à ±0.1 sur S (≈ ±9 points). Marquer « démo » ou isoler |
 | E11 | Lignes (mock) | `lineWeights` | `:178-247` | `scale {prudent 0.5, equilibre 1, conviction 1.8}` ; tilt de facteurs `exp(0.7·scale·Σ niveau·score)` ; poche actions `eqLeft·(titres ? 1 : 0.35)` ; régions de base `{canada .3, usa .4, europe .15, asie .08, emergents .07}` ; splits `OBL-GV .6/OBL-SO .4`, `BTC .7/ETH .3` ; plafond 40 % redistribué en une passe | Contraintes | liste de lignes | Optimiseur | [F] | **Fallback**. La redistribution du plafond n'est pas itérative : une ligne pourrait théoriquement rester > 40 % (non vérifié par test) |
 | E12 | Allocation | `allocationOf` | `:249-253` | Somme des poids par classe | Lignes | allocation | `allocation` dans `to_portfolio` | [F] | Fallback |
-| E13 | **Métriques (mock)** | `metricsOf` | `:255-276` | `μ = Σ a_k·mu_k` ; `σ² = ΣΣ a_i a_j σ_i σ_j ρ`, **ρ = 0.3** si i≠j ; `worstYear = μ − 2.33σ` ; **`sharpe = (μ − 0.025)/σ`** ; **`maxDrawdown = −min(0.9, 2.2σ)`** ; `var95 = −(μ − 1.645σ)` ; `es95 = −(μ − 2.063σ)` | Hypothèses de classe | `Metrics` | `portfolio_metrics` (`market.py:394`) et `to_portfolio` | [F] | **Isoler ou masquer en production.** `rf = 0.025` contre `0.035` au backend ; `maxDrawdown` est un proxy sans historique ; ρ = 0.3 est un coefficient inventé |
+| E13 | **Métriques (mock)** | `metricsOf` | `:255-276` | `μ = Σ a_k·mu_k` ; `σ² = ΣΣ a_i a_j σ_i σ_j ρ`, **ρ = 0.3** si i≠j (l.261) ; `worstYear = μ − 2.33σ` ; **`sharpe = (μ − 0.025)/σ`** (l.271) ; **`maxDrawdown = −min(0.9, 2.2σ)`** (l.272) ; `var95 = −(μ − 1.645σ)` ; `es95 = −(μ − 2.063σ)` | Hypothèses de classe | `Metrics` | `portfolio_metrics` (`market.py:394`) et `to_portfolio` | [F] | **Isoler ou masquer en production.** `rf = 0.025` contre `0.035` au backend ; `maxDrawdown` est un proxy sans historique ; ρ = 0.3 est un coefficient inventé. **Ces métriques ne contiennent pas les pénalités de régularisation** |
 | E14 | Preuves (mock) | `evidenceOf` | `:281-300` | `hhi = Σw²`, `diversification = 1/hhi`, `top` = plus grosse ligne, perte acceptée = `−LOSS_BY_REACTION[lossReaction]` | Portefeuille | `Evidence` | `portfolio_evidence` (`ia/evidence.py:88`) | [F] | Fallback. `reduce` sans valeur initiale : échec possible sur une liste vide (non vérifié) |
 | E15 | `LOSS_BY_REACTION` | constante | `:303` | `[0.1, 0.15, 0.25, 0.35]` | | | `monport.py:128` (`{10,15,25,35}`) | [M] | Dédupliquer |
 | E16 | **Avertissements de cohérence** | `coherenceWarnings` | `:306-323` | `score<40 && crypto%>0` ; `score<40 && actions≥0.7` ; `score>65 && (actions exclues \|\| actions≤0.3)` ; `score<77 && vehicles==='titres'` ; une seule classe gardée | Score front, contraintes | `RiskNote[]` | `coherence_facts` (`monport.py:424-443`) et décision de Pépite | [M] | **Actif en production** (`Preferences.tsx:61`). Mêmes seuils que le backend mais calculés sur le score **sans crans**. Déplacer ou parité testée |
@@ -500,7 +596,7 @@ Classification : **[F]** calcul financier · **[M]** logique métier · **[U]** 
 | S2 | Construction de repli | `build()` | `store.ts:158-163` | `buildAll(riskScore(profile), constraints)` ; si `check.coherent` → seul `equilibre` | Workflow backend | [F]/[M] | Fallback |
 | S3 | Niveau de tableau de bord | `defaultDashboardLevel` | `store.ts:82-84` | `comfort ≤ 2 → débutant`, `3 → intermédiaire`, `≥ 4 → avancé` | Aucun | [M]/[U] | Garder (UI) |
 | S4 | Fusion de contraintes | `merge` | `store.ts:86-90` | Fusion superficielle, `vehicles` ignoré | Aucun | [U] | Garder |
-| S5 | Véhicules | `setVehicles` | `store.ts:134-150` | Hors FNB : seules `shownClasses` sont gardées ; pourcentages retirés quand `vehicles === 'fnb'` | `shown_classes` (`monport.py:~234`) | [M] | Garder, vérifier la parité |
+| S5 | Véhicules | `setVehicles` | `store.ts:134-150` | Hors FNB : seules `shownClasses` sont gardées ; pourcentages retirés quand `vehicles === 'fnb'` | `shown_classes` (`monport.py:234`) | [M] | Garder, vérifier la parité |
 | S6 | Valeurs par défaut du profil | `DEFAULT_PROFILE` | `store.ts:7-14` | âge 35, montant 10 000, objectif `fructifier`, horizon 12, `lossReaction 2`, `comfort 3` | `capacity`/`tolerance` défauts : horizon 10, âge 35 | [M] | **Écart** : horizon par défaut 12 (front) contre 10 (backend), pertinent si un champ manque |
 
 ### 2.3.3 `api.ts`
@@ -508,8 +604,8 @@ Classification : **[F]** calcul financier · **[M]** logique métier · **[U]** 
 | # | Calcul | Fonction | Lignes | Logique | Classe | Recommandation |
 |---|---|---|---|---|---|---|
 | A1 | Contrôle de repli | `exampleCheck` | `:108-115` | Cohérent si `coherenceWarnings(score, c).length === 0` | [M] | Fallback |
-| A2 | Script d'événements fictif | `runScript` | `:194-232` | `after = UNIVERSE.length*7 − excluded*9 − classesOut*6` ; `before = UNIVERSE.length*7` ; message « Toutes tes limites sont respectées. » | [U] | **Chiffres inventés** : afficher « exemple » ou retirer |
-| A3 | Règles de chat | `RULES`, `proposeAdjustment` | `:234-296` | Regex : tech → `themes.tech 30` ; pétrole/fossile → exclusion ; crypto/bitcoin → `classes.crypto 10` (avertit si `score < 50`) ; prudent/moins de risque → exclut la crypto et `riskShift −15` ; `changes` = diff avant/après filtré à `\|Δ\| ≥ 0.001` | [M]/[F] | Fallback. Aucun équivalent backend codé (LLM) |
+| A2 | Script d'événements fictif | `runScript` | `:194-236` | `after = UNIVERSE.length*7 − excluded*9 − classesOut*6` ; `before = UNIVERSE.length*7` ; messages « Toutes tes limites sont respectées. » et « Rien de particulier à signaler. » écrits en dur. Dernière modification : l'ordre des étapes suit désormais le backend (gestionnaires, agents Risque, juge) | [U] | **Chiffres inventés** : afficher « exemple » ou retirer |
+| A3 | Règles de chat | `RULES`, `proposeAdjustment` | `:252-299` | Regex : tech → `themes.tech 30` ; pétrole/fossile → exclusion ; crypto/bitcoin → `classes.crypto 10` (avertit si `score < 50`) ; prudent/moins de risque → exclut la crypto et `riskShift −15` ; `changes` = diff avant/après filtré à `\|Δ\| ≥ 0.001` | [M]/[F] | Fallback. Aucun équivalent backend codé (LLM) |
 
 ### 2.3.4 `data/catalog.ts` (hypothèses en dur)
 
@@ -519,7 +615,7 @@ Classification : **[F]** calcul financier · **[M]** logique métier · **[U]** 
 | C2 | `UNIVERSE` | `:230-260` | 26 lignes fictives (« exemple »), frais en %, scores de facteurs en dur | [F]/[M] (mock) | Isoler en démo |
 | C3 | `FACTOR_TARGETS` | `:160` | `{2: .5, 1: .2, −1: −.2, −2: −.5}` | [M] | **Dupliqué** (`monport.py:113`) : test de parité |
 | C4 | `shareTotal`, `sharesValid` | `:163-172` | `total = round(Σ·10)/10` ; valide si `total ≤ 100 && (free>0 \|\| entered===0 \|\| total===100)` | [M] | Validation UI. Le backend revalide (`validate_profile`, `monport.py:666`) |
-| C5 | `shownClasses` | `:46-48` | `titres → ['actions','crypto']`, sinon 5 classes | [M] | Parité avec `shown_classes` |
+| C5 | `shownClasses` | `:46-48` | `titres → ['actions','crypto']`, sinon 5 classes | [M] | Parité avec `shown_classes` (`monport.py:234`) |
 | C6 | `PERIODS_PER_YEAR` | `:300` | `{deux-semaines 26, mensuelle 12, annuelle 1, aucune 12}` | [F] | **Probablement inutilisé** : la vue lit `proj.periodsPerYear` du backend (`Views.tsx:~198`). Non vérifié par recherche exhaustive |
 | C7 | `THEME_PRESETS` | `:185-216` | Modèles de thématiques en dur (ex. tech 35 %, IA 25 %) | [M] | Garder (UI) |
 
@@ -527,19 +623,20 @@ Classification : **[F]** calcul financier · **[M]** logique métier · **[U]** 
 
 | # | Calcul | Fichier : lignes | Logique | Classe | Recommandation |
 |---|---|---|---|---|---|
-| P1 | Utilité marginale du risque | `pages/RiskNotebook.tsx:269` | `extra = (A/2)·(0.15² − 0.10²)·100` (rendement demandé pour passer de 10 % à 15 % de volatilité) | [F] (pédagogique) | Garder si libellé « illustration » ; dépend de A (backend si disponible) |
+| P1 | Utilité marginale du risque | `pages/RiskNotebook.tsx:269` | `extra = (A/2)·(0.15² − 0.10²)·100` (rendement demandé pour passer de 10 % à 15 % de volatilité) | [F] (pédagogique) | Garder si libellé « illustration ». Cette formule suppose l'utilité **sans** pénalité de régularisation ; si λ_D ou λ_V deviennent non nuls, l'explication ne les inclut pas |
 | P2 | Échelle log de A | `RiskNotebook.tsx:270` | `pos = log(25/v)/log(25)·100` | [U] | Garder |
 | P3 | Tolérance de bande | `RiskNotebook.tsx:317` | `TOLERANCE = 2` points, « comme `SHARE_TOLERANCE` de `monport.py` » (définition backend non relue) | [M] | Parité à tester |
 | P4 | Plancher d'obligations affiché | `RiskNotebook.tsx:342-343` | `room = 1 − Σ_classes fixées max(0, v − TOLERANCE)/100` ; `bondFloor = max(0, min(lim.bondFloor, room))` | [F]/[M] | **Approximation locale** de `follow_profile` (`monport.py:571`) : le backend fait foi |
-| P5 | Poids de la capacité / tolérance | `RiskNotebook.tsx:125-141` | `0.6/0.4` et `0.5/0.3/0.2` recopiés à la main | [F] | **Triple duplication** (`engine.ts:55-56`, `monport.py:344,352`) |
+| P5 | Poids de la capacité / tolérance | `RiskNotebook.tsx:125-126`, `:139-141` | `0.6/0.4` et `0.5/0.3/0.2` recopiés à la main | [F] | **Triple duplication** (`engine.ts:55-56`, `monport.py:344,352`) |
 | P6 | Score recalculé en ligne | `RiskNotebook.tsx:253`, `:291` | `riskLabel(Math.round(5 + 90·s))` au lieu de `riskScore` | [F]/[U] | Dédupliquer |
 | P7 | Seuil d'explication | `RiskNotebook.tsx:108` | `b.capacity > b.tolerance + 0.15` | [U] | Garder (texte) |
 | P8 | Bandes de facteurs | `pages/dashboard/Factors.tsx` | `RANGE = 1.5`, `NEUTRAL = 0.1` ; intensité `<0.1 Neutre`, `<0.3 Légère`, `<0.6 Nette`, sinon `Forte` ; jauge `(clamp(v, −1.5, 1.5) + 1.5)/3·100` ; `strong = \|v\| > 0.18` | [U] | Garder. Le test « cible atteinte » (`met`) n'a pas été lu (non vérifié) |
-| P9 | Parts de risque | `Views.tsx:~390` | Texte explicatif de la contribution au risque. Le calcul est côté backend (`risk_contribution`) | [U] | Garder |
+| P9 | Contribution au risque | `Views.tsx:376-421` (voir 2.6, ligne « Contribution au risque ») | Le front affiche `p.riskContribution` (poids et risque par classe) et une infobulle explicative. Le calcul est côté backend : `risk_by_class` (`monport.py:1095`) s'appuie sur `risk_contribution` (`backtest.py:141`). **Ne pas confondre** avec `allocator._risk_contributions` (l.445), qui ne sert qu'aux diagnostics | [U] | Garder |
 | P10 | Barres, largeurs | `charts.tsx:75`, `parts.tsx:25`, `Evidence.tsx:25-34` | `poids·100 %`, `scale = max(v, l)·1.15`, `over` | [U] | Garder |
 | P11 | Pré-remplissage de pourcentage | `inputs.tsx:208` | `max(0, round((100 − total)/max(1, free)))` | [U]/[M] | Garder |
 | P12 | Contenu LLM comme barre | `RichText.tsx:152-158` | `clamp(parseFloat(pct), 0, 100)` | [U] | Chiffre venant du texte écrit par l'agent, non recalculé (non vérifié côté backend) |
 | P13 | Libellé « Pire recul (backtest) » | `Views.tsx:139` | `s?.maxDrawdown ?? m.maxDrawdown` | [U] | **Libellé trompeur** quand la valeur vient de `m.maxDrawdown` (proxy du mode démo) |
+| P14 | Description des étapes du pipeline | `pages/Pipeline.tsx` (`stepsFor`) | Texte : « Une variante recalculée avec des limites assouplies perd des points » ; titre d'alerte « Limites assouplies » | [U] | Aligné sur `JUDGE_RELAUNCH_PENALTY` (backend). Le nombre de points (3) n'est pas affiché |
 
 ### 2.3.6 `lib/format.ts` (formatage, pas de calcul financier)
 
@@ -557,7 +654,7 @@ Classification : **[F]** calcul financier · **[M]** logique métier · **[U]** 
 4. **Doublons** : oui. Pour les constantes et formules de profil, voir le tableau 3.B. Aucun test de parité n'a été trouvé (je n'ai pas exploré les tests du front).
 5. **Le front modifie-t-il les résultats de l'optimiseur ?** Oui, dans un seul chemin : `withAdjustments` (F1).
 6. **Mock et fallback actifs** : oui. Déclencheur : échec du `fetch`, statut non OK ou type de contenu non SSE (`api.ts:79-87`), puis `signalDemo(true)` (bandeau de démonstration).
-7. **Les métriques correspondent-elles exactement au backend ?** En mode backend, oui (aucun recalcul). En mode démo, non : les chiffres viennent de `metricsOf`.
+7. **Les métriques correspondent-elles exactement au backend ?** En mode backend, oui (aucun recalcul). En mode démo, non : les chiffres viennent de `metricsOf`. **Les pénalités de régularisation ne sont pas visibles à l'écran** : elles modifient les poids, pas les indicateurs affichés.
 
 ## 2.5 Constats du front
 
@@ -572,6 +669,88 @@ Classification : **[F]** calcul financier · **[M]** logique métier · **[U]** 
 | **F7** | `DEFAULT_PROFILE.horizon = 12` contre défaut backend `10` ; décalage de score par slot du mock `−20/+10` points contre `±0.1` sur S | `store.ts:7-14` ; `engine.ts:144` ; `monport.py:157` | Faible |
 | **F8** | `Views.tsx:139` : libellé « Pire recul (backtest) » avec repli sur `m.maxDrawdown` | `Views.tsx:139` | Faible |
 | **F9** | `PERIODS_PER_YEAR` probablement mort | `catalog.ts:300` | Faible |
+| **F10** | L'explication pédagogique de l'utilité (`extra`) ignore les pénalités de régularisation (aujourd'hui nulles) | `RiskNotebook.tsx:269` | Faible (à surveiller si λ ≠ 0) |
+
+## 2.6 Où chaque concept s'affiche dans le front-end
+
+Cette section répond, concept par concept, à la question « où est-ce visualisé dans l'interface ? ». Les lignes ont été relevées par `grep -n` sur `frontend/src` (commit `9729f50`).
+
+**Structure des écrans du tableau de bord.** `Dashboard.tsx:39` choisit la vue selon le niveau de l'utilisateur : `Beginner` (`Views.tsx:32`), `Intermediate` (`Views.tsx:249`) ou `Advanced` (`Views.tsx:434`). `Advanced` contient deux onglets, « Performance » (`PerformanceTab`, `Views.tsx:277`) et « Risque » (`RiskTab`, `Views.tsx:376`). Les mises en garde du responsable des risques (`RiskNotes`) sont montées à `Dashboard.tsx:101`, dans une colonne latérale visible dans les trois niveaux.
+
+**Légende de la colonne « Calcul »** : *Backend* = le front ne fait que lire et afficher la valeur reçue. *Front* = la valeur est calculée dans le navigateur.
+
+### Indicateurs du portefeuille
+
+| Concept | Écran (niveau) | Composant : lignes | Donnée lue | Calcul |
+|---|---|---|---|---|
+| **Rendement attendu** (μ du portefeuille) | Débutant : « Une année normale » | `Views.tsx:50-51` ; montant en dollars `:52-55` | `p.metrics.expectedReturn`, `p.amounts.expectedGain` | Backend |
+| | Intermédiaire et Avancé : carte « Rendement attendu » | `KpiRow`, `Views.tsx:128-134` (monté l.252 et l.438) | `m.expectedReturn` | Backend |
+| | Sélecteur de portefeuille (haut de page) | `Dashboard.tsx:80` | `q.metrics.expectedReturn` | Backend |
+| | Note sous la projection | `Views.tsx:200` | `p.metrics.expectedReturn` | Backend |
+| **Volatilité** | Intermédiaire et Avancé : carte « Volatilité » | `KpiRow`, `Views.tsx:135-147` | `m.volatility` | Backend |
+| Volatilité mensuelle | Avancé seulement | `Views.tsx:142` | `m.monthlyVolatility` (σ/√12, `monport.py:1054`) | Backend |
+| **Sharpe** (portefeuille) | Avancé : sous « Rendement attendu » | `Views.tsx:132` | `m.sharpe` | Backend |
+| | Avancé, onglet Performance : tableau « Statistiques » | `Views.tsx:297` | `s.sharpe` (Sharpe réalisé du backtest) | Backend |
+| **Pire année** (μ − 2,33σ) | Débutant : « Une mauvaise année » ; en dollars | `Views.tsx:59-64` | `p.metrics.worstYear`, `a.worstYearValue`, `a.worstYearLoss` | Backend |
+| | Intermédiaire et Avancé : carte « Pire année (estimation) » | `Views.tsx:148-153` | `m.worstYear` | Backend |
+| **VaR et ES 95 % (1 jour)** | Avancé : sous « Pire année » | `Views.tsx:151` | `s.var95`, `s.es95` (backtest) | Backend, signe inversé à l'affichage |
+| | Intermédiaire, Avancé : texte sous le graphique de distribution | `DistributionChart`, `Views.tsx:239-240` ; monté l.261 et l.387 | `r.run.stats.var95`, `.es95` | Backend, signe inversé à l'affichage |
+| **Pire recul** (max drawdown) | Avancé : sous « Volatilité » ; tableau « Statistiques » | `Views.tsx:141` ; `:298` | `s?.maxDrawdown ?? m.maxDrawdown` | Backend. Libellé « backtest » trompeur si repli (F8) |
+| Nombre de placements | Avancé : sous « Rendement attendu » | `Views.tsx:132` | `p.holdings.length` | Front (comptage) |
+
+### Analyses historiques et projections
+
+| Concept | Écran (niveau) | Composant : lignes | Donnée lue | Calcul |
+|---|---|---|---|---|
+| **Backtest** (courbe, drawdown, statistiques, pire et meilleure période de 12 mois, fréquence de rééquilibrage) | Avancé, onglet « Performance » | `PerformanceTab`, `Views.tsx:277-375` ; sélecteur de fréquence `:311-314` | `p.backtest.runs[fréquence]` | Backend (`backtest.py`) |
+| **Projection sur 10 ans** (cônes 5-95 et 25-75) | **Intermédiaire seulement** (pas dans Avancé) | `ProjectionChart`, `Views.tsx:157-203` ; monté l.260 | `p.projection.rows` | Backend (`projection.py`). Le front assemble `wide` et `likely` pour le graphique |
+| **Distribution des rendements quotidiens** | Intermédiaire ; Avancé, onglet « Risque » | `DistributionChart`, `Views.tsx:206-246` ; monté l.261 et l.387 | `r.run.distribution` | Backend |
+| **Contribution au risque** | **Avancé, onglet « Risque »** | `RiskTab`, `Views.tsx:376` : lit `p.riskContribution` (l.377) ; titre « Contribution au risque » (l.391) ; infobulle « Comment c'est calculé ? » (l.392-396) ; liste « poids vs risque » par classe (l.400-417) ; repli `NeedsBackend` (l.~418) | `p.riskContribution` (`{assetClass, weight, risk}[]`) | Backend (`risk_by_class`, `monport.py:1095`, contributions d'Euler sommées par classe). Le front ne fait que l'afficher |
+
+### Composition du portefeuille
+
+| Concept | Écran (niveau) | Composant : lignes | Donnée lue | Calcul |
+|---|---|---|---|---|
+| **Allocation par classe d'actifs** (barre et légende) | Débutant | `AllocationBar`, `parts.tsx:20` (monté `Views.tsx:39`) ; `Legend`, `parts.tsx:33` | `p.allocation` | Backend |
+| Allocation par classe (liste des familles) | Débutant : « Ce que tu achètes » | `Views.tsx:92-100` | `p.allocation[k]` | Backend |
+| **Répartition par classe, région, secteur** | Débutant (région, secteur) ; Intermédiaire ; Avancé, onglet « Risque » | `Breakdown`, `charts.tsx:99-102` ; monté `Views.tsx:87`, `:255`, `:382` | `p.breakdown` | Backend (`breakdowns`, `monport.py:1079`) |
+| **Positions : code, placement, type et secteur, classe, poids, montant** | Intermédiaire ; Avancé, onglet « Risque » (colonne « Classe » en plus) | `HoldingsTable`, `parts.tsx:70-115` (colonnes l.86-91 ; poids l.106 ; montant l.107) ; monté `Views.tsx:265`, `:424` | `p.holdings` | Backend |
+| **Exposition aux facteurs** | Avancé, onglet « Risque » | `FactorExposure`, `Factors.tsx:214` (titre « Exposition aux facteurs » l.220 ; cartes l.247) ; monté `Views.tsx:385` | `p.factors` | Backend (`factor_view`). Seuils d'intensité et jauge calculés côté front (P8, mise en forme) |
+
+### Risque, avertissements et agents
+
+| Concept | Écran (niveau) | Composant : lignes | Donnée lue | Calcul |
+|---|---|---|---|---|
+| **Mises en garde et preuves du responsable des risques** | Tous les niveaux, colonne latérale | `RiskNotes`, `RiskNotes.tsx:9` ; `Note`, `:43` ; `EvidenceCard`, `Evidence.tsx:5` ; monté `Dashboard.tsx:101` | `p.warnings`, `sources` | Backend. **Exception :** en démo, `evidenceOf` calcule les preuves dans le navigateur (`RiskNotes.tsx:13`, `engine.ts:281`) |
+| **Notes des agents** | Intermédiaire : « Notes des agents » ; Avancé : « Journal des agents » | `AgentNotes`, `parts.tsx:117` ; `Views.tsx:268-269`, `:427-428` | `p.agentNotes` | Backend |
+| **Relance avec limites assouplies** | Écran de construction (Pipeline) ; colonne `RiskNotes` | Alerte « Limites assouplies » `Pipeline.tsx:223` ; texte « …perd des points » `Pipeline.tsx:49` ; l'avertissement « Calcul relancé avec des limites assouplies » arrive dans `p.warnings` (`monport.py:1030`) | événement `warning`, `p.warnings` | Backend. Le nombre de points (3, `JUDGE_RELAUNCH_PENALTY`) n'est **pas** affiché |
+| **Discussion et ajustements avec Pépite** | Volet latéral | `AdjustPanel.tsx:40` | messages SSE ; en démo, `proposeAdjustment` (`api.ts:285`) | Backend, ou **front** en démo (F1) |
+
+### Profil, risque et aversion A (écrans de questionnaire)
+
+| Concept | Écran | Composant : lignes | Donnée lue | Calcul |
+|---|---|---|---|---|
+| **Étiquette de risque du profil** (« Ton profil est … ») | Transition | `Transition.tsx:31` | `riskLabel(riskScore(profile))` | **Front** (`engine.ts:110-116`) |
+| | Construction (Pipeline) | `Pipeline.tsx:169` | `riskLabel(score)`, `score = riskScore(profile)` (l.81) | **Front** |
+| **Score S et niveau** | Vérification, « carnet » de Pépite | `RiskNotebook.tsx:253` | `check.risk_position ?? b.s` (l.32) | Backend si fourni, sinon **front** (`riskBreakdown`) |
+| **Aversion au risque A** | Vérification : « A = … » | `RiskNotebook.tsx:290` ; curseur d'essai `:267`, `:307` | `check.risk_aversion ?? riskAversion(s)` (l.33) | Backend si fourni, sinon **front** (`engine.ts:72`) |
+| A par gestionnaire (variantes) | Vérification | `RiskNotebook.tsx:467` | `riskAversion(slotPosition(…))` | **Front** |
+| Utilité marginale « passer de 10 % à 15 % de risque » | Vérification | `RiskNotebook.tsx:269-270` | `(A/2)·(0,15² − 0,10²)·100` | **Front** (illustration) |
+| **Garde-fous du profil** (plancher d'obligations, crypto, plafond par ligne, par action, volatilité max, minimum 1 %) | Vérification | `RiskNotebook.tsx:411-418` (`Guard`) | `profileLimits(s)` (l.337), `bondFloor` (l.343) | **Front** (`engine.ts:92`) |
+| **Avertissements de cohérence** (profil contre préférences) | Page des préférences, classes d'actifs | `Preferences.tsx:61` | `coherenceWarnings(riskScore(profile), c)` | **Front** (`engine.ts:306`) |
+
+### Paramètres et calculs **sans aucun affichage** dans l'interface
+
+| Élément | Constat |
+|---|---|
+| Pénalités de régularisation λ_D, λ_V et seuil de volatilité | Aucune référence dans `frontend/src`. Elles modifient les poids, jamais un chiffre affiché |
+| Frais (`metrics.fees`) | Aucun composant ne lit `.fees` hors du moteur d'exemple (`engine.ts:265`) |
+| μ et σ individuels par titre, β, covariance Σ, intensité Ledoit-Wolf, `periods_per_year_effective` | Non affichés. `HoldingsTable` ne montre que code, nom, type, classe, poids et montant (`parts.tsx:86-91`) |
+| `effective_n`, indice de concentration (`hhi`), `A_effective`, utilité pénalisée | Non affichés |
+| Taux sans risque (`RF_ANNUAL`) | Utilisé dans le Sharpe, jamais montré |
+| Points de pénalité du juge (`JUDGE_RELAUNCH_PENALTY`) | Non affichés (texte qualitatif seulement) |
+
+**Lecture rapide.** Tous les indicateurs financiers du tableau de bord (rendement, volatilité, Sharpe, VaR, ES, drawdown, backtest, projection, contribution au risque, répartitions, positions, facteurs) sont lus du backend sans recalcul. Les seuls calculs réellement faits dans le navigateur en usage normal se trouvent dans les écrans de questionnaire : étiquette de risque, score S (secours), A (secours), garde-fous du profil, avertissements de cohérence et utilité marginale illustrée.
 
 ---
 
@@ -579,7 +758,9 @@ Classification : **[F]** calcul financier · **[M]** logique métier · **[U]** 
 
 ## 3.A Inventaire maître des paramètres
 
-Les lignes sont vérifiées par `grep -n`, sauf mention `~`. « Config » = clé de `config.py` modifiable en éditant ce fichier. « Constante » = littéral dans le code. « Env » = variable d'environnement. « Estimé » = calculé sur les données, non choisi.
+> Pour savoir **où chaque indicateur est affiché** dans l'interface (composant et lignes), voir [2.6](#26-où-chaque-concept-saffiche-dans-le-front-end).
+
+Les lignes sont vérifiées par `grep -n` sur le commit `9729f50`, sauf mention `~`. « Config » = clé de `config.py` modifiable en éditant ce fichier. « Constante » = littéral dans le code. « Env » = variable d'environnement. « Estimé » = calculé sur les données, non choisi.
 
 ### Rendements (A)
 
@@ -602,7 +783,7 @@ Les lignes sont vérifiées par `grep -n`, sauf mention `~`. « Config » = clé
 | `capm_benchmark_shrinkage.*` | inactif | `config.py:137-148` | Config (aucune classe ne l'utilise) |
 | `DATA.periods_per_year` | 252 | `config.py:40` | Config |
 
-### Covariance (B)
+### Covariance et pénalités liées à Σ (B)
 
 | Paramètre | Valeur | Fichier : ligne | Configurabilité |
 |---|---|---|---|
@@ -616,13 +797,18 @@ Les lignes sont vérifiées par `grep -n`, sauf mention `~`. « Config » = clé
 | `max_start_delay_business_days` | 5 (borné 0-10) | `config.py:268` | Config |
 | `periods_per_year_effective` | estimé | `market.py:250-257`, `:312` | Estimé |
 | `sample.min_pairwise_observations`, `repair_psd`, `eigenvalue_floor` | 60, `True`, `1e-10` | `config.py:237-239` | Config (inactifs) |
-| Tolérance PSD optimiseur | `−1e-8` | `optimizer.py:478` | Constante |
+| Tolérance PSD optimiseur | `−1e-8` | `optimizer.py:519` | Constante |
+| **`REGULARIZATION.diversification_penalty` (λ_D)** | **0.0** | **`config.py:406`** | **Config, hors du contrat agent** |
+| **`REGULARIZATION.high_volatility_penalty` (λ_V)** | **0.0** | **`config.py:407`** | **Config, hors du contrat agent** |
+| **`REGULARIZATION.volatility_threshold`** | **0.25** | **`config.py:408`** | **Config** |
+| `qᵢ = max(0, Σᵢᵢ − seuil²)` | calculé | `optimizer.py:398-401` | Dérivé de Σ |
 
 ### Aversion au risque et profils (C)
 
 | Paramètre | Valeur | Fichier : ligne | Configurabilité |
 |---|---|---|---|
 | `RISK_AVERSION.min/max/default` | 1.0 / 25.0 / 5.0 | `config.py:310-312` | Config (doublon `allocator.py:45`, `schemas.py:318`) |
+| `PepiteCheck.risk_aversion` défaut | 7.0 | `schemas.py:318` | Constante |
 | `AVERSION_ANCHORS` | voir 1.C | `monport.py:151` ; `engine.ts:69` | Constante ×2 |
 | `VOL_ANCHORS`, `STOCK_ANCHORS` | voir 1.C | `monport.py:152-153` ; `engine.ts:92-101` | Constante ×2 |
 | `BOND_FLOOR`, `NO_CRYPTO` | voir 1.C | `monport.py:137`, `:141` ; `engine.ts:92-101` | Constante ×2 |
@@ -635,27 +821,28 @@ Les lignes sont vérifiées par `grep -n`, sauf mention `~`. « Config » = clé
 | `LINE_CAP` | 0.40 | `monport.py:132` ; `evidence.py:27` ; `engine.ts:9` | Constante ×3 |
 | `LOSS_BY_REACTION` | 10/15/25/35 | `monport.py:128` ; `engine.ts:303` | Constante ×2 |
 | `BLEND` | 0.8 | `monport.py:56` | Constante |
-| `JUDGE_RELAUNCH_PENALTY` | 3 | `config.py:288` | Config |
+| `JUDGE_RELAUNCH_PENALTY` | 3 | `config.py:288` ; `workers.py:271-273` | Config |
 
 ### Optimisation (E)
 
 | Paramètre | Valeur | Fichier : ligne | Configurabilité |
 |---|---|---|---|
-| Objectif | `U = μᵀw − (A/2)wᵀΣw` | `optimizer.py:397-402` | Constante |
+| Objectif | `U = μᵀw − (A/2)wᵀΣw − λ_D·Σw² − λ_V·Σq·w²` | `optimizer.py:437-442` ; `allocator.py:339-344` | Constante (λ en config) |
 | `CONSTRAINTS.max_weight_per_asset` | `None` (production) | `config.py:340` | Config |
-| `BASE_CONSTRAINTS.max_weight_per_asset` | 0.10 (inactif) | `config.py:481` | Config |
-| `min_held_weight` | 0.01 | `config.py:334`, `:280`, `:471` ; `allocator.py:44` | Config ×3 + constante |
+| `BASE_CONSTRAINTS.max_weight_per_asset` | 0.10 (inactif) | `config.py:491` | Config |
+| `min_held_weight` | 0.01 | `config.py:334`, `:280`, `:481` ; `allocator.py:44` | Config ×3 + constante |
 | `PORTFOLIO_HOLDINGS` | 25 / 70 / 0.01 / 0.0001 | `config.py:278-283` | Config |
 | `MAX_ASSETS_PER_PORTFOLIO` | 40 | `runtime.py:49` | Env |
 | `A_LADDER` | 10 valeurs de 1.0 à 25.0 | `allocator.py:47` | Constante |
 | `CAP_REFINEMENTS` | 6 | `allocator.py:48` | Constante |
-| Lots de sélection | 10 (minimum), 5 (diversification) | `allocator.py:~376`, `~409` | Constante |
+| Lots de sélection | 10 (minimum), 5 (diversification) | `allocator.py:391`, `:426` | Constante |
 | `CASH` | rendement 0.01, volatilité 0.0, **désactivé en production** | `config.py:394-395` ; `catalog.py:605-606` | Config / Constante |
-| `OPTIMIZATION.solver_options` | `maxiter 2000`, `ftol 1e-9` | `config.py:407-408` | Config |
-| `constraint_tolerance`, `sum_weights_tolerance` | `1e-7`, `1e-7` | `config.py:411-412` | Config |
+| `OPTIMIZATION.solver_options` | `maxiter 2000`, `ftol 1e-9` | `config.py:417-418` | Config |
+| `constraint_tolerance`, `sum_weights_tolerance` | `1e-7`, `1e-7` | `config.py:421-422` | Config |
 | `minimum_holding_tolerance` | `1e-8` | `config.py:337` | Config |
 | Tolérances `catalog` | `TOL 1e-3`, `WTOL 2e-4`, `HELD 5e-4`, `EXACT_TOL 1e-3`, `FTOL 0.01`, `FACTOR_SLEEVE_MIN 0.10`, `FACTOR_MARGIN 0.01` | `catalog.py:67-69`, `:154-158` | Constante |
 | `FACTOR_LEVELS` | ±0.2 / ±0.5 | `monport.py:113` ; `catalog.ts:160` | Constante ×2 |
+| `RELAXATION_STEPS` | 3 familles | `allocator.py:580-596` | Constante |
 
 ### Autres (F)
 
@@ -664,7 +851,7 @@ Les lignes sont vérifiées par `grep -n`, sauf mention `~`. « Config » = clé
 | `LOOKBACK_YEARS`, `YEAR`, `BIWEEKLY`, `SAMPLE_EVERY`, `DAILY_STEP`, `DAILY_LIMIT` | 6, 252, 10, 5, 0.5, 5.0 | `backtest.py:26-31` | Constante |
 | `PATHS`, `SEED`, `MAX_AMOUNT`, `PER_YEAR` | 1000, 7, 10 000 000, 26/12/1/12 | `projection.py:20-23` | Constante |
 | `FEES` | `{"ETF": 0.002}` | `monport.py:131` | Constante |
-| VaR/ES normaux | 2.33, 1.645, 2.063 | `monport.py:989-994` ; `evidence.py:28` ; `engine.ts:269-274` | Constante ×3 |
+| VaR/ES normaux | 2.33, 1.645, 2.063 | `monport.py:1055-1060` ; `evidence.py:28` ; `engine.ts:269-274` | Constante ×3 |
 | `MAX_CITED` | 3 | `evidence.py:29` | Constante |
 | Modèles et jetons LLM | voir 1.F | `runtime.py:32-48` | Env |
 
@@ -673,8 +860,10 @@ Les lignes sont vérifiées par `grep -n`, sauf mention `~`. « Config » = clé
 | Calcul ou règle | Propriétaire actuel | Doublon dans l'autre couche | Cohérence | Manque ou écart |
 |---|---|---|---|---|
 | μ, Σ, estimation | Backend (`market.py`) | Non | n/a | Annualisation de Σ ≠ μ (voir 1.B) |
+| **Pénalités λ_D, λ_V** | Backend (`optimizer.py`, `allocator.py`, `config.py`) | Non | n/a | Hors contrat agent et hors front ; valeurs à 0.0, non calibrées |
 | Optimisation de portefeuille | Backend (`allocator.py`, `optimizer.py`) | **Oui, en démo** : `classWeights`, `lineWeights` | Heuristique différente | Fallback à isoler |
-| Métriques (μ, σ, Sharpe, drawdown) | Backend (`portfolio_metrics`) | **Oui, en démo** : `metricsOf` (`rf 0.025`, `ρ 0.3`) | Diverge | Marquer « exemple » |
+| Mélange 80/20 | Backend (`blend`, `enforce_minimum`) | Non (le front affiche seulement) | n/a | Non réoptimisé : les pénalités n'y agissent pas |
+| Métriques (μ, σ, Sharpe, drawdown) | Backend (`portfolio_metrics`) | **Oui, en démo** : `metricsOf` (`rf 0.025`, `ρ 0.3`) | Diverge | Marquer « exemple ». Les métriques backend ignorent les pénalités |
 | VaR / ES / pire année | Backend (`to_portfolio`) | Oui : `metricsOf` | Mêmes constantes (2.33, 1.645, 2.063) | OK, mais triple définition (`evidence.py`, `monport.py`, `engine.ts`) |
 | Backtest, projection, montants | Backend | Non | n/a | Vides en démo (`NeedsBackend`) |
 | Score de risque S | Backend (avec crans) | **Oui** : `riskBreakdown` | Identique sans crans | Le front ignore les crans |
@@ -683,6 +872,7 @@ Les lignes sont vérifiées par `grep -n`, sauf mention `~`. « Config » = clé
 | `SLOT_SHIFT` | Backend | **Oui** : `slotPosition` | Identique | |
 | Cohérence profil/préférences | Backend (Pépite, `coherence_facts`) | **Oui** : `coherenceWarnings` | Mêmes seuils, score différent | Actif en usage normal |
 | Ajustements de risque | Backend (crans LLM) | **Oui** : `riskShift`, `RULES` | Échelles différentes | `withAdjustments` écrase le résultat backend |
+| Pénalité de relance du juge | Backend (`workers._penalty`) | Non (texte seulement dans `Pipeline.tsx`) | n/a | Le « 3 » n'est pas exposé au front |
 | Validation de parts et contraintes | Backend (`validate_profile`, `evaluate`) | Oui : `sharesValid`, `shareTotal` | Probable | Validation UI de confort |
 | Taux sans risque | Backend (`RF_ANNUAL = 0.035`) | Oui : `0.025` dans `metricsOf` | **Diverge** | Démo seulement |
 | Frais | Backend (`FEES 0.002`) | Oui : `fee ?? 0.2` | Équivalent (0.2 %) | |
@@ -693,27 +883,29 @@ Classés par importance architecturale, puis par impact sur les portefeuilles.
 
 ### Priorité 1 — Impact direct sur les résultats
 
-1. **Annualisation de Σ ≠ annualisation de μ.** `periods_per_year_effective` (`n / (jours/365.25)`, `market.py:250-257`, `:312`) annualise Σ ; μ et `ann_vol` utilisent 252. La volatilité des portefeuilles et les `ann_vol` d'écran ne reposent donc pas sur la même base. À mesurer sur le Parquet avant le Datathon (commande de contrôle : exécuter `python -m invest_agents.market`, qui affiche `periods_per_year_effective`).
-2. **A effectif ≠ A du profil.** Le plafond de volatilité relève A jusqu'à 25 (`allocator._under_cap`, `:133-164`). Le A affiché (`risk_aversion(S)`) peut donc différer du A réellement optimisé (`A_effective`). Les trois variantes d'un profil cohérent partagent le même plafond (seul A les distingue), si bien que ce relèvement peut faire converger leurs A effectifs.
-3. **Pas de plafond par actif en production** (`max_weight_per_asset = None`, `config.py:340`, contre `0.10` dans BASE, inactif). Le seul plafond est `LINE_CAP = 0.40` et `MAX_STOCK_WEIGHT`. À calibrer explicitement ; la concentration en dépend.
-4. **Influence du sentiment : un LLM, non reproductible.** Les crans (±2, soit ±0.10 de S) sont décidés par Pépite sans règle numérique (`pepite.py:231-247`). C'est le seul canal du « sentiment » : à documenter, à tester sur des exemples, ou à encadrer par une table de règles.
-5. **Paramètres de rendement structurants à calibrer** : `erp_annual = 0.05`, `alpha = 0.50`, `RF_ANNUAL = 0.035` (hypothèses de démonstration, le code le dit) ; SPY pour toutes les actions, y compris les titres non américains ; méthode historique pure pour les obligations (la moyenne historique sur l'échantillon peut s'écarter de la période courante).
-6. **`COVARIANCE_HISTORY.start_date = 2021-01-01`** : détermine quels titres sont admissibles. Un titre coté après cette date (plus 5 séances) n'entre jamais dans l'optimisation, quel que soit son historique.
+1. **Annualisation de Σ ≠ annualisation de μ.** `periods_per_year_effective` (`n / (jours/365.25)`, `market.py:250-257`, `:312`) annualise Σ ; μ et `ann_vol` utilisent 252. La volatilité des portefeuilles et les `ann_vol` d'écran ne reposent donc pas sur la même base. **Nouveau :** le seuil de volatilité des pénalités (25 %) compare `√Σᵢᵢ`, donc la même base que Σ, si bien que cette incohérence déplace aussi l'ensemble des titres pénalisés. À mesurer sur le Parquet avant le Datathon (`python -m invest_agents.market` affiche `periods_per_year_effective`).
+2. **Pénalités λ_D et λ_V : nulles et non calibrées.** À 0.0, rien ne change. Dès qu'on les augmente, elles agissent comme un terme diagonal `(2λ_D/A)·I + (2λ_V/A)·diag(q)` ajouté à Σ, identique pour les trois variantes, et **s'ajoutent à A sans apparaître dans `A_effective`**. Elles n'entrent pas dans les métriques affichées. Elles ne sont pas pilotables par le questionnaire. Calibrer (a) l'échelle de λ par rapport à A (1 à 25) et à des variances annuelles de 0.01 à 0.16, (b) le seuil de 25 %, (c) le lien éventuel avec le profil.
+3. **A effectif ≠ A du profil.** Le plafond de volatilité relève A jusqu'à 25 (`allocator._under_cap`, `:133-164`). Le A affiché (`risk_aversion(S)`) peut donc différer du A réellement optimisé (`A_effective`). Les trois variantes d'un profil cohérent partagent le même plafond (seul A les distingue), si bien que ce relèvement peut faire converger leurs A effectifs.
+4. **Pas de plafond par actif en production** (`max_weight_per_asset = None`, `config.py:340`, contre `0.10` dans BASE, inactif). Le seul plafond est `LINE_CAP = 0.40` et `MAX_STOCK_WEIGHT`. À calibrer explicitement ; la concentration en dépend. λ_D est l'autre levier contre la concentration (non utilisé aujourd'hui).
+5. **Influence du sentiment : un LLM, non reproductible.** Les crans (±2, soit ±0.10 de S) sont décidés par Pépite sans règle numérique (`pepite.py:231-247`). C'est le seul canal du « sentiment » : à documenter, à tester sur des exemples, ou à encadrer par une table de règles.
+6. **Paramètres de rendement structurants à calibrer** : `erp_annual = 0.05`, `alpha = 0.50`, `RF_ANNUAL = 0.035` (hypothèses de démonstration, le code le dit) ; SPY pour toutes les actions, y compris les titres non américains ; méthode historique pure pour les obligations (la moyenne historique sur l'échantillon peut s'écarter de la période courante).
+7. **`COVARIANCE_HISTORY.start_date = 2021-01-01`** : détermine quels titres sont admissibles. Un titre coté après cette date (plus 5 séances) n'entre jamais dans l'optimisation, quel que soit son historique.
+8. **Relance assouplie et notes du juge.** `JUDGE_RELAUNCH_PENALTY = 3` ne s'applique qu'au profil cohérent (`workers.py:271-273`). Un portefeuille relancé avec limites assouplies peut donc être mieux classé en profil incohérent qu'en profil cohérent. La valeur 3 (sur 10) est un choix non calibré.
 
 ### Priorité 2 — Architecture et duplication
 
-7. **`withAdjustments` écrase un portefeuille backend** par le mock et perd backtest, projection, montants, breakdown, facteurs (F1, `store.ts:93-105`).
-8. **Douze constantes dupliquées front/backend sans test de parité** (F5) : ancres A/vol/actions, plancher d'obligations, `SLOT_SHIFT`, pondérations de C et T, `OBJECTIVE_TOLERANCE`, `CAPACITY_MARGIN`, `LOSS_BY_REACTION`, `LINE_CAP`, `FACTOR_LEVELS`.
-9. **Le front calcule S et les limites avant le backend** et ignore les crans (F2, F3). Exposer ces valeurs depuis `monport_check` et retirer les formules du front.
-10. **Valeurs `min_held_weight = 0.01` et A ∈ [1, 25] définies à 4 endroits** (voir 1.E, 1.C).
-11. **Seuil « position détenue » défini 5 fois** : `1e-7`, `1e-9`, `2e-4`, `5e-4`, `0.005`.
+9. **`withAdjustments` écrase un portefeuille backend** par le mock et perd backtest, projection, montants, breakdown, facteurs (F1, `store.ts:93-105`).
+10. **Douze constantes dupliquées front/backend sans test de parité** (F5) : ancres A/vol/actions, plancher d'obligations, `SLOT_SHIFT`, pondérations de C et T, `OBJECTIVE_TOLERANCE`, `CAPACITY_MARGIN`, `LOSS_BY_REACTION`, `LINE_CAP`, `FACTOR_LEVELS`.
+11. **Le front calcule S et les limites avant le backend** et ignore les crans (F2, F3). Exposer ces valeurs depuis `monport_check` et retirer les formules du front.
+12. **`min_held_weight = 0.01` et A ∈ [1, 25] définis à plusieurs endroits** (voir 1.E, 1.C), et un défaut de A à 7.0 dans `PepiteCheck` (`schemas.py:318`) contre 5.0 dans `config.py:312`.
+13. **Seuil « position détenue » défini 5 fois** : `1e-7`, `1e-9`, `2e-4`, `5e-4`, `0.005`.
 
 ### Priorité 3 — Hygiène, démo, documentation
 
-12. **Fallback et mock actifs** : métriques de démo à `rf 0.025`, `ρ 0.3`, `maxDrawdown = −min(0.9, 2.2σ)` ; message « Le juge confirme… » écrit en dur ; chiffres du script `runScript` inventés (F4, A2, E17). Isoler derrière un indicateur de démonstration.
-13. **Code inerte et documentation périmée** : `BASE_*`, `CANDIDATES`, `MANDATES`, `BOND_SHIFT`, `PERIODS_PER_YEAR`, `RISK_AVERSION.bands`, docstring « 25 à 60 positions (cible 50) » (`portfolio_manager.py:4`) contre `25 à 70` (`config.py:278-279`).
-14. **Trois définitions de la pire année à 2.33** (`monport.py:989`, `evidence.py:28`, `engine.ts:269`).
-15. **Défauts divergents** : horizon 12 (front) contre 10 (backend) ; A par défaut 5.0 (`config`), `A_MAX/5` (`allocator.py:490`, actif) et `A_MAX/2` (`allocator.py:216`, legacy).
+14. **Fallback et mock actifs** : métriques de démo à `rf 0.025`, `ρ 0.3`, `maxDrawdown = −min(0.9, 2.2σ)` ; message « Le juge confirme… » écrit en dur ; chiffres du script `runScript` inventés (F4, A2, E17). Isoler derrière un indicateur de démonstration.
+15. **Code inerte et documentation périmée** : `BASE_*`, `CANDIDATES`, `MANDATES`, `BOND_SHIFT`, `PERIODS_PER_YEAR`, `RISK_AVERSION.bands`, docstring « 25 à 60 positions (cible 50) » (`portfolio_manager.py:4`) contre `25 à 70` (`config.py:278-279`).
+16. **Trois définitions de la pire année à 2.33** (`monport.py:1055`, `evidence.py:28`, `engine.ts:269`).
+17. **Défauts divergents** : horizon 12 (front) contre 10 (backend) ; A par défaut 5.0 (`config`), 7.0 (`PepiteCheck`), `A_MAX/5` (`allocator.py:510`, actif) et `A_MAX/2` (`allocator.py:216`, legacy).
 
 ---
 
@@ -721,7 +913,8 @@ Classés par importance architecturale, puis par impact sur les portefeuilles.
 
 - `deploy/*.sh`, `nginx.conf` et `pyproject.toml` n'ont pas été lus : le caractère « déployé » repose sur les imports depuis `backend/main.py` et sur `catalog.settings_for`.
 - Les numéros de ligne précédés de `~` sont approximatifs. Les valeurs, elles, ont été relues dans le code.
-- Non relus en détail : `constraints.py` (hors constantes), `evidence.py` (hors constantes), `guardrail.py`, `workflow/session.py`, `workflow/flow.py` (hors lignes citées), `agents/*`, `diagnostics.py` (seuils relevés par un sous-agent), `catalog.preference_constraints` et `choices_breakdown`.
-- Non vérifié : usage de `RISK_AVERSION.bands`, usage des clés `ledoit_wolf.target`, `ledoit_wolf.shrinkage_intensity`, `ledoit_wolf.block_size`, `minimum_holding_max_iterations` et `ESTIMATION.forecast_horizon_years` par le code actif ; usage du poids `JUDGE_RELAUNCH_PENALTY` dans le juge ; définition backend de `SHARE_TOLERANCE`.
+- Non relus en détail : `constraints.py` (hors constantes), `evidence.py` (hors constantes), `guardrail.py`, `workflow/session.py`, `workflow/flow.py` (hors lignes citées), `agents/*`, `catalog.preference_constraints` et `choices_breakdown`.
+- Non vérifié : usage de `RISK_AVERSION.bands`, usage des clés `ledoit_wolf.target`, `ledoit_wolf.shrinkage_intensity`, `ledoit_wolf.block_size`, `minimum_holding_max_iterations` et `ESTIMATION.forecast_horizon_years` par le code actif ; définition backend de `SHARE_TOLERANCE`.
+- **Pénalités de régularisation** : leur effet numérique n'a pas été mesuré (valeurs à 0.0). L'équivalence « terme diagonal ajouté à Σ » est une dérivation mathématique à partir de la formule du code, non un comportement observé. Le front-end ne mentionne pas ces pénalités (recherche textuelle sans résultat). Je n'ai pas vérifié si `backend/tests/test_regularization.py` (hors périmètre) passe.
 - Front : `Home`, `Profile`, `Splash`, `Layout`, `Disclaimer`, `FactorModel`, `App.tsx`, début de `RiskNotebook.tsx` et `Pipeline.tsx` (lignes 60 à 160) relus partiellement ; condition `met` de `Factors.tsx` non lue ; tests du front non explorés.
-- Aucun code n'a été exécuté : les valeurs de A citées en 1.G.3 sont calculées à la main à partir des ancres, et l'écart d'annualisation de Σ n'est pas mesuré.
+- Aucun code n'a été exécuté : les valeurs de A citées en 1.G.3 et les exemples de pénalités de 1.B.2 sont calculés à la main, et l'écart d'annualisation de Σ n'est pas mesuré.

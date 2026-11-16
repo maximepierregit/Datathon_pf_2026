@@ -15,11 +15,11 @@ flowchart LR
     direction TB
     GR["Bedrock Guardrails<br/>texte libre du client"]
     P["Pépite (Sonnet 5.5)<br/>vérifie, écrit les 3 profils,<br/>pilote, répond au chat"]
-    PM["3 gestionnaires (Opus 5.5)<br/>en parallèle"]
+    PM["3 gestionnaires (Opus 5.5)<br/>en parallèle, expliquent le calcul"]
     RK["3 agents Risque (Opus 5.5)"]
-    J["Juge final (Opus 5.5)"]
+    J["Juge final (Opus 5.5)<br/>vérifie les limites, compare"]
     GR --> P --> PM --> RK --> J
-    J -. "réoptimisation" .-> PM
+    PM -. "limites impossibles :<br/>relance assouplie" .-> PM
   end
 
   RT -- "MCP signé SigV4" --> GW["AgentCore Gateway<br/>monport-tools (IAM)"]
@@ -54,7 +54,7 @@ flowchart LR
 ## Parcours
 
 1. **Vérification** (`monport_check`) : Pépite lit le questionnaire, appelle les outils de risque et de cohérence, puis rend son verdict. Le serveur d'outils est préchauffé pendant ce temps.
-2. **Construction** (`monport`) : Pépite écrit les 3 profils de contraintes. Les 3 gestionnaires construisent en parallèle par la Gateway (`screen_assets`, `optimize_portfolio`, macro), chaque agent Risque relit son portefeuille, puis le juge compare et peut exiger une reconstruction. Profil cohérent : un gagnant. Profil incohérent : 3 propositions (mélanges 80/20 calculés par le code).
+2. **Construction** (`monport`) : Pépite écrit les 3 profils de contraintes. Pour chacun des 3 gestionnaires, en parallèle, le code calcule le portefeuille (Markowitz global). Si les limites dures sont impossibles à tenir, il le recalcule aussitôt avec des limites assouplies, devenues des préférences, et avertit le client. Le gestionnaire explique ensuite le résultat (`get_portfolio`, macro par la Gateway), et son agent Risque le relit. Le juge vérifie les limites et compare, sans demander de reconstruction. Profil cohérent : un gagnant. Profil incohérent : 3 propositions (mélanges 80/20 calculés par le code).
 3. **Chat** (`monport_chat`) : le guardrail filtre le message, puis Pépite répond. Elle peut interroger ses agents ou relancer une construction.
 
 ## Événements (SSE)

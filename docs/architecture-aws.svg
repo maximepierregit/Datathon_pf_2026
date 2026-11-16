@@ -94,7 +94,7 @@
 
   <rect x="755" y="292" width="290" height="44" rx="6" fill="#ffffff" stroke="#01a88d" stroke-width="1.2"/>
   <text x="767" y="310" class="t" style="font-size:12.5px">3 gestionnaires · Claude Opus 5.5</text>
-  <text x="767" y="327" class="xs">en parallèle, choisissent les titres</text>
+  <text x="767" y="327" class="xs">en parallèle, expliquent le calcul</text>
 
   <rect x="755" y="344" width="290" height="44" rx="6" fill="#ffffff" stroke="#01a88d" stroke-width="1.2"/>
   <text x="767" y="362" class="t" style="font-size:12.5px">3 agents Risque · Claude Opus 5.5</text>
@@ -102,11 +102,11 @@
 
   <rect x="755" y="396" width="290" height="44" rx="6" fill="#ffffff" stroke="#01a88d" stroke-width="1.2"/>
   <text x="767" y="414" class="t" style="font-size:12.5px">Juge final · Claude Opus 5.5</text>
-  <text x="767" y="431" class="xs">compare, peut exiger une reconstruction</text>
+  <text x="767" y="431" class="xs">compare, pénalise les relances assouplies</text>
 
   <rect x="755" y="452" width="290" height="48" rx="6" fill="#f7f8f9" stroke="#8a96a3" stroke-width="1.2" stroke-dasharray="4 3"/>
   <text x="767" y="471" class="t" style="font-size:12.5px">Code Python déterministe</text>
-  <text x="767" y="488" class="xs">poids, indicateurs, conformité, preuves chiffrées</text>
+  <text x="767" y="488" class="xs">titres et poids, relance assouplie, conformité</text>
 
   <!-- Colonne Bedrock -->
   <rect x="1110" y="165" width="280" height="80" rx="8" class="box" stroke="#01a88d"/>
