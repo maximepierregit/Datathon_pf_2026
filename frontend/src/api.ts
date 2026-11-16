@@ -198,16 +198,19 @@ async function runScript(input: PipelineInput, onEvent: (e: PipelineEvent) => vo
   const coherent = input.check.coherent
 
   const status = (agent: AgentId, s: AgentStatus, message: string): PipelineEvent => ({ type: 'agent_status', agent, status: s, message })
-  // Les trois gestionnaires, puis les trois juges, travaillent en parallèle : leurs étapes sont décalées.
+  // Même ordre que le backend : gestionnaires, agents Risque, vérification des limites, juge. Les trois gestionnaires,
+  // puis les trois vérifications, travaillent en parallèle : leurs étapes sont décalées.
   const each = (role: 'gestionnaire' | 'juge', s: AgentStatus, message: string, delay: number): [number, PipelineEvent][] =>
     PORTFOLIO_IDS.map((id, i) => [i ? 250 : delay, status(`${role}-${id}`, s, message)])
   // Profil cohérent : le juge final garde un gagnant. Profil incohérent : Pépite mélange les bases 80/20.
+  // Le juge s'ouvre avec les vérifications de limites et se ferme après elles.
+  const judgeStart: [number, PipelineEvent] = [200, status('juge-final', 'running', coherent ? 'Comparaison des 3 portefeuilles…' : 'Vérification des portefeuilles…')]
   const finale: [number, PipelineEvent][] = coherent
-    ? [
-        [400, status('juge-final', 'running', 'Comparaison des 3 portefeuilles…')],
-        [1500, status('juge-final', 'done', 'La variante fidèle l’emporte.')],
+    ? [[600, status('juge-final', 'done', 'La variante fidèle l’emporte.')]]
+    : [
+        [400, status('juge-final', 'done', 'Conformité vérifiée pour chaque portefeuille.')],
+        [500, status('pepite', 'done', 'Mélanges 80/20 prêts : profil d’abord, préférences d’abord.')],
       ]
-    : [[500, status('pepite', 'done', 'Mélanges 80/20 prêts : profil d’abord, préférences d’abord.')]]
 
   const script: [number, PipelineEvent][] = [
     [300, { type: 'pepite', text: 'C’est parti! J’écris les consignes de tes trois gestionnaires.' }],
@@ -217,11 +220,12 @@ async function runScript(input: PipelineInput, onEvent: (e: PipelineEvent) => vo
     ...each('gestionnaire', 'running', 'Recherche de placements…', 400),
     ...each('gestionnaire', 'running', 'Calcul des poids…', 1400),
     ...each('gestionnaire', 'done', 'Portefeuille prêt.', 1200),
-    ...each('juge', 'running', 'Vérification de tes limites…', 400),
-    ...each('juge', 'done', 'Toutes tes limites sont respectées.', 1300),
-    ...finale,
     [400, status('risques', 'running', 'Recherche des incohérences avec ton profil…')],
     [1300, status('risques', 'done', 'Rien de particulier à signaler.')],
+    ...each('juge', 'running', 'Vérification de tes limites…', 400),
+    judgeStart,
+    ...each('juge', 'done', 'Toutes tes limites sont respectées.', 1300),
+    ...finale,
     [500, { type: 'pepite', text: coherent ? 'Voilà! Ton portefeuille t’attend.' : 'Voilà! Trois propositions t’attendent. C’est toi qui choisis.' }],
     [300, { type: 'done' }],
   ]

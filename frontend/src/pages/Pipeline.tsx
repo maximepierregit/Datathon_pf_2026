@@ -17,7 +17,7 @@ interface Agent {
 const VARIANTS: Record<PortfolioId, string> = { prudent: 'Variante prudente', equilibre: 'Variante fidèle', conviction: 'Variante audacieuse' }
 const BASES: Record<PortfolioId, string> = { prudent: 'Ton profil', equilibre: 'Tes contraintes', conviction: 'Tes préférences' }
 
-/** Les agents, regroupés pour l'affichage (l'ordre réel du pipeline ne change pas). Profil cohérent : concurrence et juge final. Incohérent : trois bases, puis les mélanges 80/20. */
+/** Les étapes dans l'ordre réel du pipeline : Pépite, gestionnaires (chacun suivi de son agent Risque), puis le juge, qui vérifie les limites et tranche. Profil cohérent : concurrence et juge final. Incohérent : trois bases, puis les mélanges 80/20. */
 function stepsFor(coherent: boolean): { title: string; role: string; agents: Agent[] }[] {
   const names = coherent ? VARIANTS : BASES
   return [
@@ -29,26 +29,26 @@ function stepsFor(coherent: boolean): { title: string; role: string; agents: Age
     {
       title: coherent ? 'Trois gestionnaires en concurrence' : 'Trois gestionnaires, en parallèle',
       role: coherent
-        ? 'Un suit exactement tes consignes, les deux autres une variante proposée par Pépite. L’optimiseur calcule les poids.'
-        : 'Un portefeuille de base chacun : ton profil, tes contraintes, tes préférences. L’optimiseur calcule les poids.',
+        ? 'Mêmes limites pour les trois, seul le niveau de risque change. L’optimiseur calcule les poids ; si tes limites sont impossibles à tenir, il recalcule avec des limites assouplies.'
+        : 'Un portefeuille de base chacun : ton profil, tes contraintes, tes préférences. L’optimiseur calcule les poids ; si tes limites sont impossibles à tenir, il recalcule avec des limites assouplies.',
       agents: PORTFOLIO_IDS.map((id) => ({ id: `gestionnaire-${id}`, name: names[id], pose: 'laptop' })),
     },
     {
+      title: 'Agents Risque',
+      role: 'Chaque gestionnaire a son agent Risque : il relit le portefeuille dès qu’il est prêt et envoie ses mises en garde au juge.',
+      agents: [{ id: 'risques', name: 'Agents Risque', pose: 'flag' }],
+    },
+    {
       title: 'Vérification des limites',
-      role: 'Pour chaque portefeuille, le juge vérifie que tes limites sont respectées.',
+      role: 'Le juge vérifie, portefeuille par portefeuille, que tes limites sont respectées.',
       agents: PORTFOLIO_IDS.map((id) => ({ id: `juge-${id}` as const, name: `Limites · ${names[id]}`, pose: 'thinking' as const })),
     },
     {
-      title: 'Juge',
+      title: coherent ? 'Juge final' : 'Juge',
       role: coherent
-        ? 'Lit les rapports de risque, demande une réoptimisation au besoin et garde le meilleur portefeuille.'
-        : 'Lit les rapports de risque et demande une réoptimisation au besoin.',
+        ? 'Compare les trois variantes avec les rapports de risque et garde la meilleure. Une variante recalculée avec des limites assouplies perd des points.'
+        : 'Donne son avis sur chaque proposition avec les rapports de risque. C’est toi qui choisis.',
       agents: [{ id: 'juge-final', name: 'Juge', pose: 'cool' }],
-    },
-    {
-      title: 'Agents Risque',
-      role: 'Chaque gestionnaire a son agent Risque : il relit le portefeuille et envoie son rapport au juge.',
-      agents: [{ id: 'risques', name: 'Agents Risque', pose: 'flag' }],
     },
   ]
 }
@@ -220,7 +220,7 @@ export default function Pipeline() {
       {warnings.length > 0 && (
         <div className="flex flex-col gap-2">
           {warnings.map((w) => (
-            <Alert key={w.text} title="Le responsable des risques signale">
+            <Alert key={w.text} title="Limites assouplies">
               {w.text}
             </Alert>
           ))}
