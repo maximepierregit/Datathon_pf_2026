@@ -17,7 +17,7 @@ import numpy as np
 from pydantic import ValidationError
 
 from .runtime import get_runtime_settings
-from .catalog import (DIMENSION_COLUMN, FTOL, SEP, SHARE_TYPES, describe, detect_conflicts, excluded_mask, share_members,
+from .catalog import (DIMENSION_COLUMN, FTOL, SEP, is_fund, SHARE_TYPES, describe, detect_conflicts, excluded_mask, share_members,
                       share_targets, validate_all)
 from .constraints import preference_exposure
 from .market import UNKNOWN, Market
@@ -25,7 +25,7 @@ from .events import EventBus
 from . import evidence, factors
 from .backtest import backtest, risk_contribution
 from .projection import projection_view
-from .allocator import optimize
+from .allocator import MIN_POSITION_WEIGHT, optimize
 from .tools import factor_fits
 from .schemas import (
     CoherenceIssue,
@@ -799,8 +799,43 @@ def build_profiles(plan: Optional[ConstraintPlan], check: PepiteCheck, prefs: li
 # --------------------------------------------------------------------------- #
 # Portefeuilles: mélange 80/20 et gagnant
 # --------------------------------------------------------------------------- #
-def blend(market: Market, slot: str, core: Optional[Portfolio], satellite: Optional[Portfolio]) -> Optional[Portfolio]:
-    """Cœur-satellite: 80 % du capital suit `core`, 20 % suit `satellite`. Poids et indicateurs recalculés par le code."""
+def stock_cap(constraints: list[Constraint]) -> float:
+    """Poids maximal d'un titre détenu en direct dans un profil (`max_stock_weight` dur), sinon la limite de sécurité."""
+    caps = [c.value for c in constraints if c.type is T.MAX_STOCK_WEIGHT and c.hard and c.value]
+    return min(caps) if caps else LINE_CAP
+
+
+def enforce_minimum(weights: dict[str, float], caps: dict[str, float], minimum: float = MIN_POSITION_WEIGHT) -> dict[str, float]:
+    """« 0 ou au moins 1 % » après un mélange: retire les positions sous le minimum et redistribue leur poids aux autres,
+    au prorata de leur poids, sans dépasser le plafond de chacune (`caps`; 1 par défaut). La somme reste 1.
+
+    Un mélange 80/20 rend petite toute position détenue dans un seul des deux portefeuilles (1 % × 20 % = 0,2 %): le
+    moteur ne produit jamais de tels poids, le mélange ne doit pas en créer non plus.
+    """
+    w = {s: x for s, x in weights.items() if x >= minimum - 1e-9}
+    if not w:
+        return dict(weights)
+    for _ in range(50):
+        gap = 1.0 - sum(w.values())
+        if abs(gap) < 1e-9:
+            break
+        room = {s: caps.get(s, 1.0) - x for s, x in w.items() if caps.get(s, 1.0) - x > 1e-9}
+        if not room:  # plus aucune marge sous les plafonds: on remet à l'échelle plutôt que perdre du capital
+            total = sum(w.values())
+            return {s: x / total for s, x in w.items()}
+        base = sum(w[s] for s in room)
+        for s, r in room.items():
+            w[s] += min(gap * w[s] / base, r)
+    return w
+
+
+def blend(market: Market, slot: str, core: Optional[Portfolio], satellite: Optional[Portfolio],
+          core_cap: float = LINE_CAP, satellite_cap: float = LINE_CAP) -> Optional[Portfolio]:
+    """Cœur-satellite: 80 % du capital suit `core`, 20 % suit `satellite`. Poids et indicateurs recalculés par le code.
+
+    Chaque position respecte ensuite « 0 ou au moins 1 % » (`enforce_minimum`). Plafond d'un titre détenu en direct:
+    80 % de celui du cœur + 20 % de celui du satellite (`core_cap`, `satellite_cap`); un FNB n'est limité qu'à 40 %.
+    """
     name, description = TRIO[slot]
     if core is None or satellite is None:
         base = core or satellite
@@ -809,10 +844,15 @@ def blend(market: Market, slot: str, core: Optional[Portfolio], satellite: Optio
     for p, share in ((core, BLEND), (satellite, 1 - BLEND)):
         for pos in p.positions:
             weights[pos.symbol] = weights.get(pos.symbol, 0.0) + share * pos.weight
+    stock = BLEND * core_cap + (1 - BLEND) * satellite_cap
+    weights = enforce_minimum(weights, {s: (LINE_CAP if is_fund(market, s) else min(LINE_CAP, stock)) for s in weights})
+    ordered = sorted(weights.items(), key=lambda kv: -kv[1])
+    rounded = {symbol: round(w, 4) for symbol, w in ordered}
+    rounded[ordered[0][0]] = round(rounded[ordered[0][0]] + (1.0 - sum(rounded.values())), 4)  # résidu d'arrondi sur le plus gros
     positions = []
-    for symbol, w in sorted(weights.items(), key=lambda kv: -kv[1]):
+    for symbol, w in rounded.items():
         a = market.assets.loc[symbol]
-        positions.append(Position(symbol=symbol, name=str(a["name"]), weight=round(w, 4), sector=str(a["sector"]),
+        positions.append(Position(symbol=symbol, name=str(a["name"]), weight=w, sector=str(a["sector"]),
                                   country=str(a["country"]), asset_class=str(a["asset_class"])))
     return Portfolio(
         id=slot, mandate=name, mandate_description=description, positions=positions,

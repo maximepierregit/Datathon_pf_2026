@@ -10,7 +10,7 @@ Le produit s'appelle **MonPort** (signature « BNCD | MonPort »). Il s'appelait
 
 **Pépite** (la mascotte) est l'analyste : elle reçoit les réponses au questionnaire en JSON, juge leur cohérence, puis écrit les 3 profils de contraintes (JSON) envoyés aux 3 gestionnaires. Ce qu'on présente dépend de son verdict :
 
-- **Profil incohérent** : 3 portefeuilles. **Tes contraintes** (ce que le client a demandé, affiché par défaut, « Point de départ »), **Profil d'abord (80/20)** et **Préférences d'abord (80/20)**. Les deux derniers sont des mélanges du capital calculés par le code : 80 % du portefeuille « Ton profil » + 20 % du portefeuille « Tes préférences », et l'inverse. Ids internes : `equilibre`, `prudent`, `conviction`.
+- **Profil incohérent** : 3 portefeuilles. **Tes contraintes** (ce que le client a demandé, affiché par défaut, « Point de départ »), **Profil d'abord (80/20)** et **Préférences d'abord (80/20)**. Les deux derniers sont des mélanges du capital calculés par le code : 80 % du portefeuille « Ton profil » + 20 % du portefeuille « Tes préférences », et l'inverse. Le mélange (`monport.blend`) retire ensuite toute position sous 1 % et redistribue son poids au prorata, sous les plafonds par titre (`enforce_minimum`) : sans ça, un titre détenu dans un seul des deux portefeuilles tomberait à 0,2 % ou 0,8 %. Ids internes : `equilibre`, `prudent`, `conviction`.
 - **Profil cohérent** : les 3 gestionnaires se font concurrence sur 3 variantes (prudente, fidèle, audacieuse) ; le **juge final** garde le meilleur, présenté seul (« Ton portefeuille »).
 
 Parcours, une URL par écran (`frontend/src/App.tsx`) : accueil → `/profil/:step` → `/transition` → `/preferences/:step` → `/verification` → `/construction` → `/portefeuille`.
