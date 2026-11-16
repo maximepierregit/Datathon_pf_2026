@@ -26,7 +26,8 @@ logger = logging.getLogger(__name__)
 
 UNKNOWN = "Non classé"
 # `theme`: tags vérifiés du Parquet (« ia;tech »), lus par les préférences thématiques des actions détenues en direct.
-META_COLUMNS = ["name", "sector", "industry", "country", "currency", "asset_class", "instrument_type", "market", "theme"]
+META_COLUMNS = ["name", "sector", "industry", "country", "currency", "asset_class", "instrument_type", "market",
+                "category", "category_group", "theme"]
 
 
 def theme_tags(value: Any) -> set[str]:

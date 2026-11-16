@@ -30,5 +30,5 @@ def test_env_override(monkeypatch):
 def test_pepite_agent_uses_pepite_kind():
     from pathlib import Path
 
-    src = (Path(__file__).resolve().parents[1] / "src/invest_agents/workflow/pepite.py").read_text()
+    src = (Path(__file__).resolve().parents[1] / "src/invest_agents/workflow/pepite.py").read_text(encoding="utf-8")
     assert 'label="Pépite", step="4", kind="pepite"' in src

@@ -1,4 +1,4 @@
-import type { AssetClass, ConstraintBlock, FactorId, Holding, Level, Share, Vehicles } from '../types'
+import type { AssetClass, ConstraintBlock, ContributionFrequency, FactorId, Holding, Level, RegionId, Share, Vehicles } from '../types'
 
 export interface CatalogItem {
   id: string
@@ -88,19 +88,19 @@ export const BLOCKS: Record<ConstraintBlock, { title: string; hint: string; item
       { id: 'taille', label: 'Petites capitalisations', hint: 'Des entreprises plus petites, plus de croissance possible.' },
       { id: 'qualite', label: 'Qualité', hint: 'Des entreprises rentables, peu endettées.' },
       { id: 'momentum', label: 'Momentum', hint: 'Des titres qui montent depuis plusieurs mois.' },
-      { id: 'value', label: 'Value', hint: 'Des titres jugés bon marché par rapport à leurs résultats.' },
+      { id: 'value', label: 'Valeur', hint: 'Des titres jugés bon marché par rapport à leurs résultats.' },
       { id: 'croissance', label: 'Croissance', hint: 'Des entreprises dont les ventes et les profits augmentent vite.' },
     ],
   },
 }
 
 /**
- * Lecture des facteurs au tableau de bord. `low` décrit une exposition négative : « Value » négatif veut dire des
+ * Lecture des facteurs au tableau de bord. `low` décrit une exposition négative : « Valeur » négatif veut dire des
  * titres plutôt chers, pas un mauvais portefeuille.
  */
 export const FACTOR_VIEW: Record<FactorId, { label: string; high: string; low: string; ends: [string, string] }> = {
   qualite: { label: 'Qualité', high: 'plus rentables, moins endettées', low: 'moins rentables ou plus endettées', ends: ['Fragiles', 'Solides'] },
-  value: { label: 'Value', high: 'plutôt bon marché', low: 'plutôt chères', ends: ['Chères', 'Bon marché'] },
+  value: { label: 'Valeur', high: 'plutôt bon marché', low: 'plutôt chères', ends: ['Chères', 'Bon marché'] },
   momentum: { label: 'Momentum', high: 'en hausse depuis des mois', low: 'en retard sur leur groupe', ends: ['En retard', 'En hausse'] },
   croissance: { label: 'Croissance', high: 'ventes et profits en forte hausse', low: 'croissance plus lente', ends: ['Lente', 'Rapide'] },
   taille: { label: 'Petites capitalisations', high: 'plus petites entreprises', low: 'plus grandes entreprises', ends: ['Grandes', 'Petites'] },
@@ -216,8 +216,11 @@ export const THEME_PRESETS: ThemePreset[] = [
 ]
 
 /** Univers d'exemple : à remplacer par l'univers réel de l'équipe. */
-export interface UniverseLine extends Omit<Holding, 'weight'> {
-  region?: string
+export interface UniverseLine extends Omit<Holding, 'weight' | 'region'> {
+  /** Région ciblée par la préférence du client (FNB régionaux du moteur d'exemple). */
+  region?: RegionId
+  /** Région affichée au tableau de bord, si elle diffère de `region`. */
+  home?: RegionId
   theme?: string
   /** Seulement pour une action détenue en direct (les FNB n'ont pas de score). */
   scores?: Partial<Record<FactorId, number>>
@@ -225,35 +228,35 @@ export interface UniverseLine extends Omit<Holding, 'weight'> {
 }
 
 export const UNIVERSE: UniverseLine[] = [
-  { ticker: 'ACT-CA', name: 'FNB actions canadiennes', assetClass: 'actions', region: 'canada', fee: 0.06 },
-  { ticker: 'ACT-US', name: 'FNB actions américaines', assetClass: 'actions', region: 'usa', fee: 0.08 },
-  { ticker: 'ACT-EU', name: 'FNB actions européennes', assetClass: 'actions', region: 'europe', fee: 0.2 },
-  { ticker: 'ACT-AP', name: 'FNB actions Asie-Pacifique', assetClass: 'actions', region: 'asie', fee: 0.22 },
-  { ticker: 'ACT-EM', name: 'FNB marchés émergents', assetClass: 'actions', region: 'emergents', fee: 0.25 },
-  { ticker: 'THM-TEC', name: 'FNB technologie', assetClass: 'actions', theme: 'tech', fee: 0.39 },
-  { ticker: 'THM-IA', name: 'FNB intelligence artificielle', assetClass: 'actions', theme: 'ia', fee: 0.45 },
-  { ticker: 'THM-SAN', name: 'FNB santé mondiale', assetClass: 'actions', theme: 'sante', fee: 0.4 },
-  { ticker: 'THM-ENP', name: 'FNB énergie propre', assetClass: 'actions', theme: 'energie-propre', fee: 0.42 },
-  { ticker: 'THM-ENR', name: 'FNB énergie traditionnelle', assetClass: 'actions', theme: 'fossiles', fee: 0.35 },
-  { ticker: 'THM-FIN', name: 'FNB banques canadiennes', assetClass: 'actions', theme: 'finance', fee: 0.3 },
-  { ticker: 'THM-CON', name: 'FNB consommation', assetClass: 'actions', theme: 'consommation', fee: 0.35 },
-  { ticker: 'THM-IND', name: 'FNB infrastructures', assetClass: 'actions', theme: 'industrie', fee: 0.4 },
+  { ticker: 'ACT-CA', name: 'FNB actions canadiennes', assetClass: 'actions', instrument: 'fnb', detail: 'Marchés développés', region: 'canada', fee: 0.06 },
+  { ticker: 'ACT-US', name: 'FNB actions américaines', assetClass: 'actions', instrument: 'fnb', detail: 'Grandes capitalisations', region: 'usa', fee: 0.08 },
+  { ticker: 'ACT-EU', name: 'FNB actions européennes', assetClass: 'actions', instrument: 'fnb', detail: 'Marchés développés', region: 'europe', fee: 0.2 },
+  { ticker: 'ACT-AP', name: 'FNB actions Asie-Pacifique', assetClass: 'actions', instrument: 'fnb', detail: 'Marchés développés', region: 'asie', fee: 0.22 },
+  { ticker: 'ACT-EM', name: 'FNB marchés émergents', assetClass: 'actions', instrument: 'fnb', detail: 'Marchés émergents', region: 'emergents', fee: 0.25 },
+  { ticker: 'THM-TEC', name: 'FNB technologie', assetClass: 'actions', instrument: 'fnb', sector: 'Technologie', detail: 'Marchés développés · Technologie', home: 'usa', theme: 'tech', fee: 0.39 },
+  { ticker: 'THM-IA', name: 'FNB intelligence artificielle', assetClass: 'actions', instrument: 'fnb', sector: 'Technologie', detail: 'Marchés développés · Technologie', home: 'mondial', theme: 'ia', fee: 0.45 },
+  { ticker: 'THM-SAN', name: 'FNB santé mondiale', assetClass: 'actions', instrument: 'fnb', sector: 'Santé', detail: 'Marchés développés · Santé', home: 'mondial', theme: 'sante', fee: 0.4 },
+  { ticker: 'THM-ENP', name: 'FNB énergie propre', assetClass: 'actions', instrument: 'fnb', sector: 'Énergie', detail: 'Marchés développés · Énergie', home: 'mondial', theme: 'energie-propre', fee: 0.42 },
+  { ticker: 'THM-ENR', name: 'FNB énergie traditionnelle', assetClass: 'actions', instrument: 'fnb', sector: 'Énergie', detail: 'Marchés développés · Énergie', home: 'canada', theme: 'fossiles', fee: 0.35 },
+  { ticker: 'THM-FIN', name: 'FNB banques canadiennes', assetClass: 'actions', instrument: 'fnb', sector: 'Services financiers', detail: 'Marchés développés · Services financiers', home: 'canada', theme: 'finance', fee: 0.3 },
+  { ticker: 'THM-CON', name: 'FNB consommation', assetClass: 'actions', instrument: 'fnb', sector: 'Consommation discrétionnaire', detail: 'Marchés développés · Consommation discrétionnaire', home: 'usa', theme: 'consommation', fee: 0.35 },
+  { ticker: 'THM-IND', name: 'FNB infrastructures', assetClass: 'actions', instrument: 'fnb', sector: 'Industries', detail: 'Marchés développés · Industries', home: 'mondial', theme: 'industrie', fee: 0.4 },
   // Actions détenues en direct (fictives), avec leurs scores de facteurs : seules elles en ont, comme dans l'univers réel.
-  { ticker: 'TIT-BNQ', name: 'Banque Laurentides (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: 0.6, value: 0.9, momentum: 0.2, croissance: -0.3, taille: -1.1 } },
-  { ticker: 'TIT-RAI', name: 'Rail Boréal (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: 1.2, value: -0.4, momentum: 0.5, croissance: 0.3, taille: -0.9 } },
-  { ticker: 'TIT-LOG', name: 'Logiciels Nordik (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: 0.9, value: -1.3, momentum: 1.1, croissance: 1.6, taille: -0.4 } },
-  { ticker: 'TIT-EPI', name: 'Épiceries du Fleuve (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: 0.7, value: 0.1, momentum: -0.3, croissance: -0.2, taille: 0.2 } },
-  { ticker: 'TIT-MIN', name: 'Mines Abitibi (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: -0.8, value: 1.4, momentum: -0.6, croissance: 0.4, taille: 0.9 } },
-  { ticker: 'TIT-SAN', name: 'Biotech Saint-Laurent (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: -1.1, value: -0.7, momentum: 0.8, croissance: 1.2, taille: 1.3 } },
-  { ticker: 'TIT-ENE', name: 'Hydro Laurentie (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: 0.4, value: 0.5, momentum: -0.1, croissance: -0.5, taille: -0.2 } },
-  { ticker: 'TIT-DET', name: 'Détail Prairie (exemple)', assetClass: 'actions', fee: 0, scores: { qualite: -0.3, value: 0.8, momentum: -0.9, croissance: -0.6, taille: 1.0 } },
-  { ticker: 'OBL-GV', name: 'FNB obligations gouvernementales canadiennes', assetClass: 'obligations', fee: 0.09 },
-  { ticker: 'OBL-SO', name: 'FNB obligations de sociétés', assetClass: 'obligations', fee: 0.15 },
-  { ticker: 'IMM-CA', name: 'FNB fiducies immobilières (FPI)', assetClass: 'immobilier', fee: 0.3 },
-  { ticker: 'OR-PHY', name: 'FNB or physique', assetClass: 'or', fee: 0.2 },
-  { ticker: 'CRY-BTC', name: 'FNB bitcoin', assetClass: 'crypto', fee: 0.4 },
-  { ticker: 'CRY-ETH', name: 'FNB ether', assetClass: 'crypto', fee: 0.4 },
-  { ticker: 'LIQ-MM', name: 'FNB marché monétaire', assetClass: 'liquidites', fee: 0.1 },
+  { ticker: 'TIT-BNQ', name: 'Banque Laurentides (exemple)', assetClass: 'actions', instrument: 'action', sector: 'Services financiers', detail: 'Services financiers', home: 'canada', fee: 0, scores: { qualite: 0.6, value: 0.9, momentum: 0.2, croissance: -0.3, taille: -1.1 } },
+  { ticker: 'TIT-RAI', name: 'Rail Boréal (exemple)', assetClass: 'actions', instrument: 'action', sector: 'Industries', detail: 'Industries', home: 'canada', fee: 0, scores: { qualite: 1.2, value: -0.4, momentum: 0.5, croissance: 0.3, taille: -0.9 } },
+  { ticker: 'TIT-LOG', name: 'Logiciels Nordik (exemple)', assetClass: 'actions', instrument: 'action', sector: 'Technologie', detail: 'Technologie', home: 'canada', fee: 0, scores: { qualite: 0.9, value: -1.3, momentum: 1.1, croissance: 1.6, taille: -0.4 } },
+  { ticker: 'TIT-EPI', name: 'Épiceries du Fleuve (exemple)', assetClass: 'actions', instrument: 'action', sector: 'Consommation de base', detail: 'Consommation de base', home: 'canada', fee: 0, scores: { qualite: 0.7, value: 0.1, momentum: -0.3, croissance: -0.2, taille: 0.2 } },
+  { ticker: 'TIT-MIN', name: 'Mines Abitibi (exemple)', assetClass: 'actions', instrument: 'action', sector: 'Matériaux', detail: 'Matériaux', home: 'canada', fee: 0, scores: { qualite: -0.8, value: 1.4, momentum: -0.6, croissance: 0.4, taille: 0.9 } },
+  { ticker: 'TIT-SAN', name: 'Biotech Saint-Laurent (exemple)', assetClass: 'actions', instrument: 'action', sector: 'Santé', detail: 'Santé', home: 'canada', fee: 0, scores: { qualite: -1.1, value: -0.7, momentum: 0.8, croissance: 1.2, taille: 1.3 } },
+  { ticker: 'TIT-ENE', name: 'Hydro Laurentie (exemple)', assetClass: 'actions', instrument: 'action', sector: 'Services publics', detail: 'Services publics', home: 'canada', fee: 0, scores: { qualite: 0.4, value: 0.5, momentum: -0.1, croissance: -0.5, taille: -0.2 } },
+  { ticker: 'TIT-DET', name: 'Détail Prairie (exemple)', assetClass: 'actions', instrument: 'action', sector: 'Consommation discrétionnaire', detail: 'Consommation discrétionnaire', home: 'canada', fee: 0, scores: { qualite: -0.3, value: 0.8, momentum: -0.9, croissance: -0.6, taille: 1.0 } },
+  { ticker: 'OBL-GV', name: 'FNB obligations gouvernementales canadiennes', assetClass: 'obligations', instrument: 'fnb', detail: 'Obligations gouvernementales', home: 'canada', fee: 0.09 },
+  { ticker: 'OBL-SO', name: 'FNB obligations de sociétés', assetClass: 'obligations', instrument: 'fnb', detail: 'Obligations de sociétés', home: 'canada', fee: 0.15 },
+  { ticker: 'IMM-CA', name: 'FNB fiducies immobilières (FPI)', assetClass: 'immobilier', instrument: 'fnb', sector: 'Immobilier', detail: 'Fiducies immobilières (FPI) · Immobilier', home: 'canada', fee: 0.3 },
+  { ticker: 'OR-PHY', name: 'FNB or physique', assetClass: 'or', instrument: 'fnb', detail: 'Matières premières', home: 'autres', fee: 0.2 },
+  { ticker: 'CRY-BTC', name: 'FNB bitcoin', assetClass: 'crypto', instrument: 'fnb', detail: 'Actifs numériques', home: 'autres', fee: 0.4 },
+  { ticker: 'CRY-ETH', name: 'FNB ether', assetClass: 'crypto', instrument: 'fnb', detail: 'Actifs numériques', home: 'autres', fee: 0.4 },
+  { ticker: 'LIQ-MM', name: 'FNB marché monétaire', assetClass: 'liquidites', instrument: 'fnb', detail: 'Marché monétaire', home: 'canada', fee: 0.1 },
 ]
 
 /** Hypothèses par classe (rendement, volatilité annuels) pour les données d'exemple. */
@@ -265,3 +268,33 @@ export const CLASS_ASSUMPTIONS: Record<AssetClass, { mu: number; sigma: number }
   crypto: { mu: 0.15, sigma: 0.7 },
   liquidites: { mu: 0.025, sigma: 0.01 },
 }
+
+/** Régions du tableau de bord (mêmes identifiants que REGION_COUNTRIES et ETF_REGION de monport.py). */
+export const REGION_LABELS: Record<RegionId, string> = {
+  canada: 'Canada',
+  usa: 'États-Unis',
+  europe: 'Europe',
+  asie: 'Asie-Pacifique',
+  emergents: 'Marchés émergents',
+  mondial: 'Mondial (plusieurs pays)',
+  autres: 'Sans pays (or, crypto…)',
+}
+export const REGION_COLORS: Record<RegionId, string> = {
+  canada: '#00314D',
+  usa: '#1572C5',
+  europe: '#7993A2',
+  asie: '#8A7B64',
+  emergents: '#E41C23',
+  mondial: '#B9D4E9',
+  autres: '#D2D2D2',
+}
+
+/** Fréquences de rééquilibrage du backtest : celles des ajouts prévus du questionnaire. */
+export const REBALANCE_LABELS: Record<ContributionFrequency, string> = {
+  'deux-semaines': 'Aux deux semaines',
+  mensuelle: 'Chaque mois',
+  annuelle: 'Chaque année',
+  aucune: 'Jamais (acheter et conserver)',
+}
+/** Versements par année, pour la projection. */
+export const PERIODS_PER_YEAR: Record<ContributionFrequency, number> = { 'deux-semaines': 26, mensuelle: 12, annuelle: 1, aucune: 12 }

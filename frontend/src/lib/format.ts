@@ -1,5 +1,5 @@
 // Formats québécois : « 5,2 % », « 25 000 $ » (espaces insécables).
-import type { Contribution, ContributionFrequency, Evidence } from '../types'
+import type { Contribution, ContributionFrequency, Evidence, Holding } from '../types'
 
 const NBSP = ' '
 
@@ -29,6 +29,13 @@ const PER: Record<Exclude<ContributionFrequency, 'aucune'>, string> = {
 /** « 100 $ par mois », ou « Aucun » si rien n'est prévu. */
 export function contribution(c: Contribution): string {
   return c.frequency === 'aucune' ? 'Aucun' : `${money(c.amount)} ${PER[c.frequency]}`
+}
+
+const INSTRUMENTS: Record<string, string> = { action: 'Action', fnb: 'FNB', crypto: 'Crypto' }
+
+/** « Action · Technologie », « FNB · Obligations gouvernementales » : type d'instrument et secteur ou catégorie. */
+export function kindOf(h: Holding): string {
+  return [INSTRUMENTS[h.instrument ?? ''], h.detail].filter(Boolean).join(' · ')
 }
 
 /** « 8 avr. 2025 », à partir d'une date AAAA-MM-JJ. */
