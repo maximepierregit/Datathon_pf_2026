@@ -15,6 +15,16 @@ export function money(v: number): string {
   return Math.round(v).toLocaleString('fr-CA') + NBSP + '$'
 }
 
+/** « +1 446 $ », « −5 074 $ » : un montant avec son signe. */
+export function signedMoney(v: number): string {
+  return (v > 0 ? '+' : v < 0 ? '−' : '') + money(Math.abs(v))
+}
+
+/** Des points de pourcentage déjà en pourcentage (−1,5 → « −1,5 % »), pour les étiquettes des axes. */
+export function percentPoints(v: number, digits = 1): string {
+  return (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toLocaleString('fr-CA', { minimumFractionDigits: digits, maximumFractionDigits: digits }) + NBSP + '%'
+}
+
 export function points(v: number): string {
   const p = Math.round(v * 1000) / 10
   return (p > 0 ? '+' : p < 0 ? '−' : '') + Math.abs(p).toLocaleString('fr-CA') + NBSP + 'pts'

@@ -140,7 +140,7 @@ export default function Pipeline() {
         setDone(true)
       }
     }
-    const input = { score, profile: state.profile, constraints: state.constraints, check: state.check, adjustment: state.adjustment, session: state.session }
+    const input = { score, profile: state.profile, constraints: state.constraints, contribution: state.contribution, check: state.check, adjustment: state.adjustment, session: state.session }
     const run = rebuild
       ? rebuildPipeline(state.session!, onEvent, ctrl.signal).then((ok) => {
           if (ok) return

@@ -17,14 +17,15 @@ import numpy as np
 from pydantic import ValidationError
 
 from .runtime import get_runtime_settings
-from .catalog import (DIMENSION_COLUMN, SEP, SHARE_TYPES, describe, detect_conflicts, excluded_mask, share_members,
+from .catalog import (DIMENSION_COLUMN, FTOL, SEP, is_fund, SHARE_TYPES, describe, detect_conflicts, excluded_mask, share_members,
                       share_targets, validate_all)
 from .constraints import preference_exposure
 from .market import UNKNOWN, Market
 from .events import EventBus
 from . import evidence, factors
 from .backtest import backtest, risk_contribution
-from .allocator import optimize
+from .projection import projection_view
+from .allocator import MIN_POSITION_WEIGHT, holdings_range, optimize
 from .tools import factor_fits
 from .schemas import (
     CoherenceIssue,
@@ -798,8 +799,68 @@ def build_profiles(plan: Optional[ConstraintPlan], check: PepiteCheck, prefs: li
 # --------------------------------------------------------------------------- #
 # Portefeuilles: mélange 80/20 et gagnant
 # --------------------------------------------------------------------------- #
-def blend(market: Market, slot: str, core: Optional[Portfolio], satellite: Optional[Portfolio]) -> Optional[Portfolio]:
-    """Cœur-satellite: 80 % du capital suit `core`, 20 % suit `satellite`. Poids et indicateurs recalculés par le code."""
+def position_range(market: Market, constraints: list[Constraint]) -> tuple[int, int]:
+    """Plage de positions d'un mélange: celle de l'optimiseur (25 à 70 par défaut), ajustée aux `min/max_positions`
+    durs des profils qu'on mélange (`constraints` = ceux du cœur et du satellite)."""
+    from .config import PORTFOLIO_HOLDINGS
+
+    h = holdings_range(dict(market.settings.get("portfolio_holdings") or PORTFOLIO_HOLDINGS), constraints)
+    return int(h["min_count"]), int(h["max_count"])
+
+
+def stock_cap(constraints: list[Constraint]) -> float:
+    """Poids maximal d'un titre détenu en direct dans un profil (`max_stock_weight` dur), sinon la limite de sécurité."""
+    caps = [c.value for c in constraints if c.type is T.MAX_STOCK_WEIGHT and c.hard and c.value]
+    return min(caps) if caps else LINE_CAP
+
+
+def enforce_minimum(weights: dict[str, float], caps: dict[str, float], minimum: float = MIN_POSITION_WEIGHT,
+                    min_count: int = 0, max_count: Optional[int] = None) -> dict[str, float]:
+    """« 0 ou au moins 1 % » après un mélange, avec le nombre de positions voulu (`min_count` à `max_count`).
+
+    1. Les positions sous le minimum sont retirées. S'il en reste moins que `min_count`, les plus grosses des retirées
+       sont gardées et remontées à exactement le minimum; s'il en reste plus que `max_count`, les plus petites sont retirées.
+    2. Le poids libéré (ou emprunté) est redistribué au prorata entre les autres, sans dépasser le plafond de chacune
+       (`caps`; 1 par défaut) ni descendre sous le minimum. La somme reste 1.
+
+    Un mélange 80/20 rend petite toute position détenue dans un seul des deux portefeuilles (1 % × 20 % = 0,2 %): le
+    moteur ne produit jamais de tels poids, le mélange ne doit pas en créer non plus.
+    """
+    ranked = sorted(weights.items(), key=lambda kv: -kv[1])
+    n = sum(1 for _, x in ranked if x >= minimum - 1e-9)
+    n = max(n, min(min_count, len(ranked)))  # il faut au moins `min_count` positions, si le mélange en contient assez
+    if max_count is not None:
+        n = min(n, max_count)
+    if n == 0:
+        return dict(weights)
+    w = {s: max(x, minimum) for s, x in ranked[:n]}  # les remontées au minimum sont payées par les plus grosses (ci-dessous)
+    for _ in range(100):
+        gap = 1.0 - sum(w.values())
+        if abs(gap) < 1e-9:
+            break
+        if gap > 0:  # du poids à donner: aux positions qui ont de la marge sous leur plafond, au prorata de leur poids
+            room = {s: caps.get(s, 1.0) - x for s, x in w.items() if caps.get(s, 1.0) - x > 1e-9}
+            base = {s: w[s] for s in room}
+        else:  # du poids à reprendre: aux positions au-dessus du minimum, au prorata de leur excédent
+            room = {s: x - minimum for s, x in w.items() if x - minimum > 1e-9}
+            base = dict(room)
+        if not room:  # aucune marge: on remet à l'échelle plutôt que perdre du capital
+            total = sum(w.values())
+            return {s: x / total for s, x in w.items()}
+        total = sum(base.values())
+        for s, r in room.items():
+            w[s] += min(abs(gap) * base[s] / total, r) * (1 if gap > 0 else -1)
+    return w
+
+
+def blend(market: Market, slot: str, core: Optional[Portfolio], satellite: Optional[Portfolio],
+          core_cap: float = LINE_CAP, satellite_cap: float = LINE_CAP, count: Optional[tuple[int, int]] = None) -> Optional[Portfolio]:
+    """Cœur-satellite: 80 % du capital suit `core`, 20 % suit `satellite`. Poids et indicateurs recalculés par le code.
+
+    Chaque position respecte ensuite « 0 ou au moins 1 % » (`enforce_minimum`) et le nombre de positions reste dans la
+    plage `count` = (min, max), celle de l'optimiseur. Plafond d'un titre détenu en direct: 80 % de celui du cœur +
+    20 % de celui du satellite (`core_cap`, `satellite_cap`); un FNB n'est limité qu'à 40 %.
+    """
     name, description = TRIO[slot]
     if core is None or satellite is None:
         base = core or satellite
@@ -808,28 +869,42 @@ def blend(market: Market, slot: str, core: Optional[Portfolio], satellite: Optio
     for p, share in ((core, BLEND), (satellite, 1 - BLEND)):
         for pos in p.positions:
             weights[pos.symbol] = weights.get(pos.symbol, 0.0) + share * pos.weight
+    stock = BLEND * core_cap + (1 - BLEND) * satellite_cap
+    low, high = count or (0, None)
+    weights = enforce_minimum(weights, {s: (LINE_CAP if is_fund(market, s) else min(LINE_CAP, stock)) for s in weights}, MIN_POSITION_WEIGHT, low, high)
+    ordered = sorted(weights.items(), key=lambda kv: -kv[1])
+    rounded = {symbol: round(w, 4) for symbol, w in ordered}
+    rounded[ordered[0][0]] = round(rounded[ordered[0][0]] + (1.0 - sum(rounded.values())), 4)  # résidu d'arrondi sur le plus gros
     positions = []
-    for symbol, w in sorted(weights.items(), key=lambda kv: -kv[1]):
+    for symbol, w in rounded.items():
         a = market.assets.loc[symbol]
-        positions.append(Position(symbol=symbol, name=str(a["name"]), weight=round(w, 4), sector=str(a["sector"]),
+        positions.append(Position(symbol=symbol, name=str(a["name"]), weight=w, sector=str(a["sector"]),
                                   country=str(a["country"]), asset_class=str(a["asset_class"])))
     return Portfolio(
         id=slot, mandate=name, mandate_description=description, positions=positions,
         metrics=market.portfolio_metrics(weights),
         summary=f"{BLEND:.0%} du portefeuille « {core.mandate} » et {1 - BLEND:.0%} du portefeuille « {satellite.mandate} ».".replace("%", " %"),
         tradeoffs=core.summary,
+        # Le mélange hérite de la relance assouplie de l'une ou l'autre de ses bases.
+        relaunch_reason=core.relaunch_reason or satellite.relaunch_reason,
+        relaxed=list(dict.fromkeys(core.relaxed + satellite.relaxed)),
     )
 
 
 def pick_winner(portfolios: list[Portfolio], verdicts: dict[str, JudgeVerdict], choice: Optional[str]) -> Portfolio:
-    """Le choix du juge final, s'il est conforme ou si aucun ne l'est; sinon le conforme le mieux noté."""
+    """Le choix du juge final, s'il est conforme ou si aucun ne l'est; sinon le conforme le mieux noté.
+    Un choix pénalisé (portefeuille relancé avec contraintes assouplies) ne tient que si sa note pénalisée reste la
+    meilleure."""
     def rank(p: Portfolio) -> tuple:
         v = verdicts.get(p.id)
-        return (bool(v and v.compliant), v.fit_score if v else 0, p.metrics.sharpe if p.metrics else 0)
+        return (bool(v and v.compliant), v.ranked_score if v else 0, p.metrics.sharpe if p.metrics else 0)
 
     best = max(portfolios, key=rank)
     chosen = next((p for p in portfolios if p.id == choice), None)
-    return chosen if chosen and rank(chosen)[0] >= rank(best)[0] else best
+    if chosen is None or rank(chosen)[0] < rank(best)[0]:
+        return best
+    penalized = bool((v := verdicts.get(chosen.id)) and v.penalty)
+    return best if penalized and rank(best)[:2] > rank(chosen)[:2] else chosen
 
 
 # --------------------------------------------------------------------------- #
@@ -920,7 +995,10 @@ def evidence_for(p: Portfolio, market: Market, form: InvestorForm) -> dict[str, 
 
 def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, risk_report: Optional[dict],
                  position: float, skipped: list[str], extra: list[str], name: str, tagline: str,
-                 form: Optional[InvestorForm] = None) -> dict:
+                 form: Optional[InvestorForm] = None, prefs: Optional[dict] = None,
+                 contribution: Optional[dict] = None) -> dict:
+    """Le portefeuille tel que le frontend l'affiche. Tous les chiffres du tableau de bord sont calculés ici: le frontend
+    ne fait que les afficher (voir `CLAUDE.md`, « Où sont les calculs »)."""
     holdings, allocation, fees = [], {c: 0.0 for c in CLASSES}, 0.0
     classes: dict[str, str] = {}
     for pos in p.positions:
@@ -935,6 +1013,10 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
 
     m = p.metrics
     mu, sigma = (m.expected_return, m.volatility) if m else (0.0, 0.0)
+    amount = float(form.investment_amount_cad) if form else None
+    if amount is not None:  # montant en dollars de chaque position, sur le montant de départ du client
+        for h in holdings:
+            h["amount"] = round(h["weight"] * amount, 2)
     # Les preuves citées sont recalculées sur le portefeuille présenté: un mélange 80/20 a ses propres chiffres.
     proofs = evidence_for(p, market, form) if form else {}
     # Mêmes champs que RiskNote dans frontend/src/types.ts.
@@ -945,7 +1027,14 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
     agent_notes = [t for t in (p.summary, p.tradeoffs, verdict.comment if verdict else None) if t] + extra
     if skipped:
         agent_notes.append(f"Pas encore pris en compte par les agents : {', '.join(skipped)}.")
-    if verdict and not verdict.compliant:
+    if p.relaunch_reason:  # remplace l'avertissement générique ci-dessous: il dit pourquoi et ce qui a été assoupli
+        what = ("Devenues de simples préférences : " + "; ".join(p.relaxed) + "." if p.relaxed
+                else "Le plafond de risque prévu pour ce portefeuille a été levé.")
+        warnings.insert(0, {"title": "Calcul relancé avec des limites assouplies",
+                            "detail": "Le premier calcul ne pouvait pas respecter toutes tes limites. " + what,
+                            "severity": "high",
+                            "sources": evidence.check_evidence(verdict.checks)[:evidence.MAX_CITED] if verdict else []})
+    elif verdict and not verdict.compliant:
         warnings.insert(0, {"title": "Certaines de tes limites ne sont pas respectées",
                             "detail": "Lis les détails avant de choisir ce portefeuille.", "severity": "high",
                             "sources": evidence.check_evidence(verdict.checks)[:evidence.MAX_CITED]})
@@ -958,10 +1047,11 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
         "riskScore": front_score(position),
         "holdings": holdings,
         "allocation": {k: round(v, 4) for k, v in allocation.items()},
-        # Mêmes formules que metricsOf() dans frontend/src/lib/engine.ts, sur les chiffres de l'optimiseur.
+        # Chiffres de l'optimiseur; la pire année est la VaR 99 % paramétrique à un an (μ − 2,33 σ, loi normale).
         "metrics": {
             "expectedReturn": mu,
             "volatility": sigma,
+            "monthlyVolatility": sigma / math.sqrt(12),
             "worstYear": mu - 2.33 * sigma,
             "fees": round(fees, 5),
             "sharpe": m.sharpe if m else 0.0,
@@ -971,10 +1061,35 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
         },
         "warnings": warnings,
         "agentNotes": agent_notes,
-        "factors": factor_view(p),
+        "factors": factor_view(p, prefs),
         "backtest": backtest(market.returns, {pos.symbol: pos.weight for pos in p.positions}, market.risk_free_rate),
         "riskContribution": risk_by_class(market, p, classes, allocation),
+        "breakdown": breakdowns(holdings),
+        "amounts": amounts_view(amount, mu, mu - 2.33 * sigma) if amount is not None else None,
+        "projection": projection_view(amount, contribution, mu, sigma) if amount is not None else None,
     }
+
+
+def amounts_view(amount: float, expected_return: float, worst_year: float) -> dict:
+    """Les rendements attendus en dollars, sur le montant de départ du client."""
+    return {"start": round(amount, 2), "expectedGain": round(amount * expected_return, 2),
+            "worstYearLoss": round(amount * worst_year, 2), "worstYearValue": round(amount * (1.0 + worst_year), 2)}
+
+
+def breakdowns(holdings: list[dict]) -> dict:
+    """Répartition du portefeuille par classe, par région et par secteur: [{key, weight}], du plus lourd au plus léger.
+    Le secteur est celui de l'action ou du FNB sectoriel; un FNB diversifié est regroupé sous sa famille."""
+    def by(key) -> list[dict]:
+        sums: dict[str, float] = {}
+        for h in holdings:
+            sums[key(h)] = sums.get(key(h), 0.0) + h["weight"]
+        return [{"key": k, "weight": round(w, 4)} for k, w in sorted(sums.items(), key=lambda kv: -kv[1]) if w > 0.0005]
+
+    def sector(h: dict) -> str:
+        return h.get("sector") or ("Actions diversifiées (FNB)" if h["assetClass"] == "actions" else CLASS_LABELS[h["assetClass"]])
+
+    return {"classe": by(lambda h: h["assetClass"]), "region": by(lambda h: h.get("region") or "mondial"),
+            "secteur": by(sector)}
 
 
 def risk_by_class(market: Market, p: Portfolio, classes: dict[str, str], allocation: dict[str, float]) -> Optional[list]:
@@ -996,16 +1111,49 @@ def risk_by_class(market: Market, p: Portfolio, classes: dict[str, str], allocat
             for c in CLASSES if allocation[c] > 0.0005]
 
 
-def factor_view(p: Portfolio) -> dict:
-    """Expositions aux facteurs et actions notées (FactorView de frontend/src/types.ts), identifiants du frontend."""
+FACTOR_TOP = 8  # actions montrées une à une dans le tableau des contributions; les autres sont regroupées
+
+
+def factor_view(p: Portfolio, prefs: Optional[dict] = None) -> dict:
+    """Expositions aux facteurs (FactorView de frontend/src/types.ts), identifiants du frontend.
+
+    Exposition = Σ wᵢ·zᵢ / Σ wᵢ sur les actions notées. La contribution d'une action est wᵢ·zᵢ / Σ wᵢ: la somme des
+    contributions de toutes les actions redonne l'exposition. `requests` dit, pour chaque facteur que le client a réglé,
+    son niveau, le seuil visé et si le portefeuille présenté l'atteint (même tolérance que `catalog.evaluate`).
+    """
     weights = {pos.symbol: pos.weight for pos in p.positions}
     exposure, coverage = factors.exposures(weights)
     scores = factors.scores_for(weights)
     names = {pos.symbol: pos.name for pos in p.positions}
+    ordered = sorted(scores.index, key=lambda s: -weights[s])
+    total = sum(weights[s] for s in ordered) or 1.0
+
+    def contributions(symbols: list[str]) -> dict[str, float]:
+        return {FRONT_FACTORS[f]: round(sum(weights[s] * float(scores.at[s, f]) for s in symbols) / total, 4)
+                for f in factors.FACTORS}
+
     stocks = [{"ticker": s, "name": names[s], "weight": weights[s],
-               "scores": {FRONT_FACTORS[f]: round(float(scores.at[s, f]), 2) for f in factors.FACTORS}}
-              for s in sorted(scores.index, key=lambda s: -weights[s])]
-    return {"coverage": coverage, "exposure": {FRONT_FACTORS[f]: v for f, v in exposure.items()}, "stocks": stocks}
+               "scores": {FRONT_FACTORS[f]: round(float(scores.at[s, f]), 2) for f in factors.FACTORS},
+               "contributions": contributions([s])}
+              for s in ordered[:FACTOR_TOP]]
+    rest = ordered[FACTOR_TOP:]
+    front_exposure = {FRONT_FACTORS[f]: v for f, v in exposure.items()}
+    return {"coverage": coverage, "exposure": front_exposure, "stocks": stocks, "stockCount": len(ordered),
+            "others": ({"count": len(rest), "weight": round(sum(weights[s] for s in rest), 4), "contributions": contributions(rest)}
+                       if rest else None),
+            "requests": factor_requests(front_exposure, prefs)}
+
+
+def factor_requests(exposure: dict[str, float], prefs: Optional[dict]) -> dict[str, dict]:
+    """Ce que le client a demandé (niveau -2 … +2) et si le portefeuille l'atteint, par facteur du frontend."""
+    out: dict[str, dict] = {}
+    for item, level in ((prefs or {}).get("factors") or {}).items():
+        if item not in exposure or level not in FACTOR_LEVELS:
+            continue
+        threshold = FACTOR_LEVELS[level]
+        met = exposure[item] >= threshold - FTOL if threshold > 0 else exposure[item] <= threshold + FTOL
+        out[item] = {"level": level, "threshold": threshold, "met": bool(met)}
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -1057,8 +1205,8 @@ class Translator:
                 yield status(card, "running", f"{TOOL_TEXT[e['name']].capitalize()}…")
             elif state == "start":
                 yield status(card, "running", "Construction du portefeuille…")
-            elif state == "warning":
-                yield status(card, "running", "Sélection de secours en cours…")
+            elif state == "warning":  # explication du modèle en échec: le portefeuille calculé est gardé
+                yield status(card, "done", "Portefeuille prêt (explication indisponible).")
             elif state == "done":
                 yield status(card, "done", "Portefeuille prêt.")
 

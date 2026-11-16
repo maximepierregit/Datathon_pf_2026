@@ -8,8 +8,10 @@ Le rendement du portefeuille d'un jour est Σ wᵢ·rᵢ. `Market.returns` conti
 Fenêtre: les `LOOKBACK_YEARS` dernières années. Un titre qui n'était pas encore coté (ex.: une scission récente) voit
 son poids réparti sur les autres, au prorata, jusqu'à sa première cotation; on rééquilibre aussi ce jour-là. Un jour sans
 cours pour un titre déjà coté (férié de son marché) compte comme un rendement nul.
-Les chiffres de risque viennent des rendements sur 12 mois glissants (VaR et ES à 95 %, distribution par tranches
-de 5 points): un rendement quotidien ne dépasse presque jamais ±5 %.
+
+Risque: la VaR et l'ES à 95 % (horizon d'un jour) et la distribution viennent des rendements QUOTIDIENS du portefeuille
+(Σ poids × rendement de chaque titre), rangés par tranches de `DAILY_STEP` points de pourcentage entre ±`DAILY_LIMIT` %
+(au-delà, dans les tranches des extrémités). La pire et la meilleure période de 12 mois restent des rendements glissants.
 """
 
 from __future__ import annotations
@@ -25,7 +27,8 @@ LOOKBACK_YEARS = 6
 YEAR = 252  # jours de bourse
 BIWEEKLY = 10
 SAMPLE_EVERY = 5  # un point par semaine pour le graphique
-BUCKETS = list(range(-40, 45, 5))  # tranches de 5 points, de −40 % à +40 %
+DAILY_STEP = 0.5  # largeur d'une tranche de la distribution, en points de pourcentage
+DAILY_LIMIT = 5.0  # la distribution va de −5 % à +5 % par jour; les extrêmes vont dans les tranches des bouts
 
 
 def rebalance_mask(index: pd.DatetimeIndex, frequency: str) -> np.ndarray:
@@ -64,8 +67,22 @@ def simulate(returns: pd.DataFrame, target: np.ndarray, frequency: str, listed: 
     return pd.Series(out, index=returns.index)
 
 
+def daily_distribution(daily: pd.Series, threshold: float) -> list[dict]:
+    """Distribution des rendements quotidiens par tranches de `DAILY_STEP` points (de −DAILY_LIMIT à +DAILY_LIMIT).
+
+    `bucket` est le centre de la tranche en points de pourcentage (−0,5 = autour de −0,5 %), `share` la part des jours
+    (0 à 1) et `tail` vrai pour la tranche qui contient la VaR (`threshold`, un rendement négatif) et celles en dessous.
+    """
+    steps = int(round(DAILY_LIMIT / DAILY_STEP))
+    clipped = np.clip(daily.to_numpy(dtype=float) * 100.0, -DAILY_LIMIT, DAILY_LIMIT)
+    counts = np.bincount(np.round(clipped / DAILY_STEP).astype(int) + steps, minlength=2 * steps + 1)
+    cut = int(round(np.clip(threshold * 100.0, -DAILY_LIMIT, DAILY_LIMIT) / DAILY_STEP))  # indice de la tranche de la VaR
+    return [{"bucket": round((i - steps) * DAILY_STEP, 2), "share": round(float(c) / len(daily), 4), "tail": (i - steps) <= cut}
+            for i, c in enumerate(counts)]
+
+
 def summarize(daily: pd.Series, rf: float) -> dict:
-    """Indicateurs, série base 100 et recul depuis le sommet (un point par semaine), distribution sur 12 mois glissants."""
+    """Indicateurs, série (valeur base 100, rendement cumulé et recul, un point par semaine) et distribution quotidienne."""
     value = 100.0 * (1.0 + daily).cumprod()
     n = len(daily)
     years = n / YEAR
@@ -77,6 +94,7 @@ def summarize(daily: pd.Series, rf: float) -> dict:
 
     stats: dict = {
         "annualReturn": round(annual, 4),
+        "cumulativeReturn": round(float(value.iloc[-1] / 100.0 - 1.0), 4),
         "volatility": round(vol, 4),
         "sharpe": round((annual - rf) / vol, 3) if vol > 0 else 0.0,
         "maxDrawdown": round(drawdown, 4),
@@ -84,21 +102,18 @@ def summarize(daily: pd.Series, rf: float) -> dict:
         "var95": None, "es95": None, "worst12m": None, "best12m": None,
     }
     distribution: list[dict] = []
+    if n > 1:
+        q = float(daily.quantile(0.05))  # le 5e centile des rendements quotidiens (négatif en général)
+        stats.update(var95=round(-q, 4), es95=round(-float(daily[daily <= q].mean()), 4))
+        distribution = daily_distribution(daily, q)
     if len(rolling):
-        q = float(rolling.quantile(0.05))
-        stats.update(var95=round(-q, 4), es95=round(-float(rolling[rolling <= q].mean()), 4),
-                     worst12m=round(float(rolling.min()), 4), best12m=round(float(rolling.max()), 4))
-        pctl = (rolling * 100).clip(BUCKETS[0], BUCKETS[-1])
-        # Chaque rendement va dans la tranche la plus proche (−40, −35, … +40).
-        nearest = (np.round(pctl / 5.0) * 5).astype(int)
-        counts = nearest.value_counts()
-        distribution = [{"bucket": b, "share": round(float(counts.get(b, 0)) / len(rolling), 4), "tail": b <= -q * 100}
-                        for b in BUCKETS]
+        stats.update(worst12m=round(float(rolling.min()), 4), best12m=round(float(rolling.max()), 4))
 
     sampled = value.iloc[::SAMPLE_EVERY]
     if sampled.index[-1] != value.index[-1]:
         sampled = pd.concat([sampled, value.iloc[[-1]]])
-    series = [{"date": d.strftime("%Y-%m-%d"), "value": round(float(v), 2), "drawdown": round(float(underwater.loc[d]), 4)}
+    series = [{"date": d.strftime("%Y-%m-%d"), "value": round(float(v), 2), "cumulative": round(float(v) / 100.0 - 1.0, 4),
+               "drawdown": round(float(underwater.loc[d]), 4)}
               for d, v in sampled.items()]
     return {"stats": stats, "series": series, "distribution": distribution}
 
@@ -119,7 +134,8 @@ def backtest(returns: pd.DataFrame, weights: dict[str, float], rf: float) -> Opt
     target = target / target.sum()
     data = window.fillna(0.0)
     runs = {f: summarize(simulate(data, target, f, listed), rf) for f in FREQUENCIES}
-    return {"start": window.index[0].strftime("%Y-%m-%d"), "end": window.index[-1].strftime("%Y-%m-%d"), "runs": runs}
+    return {"start": window.index[0].strftime("%Y-%m-%d"), "end": window.index[-1].strftime("%Y-%m-%d"),
+            "bucketStep": DAILY_STEP, "runs": runs}
 
 
 def risk_contribution(cov: np.ndarray, weights: np.ndarray) -> np.ndarray:
@@ -130,4 +146,4 @@ def risk_contribution(cov: np.ndarray, weights: np.ndarray) -> np.ndarray:
     return weights * (cov @ weights) / total
 
 
-__all__ = ["FREQUENCIES", "backtest", "rebalance_mask", "risk_contribution", "simulate", "summarize"]
+__all__ = ["FREQUENCIES", "backtest", "daily_distribution", "rebalance_mask", "risk_contribution", "simulate", "summarize"]

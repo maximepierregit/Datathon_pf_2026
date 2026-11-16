@@ -1,7 +1,9 @@
-// Moteur d'exemple côté front : il imite ce que feront les agents Strands et l'optimiseur Python,
-// pour que l'interface fonctionne avant le branchement du backend.
-import { CLASS_ASSUMPTIONS, CLASS_LABELS, BLOCKS, FACTOR_IDS, PERIODS_PER_YEAR, shownClasses, UNIVERSE, type UniverseLine } from '../data/catalog'
-import type { AssetClass, Backtest, BacktestRun, Constraints, Contribution, ContributionFrequency, Evidence, FactorView, Holding, Level, Metrics, Portfolio, PortfolioId, Profile, RiskNote, ScoredStock, Share } from '../types'
+// Moteur d'exemple côté front : il imite les agents Strands et l'optimiseur Python quand le backend ne répond pas
+// (mode hors ligne), pour que l'interface s'affiche quand même. Il ne produit que le portefeuille lui-même (poids, rendement
+// et risque d'ordre de grandeur, notes). Le backtest, la VaR, la projection, les répartitions, les montants et les facteurs
+// sont calculés par le backend (`to_portfolio()`) : sans lui, ces sections restent vides.
+import { CLASS_ASSUMPTIONS, CLASS_LABELS, BLOCKS, FACTOR_IDS, shownClasses, UNIVERSE, type UniverseLine } from '../data/catalog'
+import type { AssetClass, Constraints, Evidence, Holding, Level, Metrics, Portfolio, PortfolioId, Profile, RiskNote, Share } from '../types'
 
 const CLASSES = Object.keys(CLASS_LABELS) as AssetClass[]
 const LINE_CAP = 0.4
@@ -250,22 +252,6 @@ export function allocationOf(holdings: Holding[]): Record<AssetClass, number> {
   return a
 }
 
-/**
- * Exposition aux facteurs : moyenne des scores des actions notées, pondérée par leur poids.
- * Mêmes règles que factors.exposures() et to_portfolio() de backend/src/invest_agents/.
- */
-export function factorsOf(holdings: Holding[]): FactorView {
-  const stocks: ScoredStock[] = holdings.flatMap((h) => {
-    const scores = UNIVERSE.find((u) => u.ticker === h.ticker)?.scores
-    return scores ? [{ ticker: h.ticker, name: h.name, weight: h.weight, scores }] : []
-  })
-  const coverage = stocks.reduce((s, x) => s + x.weight, 0)
-  const exposure: FactorView['exposure'] = {}
-  if (coverage > 0)
-    for (const f of FACTOR_IDS) exposure[f] = stocks.reduce((s, x) => s + x.weight * (x.scores[f] ?? 0), 0) / coverage
-  return { coverage, exposure, stocks: stocks.sort((a, b) => b.weight - a.weight) }
-}
-
 export function metricsOf(holdings: Holding[]): Metrics {
   const a = allocationOf(holdings)
   const mu = CLASSES.reduce((s, k) => s + a[k] * CLASS_ASSUMPTIONS[k].mu, 0)
@@ -295,26 +281,14 @@ const EXAMPLE_SOURCE = 'Données d’exemple du moteur de démonstration (backen
 export function evidenceOf(p: Portfolio, profile: Profile): Record<string, Evidence> {
   const m = p.metrics
   const loss = { label: 'Baisse que tu acceptes', value: -LOSS_BY_REACTION[profile.lossReaction] }
-  // Même backtest que le tableau de bord (rééquilibrage mensuel), qui porte déjà les dates et le recul.
-  const b = backtestOf(p)
-  const run = b?.runs.mensuelle
-  const rows = run?.series ?? []
-  const trough = rows.length ? rows.reduce((a, r) => (r.drawdown < a.drawdown ? r : a)) : undefined
-  const peak = trough ? rows.slice(0, rows.indexOf(trough) + 1).reduce((a, r) => (r.value > a.value ? r : a)) : undefined
-  const period: [string, string] | undefined = b ? [b.start, b.end] : undefined
   const top = p.holdings.reduce((a, b) => (b.weight > a.weight ? b : a))
   const hhi = p.holdings.reduce((s, h) => s + h.weight ** 2, 0)
   const item = (id: string, label: string, value: number, unit: Evidence['unit'], extra: Partial<Evidence> = {}): Evidence => ({ id, label, value, unit, source: EXAMPLE_SOURCE, ...extra })
   return Object.fromEntries(
     [
-      item('pire_baisse', 'Pire baisse de ce portefeuille dans le passé', run?.stats.maxDrawdown ?? m.maxDrawdown, 'pct', {
-        limit: loss,
-        period,
-        series: rows.map((r) => ({ date: r.date, value: r.value })),
-        span: peak && trough ? [peak.date, trough.date] : undefined,
-      }),
-      item('mauvaise_annee', 'Une très mauvaise année (1 chance sur 100)', m.worstYear, 'pct', { limit: loss, period }),
-      item('volatilite', 'Variation typique en un an, à la hausse comme à la baisse', m.volatility, 'pct', { period }),
+      item('pire_baisse', 'Pire baisse de ce portefeuille dans le passé', m.maxDrawdown, 'pct', { limit: loss }),
+      item('mauvaise_annee', 'Une très mauvaise année (1 chance sur 100)', m.worstYear, 'pct', { limit: loss }),
+      item('volatilite', 'Variation typique en un an, à la hausse comme à la baisse', m.volatility, 'pct'),
       item('ligne_max', `Plus grosse ligne : ${top.name}`, top.weight, 'pct', { limit: { label: 'Limite par ligne', value: LINE_CAP } }),
       item('diversification', 'Placements qui comptent vraiment (diversification)', hhi > 0 ? 1 / hhi : 0, 'nombre', { limit: { label: 'Lignes au total', value: p.holdings.length } }),
       item('actions', 'Part en actions', p.allocation.actions, 'pct'),
@@ -360,8 +334,6 @@ export function buildPortfolio(id: PortfolioId, score: number, c: Constraints): 
     holdings,
     allocation: allocationOf(holdings),
     metrics: metricsOf(holdings),
-    factors: factorsOf(holdings),
-    backtest: exampleBacktest(allocationOf(holdings)),
     warnings,
     // Le moteur applique toujours la limite de 40 % : le juge n'a rien à redire.
     agentNotes: [...notes, 'Le juge confirme que ce portefeuille respecte tes limites.'],
@@ -370,159 +342,4 @@ export function buildPortfolio(id: PortfolioId, score: number, c: Constraints): 
 
 export function buildAll(score: number, c: Constraints): Record<PortfolioId, Portfolio> {
   return Object.fromEntries(PORTFOLIO_IDS.map((id) => [id, buildPortfolio(id, score, c)])) as Record<PortfolioId, Portfolio>
-}
-
-// ---- Séries d'exemple pour les graphiques ----
-
-function rng(seed: number) {
-  let s = seed >>> 0
-  return () => {
-    s = (s * 1664525 + 1013904223) >>> 0
-    return s / 2 ** 32
-  }
-}
-
-function gaussian(r: () => number) {
-  const u = Math.max(r(), 1e-9)
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r())
-}
-
-// ---- Backtest d'exemple (sans backend) : mêmes règles que backend/src/invest_agents/backtest.py ----
-
-const YEAR = 252
-const FREQUENCIES: ContributionFrequency[] = ['deux-semaines', 'mensuelle', 'annuelle', 'aucune']
-
-/** Jours de bourse fictifs (du lundi au vendredi) sur 6 ans, jusqu'au 2026-11-09. */
-function tradingDays(years = 6): Date[] {
-  const end = new Date(Date.UTC(2026, 10, 9))
-  const days: Date[] = []
-  for (let d = new Date(end); days.length < years * YEAR; d.setUTCDate(d.getUTCDate() - 1)) {
-    if (d.getUTCDay() % 6 !== 0) days.push(new Date(d))
-  }
-  return days.reverse()
-}
-
-/** Jours où l'on revient aux poids cibles (mêmes règles que rebalance_mask()). */
-function rebalanceMask(days: Date[], f: ContributionFrequency): boolean[] {
-  return days.map((d, t) => {
-    if (t === 0) return true
-    const prev = days[t - 1]
-    if (f === 'deux-semaines') return t % 10 === 0
-    if (f === 'mensuelle') return d.getUTCMonth() !== prev.getUTCMonth()
-    if (f === 'annuelle') return d.getUTCFullYear() !== prev.getUTCFullYear()
-    return false
-  })
-}
-
-/** Indicateurs, série base 100 hebdomadaire et distribution sur 12 mois glissants (mêmes règles que summarize()). */
-function summarize(days: Date[], daily: number[], rf = 0.025): BacktestRun {
-  const value: number[] = []
-  daily.reduce((v, r) => (value.push(v * (1 + r)), v * (1 + r)), 100)
-  const n = daily.length
-  const annual = (value[n - 1] / 100) ** (YEAR / n) - 1
-  const mean = daily.reduce((a, b) => a + b, 0) / n
-  const vol = Math.sqrt(daily.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1)) * Math.sqrt(YEAR)
-  let peak = -Infinity
-  const underwater = value.map((v) => ((peak = Math.max(peak, v)), v / peak - 1))
-  const drawdown = Math.min(...underwater)
-  const rolling = value.slice(YEAR).map((v, i) => v / value[i] - 1)
-  const sorted = [...rolling].sort((a, b) => a - b)
-  const q = sorted[Math.floor(0.05 * (sorted.length - 1))]
-  const tail = sorted.filter((x) => x <= q)
-  const buckets = Array.from({ length: 17 }, (_, i) => -40 + 5 * i)
-  const counts = new Map<number, number>()
-  for (const r of rolling) {
-    const b = Math.round(Math.max(-40, Math.min(40, r * 100)) / 5) * 5
-    counts.set(b, (counts.get(b) ?? 0) + 1)
-  }
-  const series = value
-    .map((v, i) => ({ i, v }))
-    .filter(({ i }) => i % 5 === 0 || i === n - 1)
-    .map(({ i, v }) => ({ date: days[i].toISOString().slice(0, 10), value: +v.toFixed(2), drawdown: +underwater[i].toFixed(4) }))
-  return {
-    stats: {
-      annualReturn: annual,
-      volatility: vol,
-      sharpe: vol > 0 ? (annual - rf) / vol : 0,
-      maxDrawdown: drawdown,
-      finalValue: value[n - 1],
-      var95: -q,
-      es95: -tail.reduce((a, b) => a + b, 0) / tail.length,
-      worst12m: sorted[0],
-      best12m: sorted[sorted.length - 1],
-    },
-    series,
-    distribution: buckets.map((b) => ({ bucket: b, share: (counts.get(b) ?? 0) / rolling.length, tail: b <= -q * 100 })),
-  }
-}
-
-/** Backtest simulé par classe d'actifs (rendements tirés des hypothèses de CLASS_ASSUMPTIONS, graine fixe). */
-export function exampleBacktest(allocation: Record<AssetClass, number>): Backtest {
-  const days = tradingDays()
-  const r = rng(42)
-  const returns = days.map(() => {
-    const market = gaussian(r)
-    return CLASSES.map((k) => {
-      const { mu, sigma } = CLASS_ASSUMPTIONS[k]
-      return mu / YEAR + (sigma / Math.sqrt(YEAR)) * (0.6 * market + 0.8 * gaussian(r))
-    })
-  })
-  const target = CLASSES.map((k) => allocation[k])
-  const runs = Object.fromEntries(
-    FREQUENCIES.map((f) => {
-      const mask = rebalanceMask(days, f)
-      let w = [...target]
-      const daily = returns.map((rt, t) => {
-        if (mask[t]) w = [...target]
-        const rp = w.reduce((s, wi, i) => s + wi * rt[i], 0)
-        w = w.map((wi, i) => (wi * (1 + rt[i])) / (1 + rp))
-        return rp
-      })
-      return [f, summarize(days, daily)]
-    }),
-  ) as Record<ContributionFrequency, BacktestRun>
-  return { start: days[0].toISOString().slice(0, 10), end: days[days.length - 1].toISOString().slice(0, 10), runs, simulated: true }
-}
-
-// ---- Projection sur 10 ans ----
-
-/**
- * Rendement moyen attendu composé à chaque période de versement (rendement annuel ÷ versements par an), avec les
- * ajouts prévus. Fourchettes : 1 000 trajectoires simulées (rendement par période ~ N(μ/n, σ/√n), graine fixe),
- * percentiles 25–75 (probable) et 5–95 (large).
- */
-export function projection(m: Metrics, start: number, c: Contribution, years = 10) {
-  const n = PERIODS_PER_YEAR[c.frequency]
-  const add = c.frequency === 'aucune' ? 0 : c.amount
-  const mu = m.expectedReturn / n
-  const sd = m.volatility / Math.sqrt(n)
-  const r = rng(7)
-  const PATHS = 1000
-  const paths = new Float64Array(PATHS).fill(start)
-  const at = (sorted: Float64Array, p: number) => sorted[Math.floor(p * (sorted.length - 1))]
-  const rows = [{ year: 0, expected: start, invested: start, p05: start, p25: start, p75: start, p95: start }]
-  let expected = start
-  let invested = start
-  for (let y = 1; y <= years; y++) {
-    for (let k = 0; k < n; k++) {
-      expected = expected * (1 + mu) + add
-      invested += add
-      for (let i = 0; i < PATHS; i++) paths[i] = paths[i] * (1 + mu + sd * gaussian(r)) + add
-    }
-    const sorted = Float64Array.from(paths).sort()
-    rows.push({ year: y, expected, invested, p05: at(sorted, 0.05), p25: at(sorted, 0.25), p75: at(sorted, 0.75), p95: at(sorted, 0.95) })
-  }
-  return rows
-}
-
-/** Contribution au risque par classe, approximation du moteur d'exemple (poids × volatilité de la classe). */
-export function riskContribution(p: Portfolio) {
-  const parts = CLASSES.map((k) => ({ k, v: p.allocation[k] * CLASS_ASSUMPTIONS[k].sigma }))
-  const sum = parts.reduce((a, b) => a + b.v, 0) || 1
-  return parts.filter((x) => p.allocation[x.k] > 0).map((x) => ({ assetClass: x.k, weight: p.allocation[x.k], risk: x.v / sum }))
-}
-
-/** Le backtest à afficher : celui du backend, sinon celui du moteur d'exemple. `null` : historique trop court. */
-export function backtestOf(p: Portfolio): Backtest | null {
-  return p.backtest === undefined ? exampleBacktest(p.allocation) : p.backtest
 }

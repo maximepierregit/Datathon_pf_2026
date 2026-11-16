@@ -455,6 +455,21 @@ def _risk_contributions(weights: dict[str, float], sigma: pd.DataFrame, top: int
             for i in np.argsort(-rc)[:top]]
 
 
+def holdings_range(holdings: dict, constraints: list[Constraint]) -> dict:
+    """La plage de positions détenues (`min_count`, `max_count`) de `holdings`, ajustée au nombre de positions que le
+    client demande explicitement (`min/max_positions` dures): sa demande l'emporte sur la plage par défaut."""
+    hard = [c for c in constraints if c.hard]
+    user_max = min([int(c.value) for c in hard if c.type is T.MAX_POSITIONS and c.value] or [0]) or None
+    user_min = max([int(c.value) for c in hard if c.type is T.MIN_POSITIONS and c.value] or [0]) or None
+    if user_max is not None:
+        holdings["max_count"] = user_max
+        holdings["min_count"] = min(holdings["min_count"], user_max)
+    if user_min is not None:
+        holdings["min_count"] = user_min
+        holdings["max_count"] = max(holdings["max_count"], user_min)
+    return holdings
+
+
 def optimize_universe(
     market: Market,
     objective: Objective,
@@ -473,17 +488,7 @@ def optimize_universe(
 
     from .config import PORTFOLIO_HOLDINGS
 
-    holdings = dict(holdings or market.settings.get("portfolio_holdings") or PORTFOLIO_HOLDINGS)
-    # Un nombre de positions demandé explicitement par le client (min/max_positions) l'emporte sur la plage.
-    hard = [c for c in constraints if c.hard]
-    user_max = min([int(c.value) for c in hard if c.type is T.MAX_POSITIONS and c.value] or [0]) or None
-    user_min = max([int(c.value) for c in hard if c.type is T.MIN_POSITIONS and c.value] or [0]) or None
-    if user_max is not None:
-        holdings["max_count"] = user_max
-        holdings["min_count"] = min(holdings["min_count"], user_max)
-    if user_min is not None:
-        holdings["min_count"] = user_min
-        holdings["max_count"] = max(holdings["max_count"], user_min)
+    holdings = holdings_range(dict(holdings or market.settings.get("portfolio_holdings") or PORTFOLIO_HOLDINGS), constraints)
     started = time.perf_counter()
     symbols, diag = universe_symbols(market, constraints)
     if not symbols:
@@ -566,5 +571,97 @@ def optimize_universe(
     return OptimizationResult(status, message, weights=weights, metrics=metrics, diagnostics=diag)
 
 
-__all__ = ["A_LADDER", "MIN_POSITION_WEIGHT", "Objective", "OptimizationResult", "optimize", "optimize_universe",
-           "restrict_plan", "select_holdings", "universe_symbols"]
+# --------------------------------------------------------------------------- #
+# Relance avec contraintes assouplies
+# --------------------------------------------------------------------------- #
+# Une contrainte assouplie devient une préférence (`hard=False`): l'optimiseur ne l'impose plus, mais `evaluate` la
+# mesure toujours et le juge voit l'écart. Ordre: d'abord les pourcentages visés, puis les plafonds, puis les
+# exclusions. La limite de sécurité par titre (`max_position_weight`) n'est jamais assouplie.
+RELAXATION_STEPS: list[tuple[str, frozenset]] = [
+    ("pourcentages visés", frozenset({
+        T.EXACT_ASSET_CLASS_WEIGHT, T.EXACT_INSTRUMENT_TYPE_WEIGHT, T.EXACT_COUNTRY_WEIGHT, T.EXACT_SECTOR_WEIGHT,
+        T.EXACT_THEME_WEIGHT, T.MIN_SECTOR_WEIGHT, T.MIN_COUNTRY_WEIGHT, T.MIN_ASSET_CLASS_WEIGHT,
+        T.MIN_SYMBOL_WEIGHT, T.MIN_SECTOR_SHARE, T.MIN_COUNTRY_SHARE, T.MIN_THEME_SHARE, T.MIN_FACTOR_EXPOSURE,
+        T.MAX_FACTOR_EXPOSURE, T.MIN_EXPECTED_RETURN, T.MIN_POSITIONS, T.MAX_POSITIONS,
+    })),
+    ("plafonds", frozenset({
+        T.MAX_SECTOR_WEIGHT, T.MAX_COUNTRY_WEIGHT, T.MAX_ASSET_CLASS_WEIGHT, T.MAX_SYMBOL_WEIGHT,
+        T.MAX_SECTOR_SHARE, T.MAX_COUNTRY_SHARE, T.MAX_THEME_SHARE, T.MAX_STOCK_WEIGHT, T.MAX_VOLATILITY,
+    })),
+    ("exclusions", frozenset({
+        T.EXCLUDE_SECTOR, T.EXCLUDE_COUNTRY, T.EXCLUDE_ASSET_CLASS, T.EXCLUDE_INSTRUMENT_TYPE, T.EXCLUDE_SYMBOL,
+        T.EXCLUDE_THEME,
+    })),
+]
+
+
+def _soften(constraints: list[Constraint], targets) -> tuple[list[Constraint], list[Constraint]]:
+    """Les contraintes dures visées deviennent des préférences. Retourne (nouvelle liste, contraintes assouplies)."""
+    out, softened = [], []
+    for c in constraints:
+        if c.hard and c.type is not T.MAX_POSITION_WEIGHT and targets(c):
+            c = c.model_copy(update={"hard": False})
+            softened.append(c)
+        out.append(c)
+    return out, softened
+
+
+@dataclass
+class RelaxedResult:
+    result: OptimizationResult
+    constraints: list[Constraint]  # celles réellement appliquées (les assouplies sont des préférences)
+    relaxed: list[Constraint] = field(default_factory=list)  # les contraintes dures devenues préférences
+    first_failure: Optional[str] = None  # pourquoi le premier calcul a échoué; None s'il a réussi
+
+
+def optimize_with_relaxation(
+    market: Market,
+    objective: Objective,
+    constraints: list[Constraint],
+    *,
+    vol_cap: Optional[float] = None,
+    risk_aversion: Optional[float] = None,
+) -> RelaxedResult:
+    """`optimize_universe`, puis, s'il échoue sur les contraintes dures, des relances de plus en plus souples jusqu'à
+    obtenir un portefeuille:
+    0. seulement les contraintes que le calcul a enfreintes (quand il a trouvé des poids);
+    1 à 3. les familles de `RELAXATION_STEPS`, cumulées. Le plafond de volatilité du mandat tombe avec les plafonds."""
+    result = optimize_universe(market, objective, constraints, vol_cap=vol_cap, risk_aversion=risk_aversion)
+    if result.ok:
+        return RelaxedResult(result, constraints)
+    first_failure, attempts = result.message, []
+    current, relaxed, cap = constraints, [], vol_cap
+
+    def retry(softer: list[Constraint], newly: list[Constraint], label: str) -> Optional[RelaxedResult]:
+        nonlocal current, relaxed, result
+        current, relaxed = softer, relaxed + newly
+        result = optimize_universe(market, objective, current, vol_cap=cap, risk_aversion=risk_aversion)
+        attempts.append(f"{label}: {result.status} ({result.message})")
+        if not result.ok:
+            return None
+        result.diagnostics["relaxation"] = {"first_failure": first_failure, "attempts": attempts,
+                                            "relaxed": [catalog.describe(c) for c in relaxed]}
+        return RelaxedResult(result, current, relaxed, first_failure)
+
+    failed = {(c.constraint.type, c.constraint.target, c.constraint.value) for c in result.failed_checks}
+    if failed:
+        softer, newly = _soften(current, lambda c: (c.type, c.target, c.value) in failed)
+        if newly and (done := retry(softer, newly, "contraintes enfreintes")):
+            return done
+    for label, types in RELAXATION_STEPS:
+        softer, newly = _soften(current, lambda c, types=types: c.type in types)
+        drop_cap = label == "plafonds" and cap is not None  # le plafond de volatilité du mandat tombe aussi
+        if not newly and not drop_cap:
+            continue
+        if drop_cap:
+            cap = None
+        if done := retry(softer, newly, label):
+            return done
+    result.diagnostics["relaxation"] = {"first_failure": first_failure, "attempts": attempts,
+                                        "relaxed": [catalog.describe(c) for c in relaxed]}
+    return RelaxedResult(result, current, relaxed, first_failure)
+
+
+__all__ = ["A_LADDER", "MIN_POSITION_WEIGHT", "RELAXATION_STEPS", "Objective", "OptimizationResult", "RelaxedResult",
+           "holdings_range", "optimize", "optimize_universe", "optimize_with_relaxation", "restrict_plan", "select_holdings",
+           "universe_symbols"]

@@ -15,6 +15,7 @@ from typing import Optional
 from strands import tool
 
 from ..agents.base import AgentError, AgentHandle
+from ..config import JUDGE_RELAUNCH_PENALTY
 from ..diagnostics import diagnostics
 from ..agents.portfolio_manager import make_pm_worker, run_pm_worker
 from ..allocator import universe_symbols
@@ -118,6 +119,9 @@ RÈGLES
 - Le portefeuille est calculé par l'optimiseur sur tout l'univers admissible. Dis d'où vient un risque quand c'est
   clair (contraintes du client, niveau de risque du profil, concentration du portefeuille): le juge s'en sert pour
   comparer les trois portefeuilles.
+- `relance_assouplie`: le code a déjà averti le client que ce portefeuille a été recalculé avec des limites
+  assouplies. Ne répète pas cet avertissement; signale plutôt ce que l'assouplissement change concrètement s'il
+  ressort des `ecarts`.
 - S'il n'y a rien à signaler, retourne des listes vides.
 
 PLUS TARD
@@ -139,6 +143,8 @@ def _portfolio_payload(session: Session, slot: str, p: Portfolio) -> dict:
         "resume_du_gestionnaire": p.summary,
         "compromis": p.tradeoffs,
         "ecarts": [f"{c.label}: {c.message}" for c in checks if not c.passed],
+        "relance_assouplie": ({"premier_echec": p.relaunch_reason, "contraintes_devenues_preferences": p.relaxed}
+                              if p.relaunch_reason else None),
         "diagnostics": diagnostics(investor, p),
         "preuves": {k: brief(e) for k, e in evidence_for(p, session.market, session.form).items()},
     }
@@ -194,6 +200,10 @@ async def build_slots(session: Session, slots: list[str], instructions: dict[str
             logger.exception("Gestionnaire %s en échec", slot)
             p = Portfolio(id=slot, mandate=mandate.name, mandate_description=mandate.description,
                           status="failed", failure_reason=type(exc).__name__)
+            if bus:  # sans ça, la carte reste « En cours » jusqu'à la fin
+                front(bus, status(f"gestionnaire-{slot}", "done", "Portefeuille impossible à construire."))
+        # Relance assouplie: la conformité reste mesurée sur les limites d'origine (le juge et l'agent Risque voient
+        # les écarts, un portefeuille conforme passe devant), et l'avertissement suit le portefeuille.
         session.portfolios[slot] = p
         session.reports.pop(slot, None)
         if p.status == "ok":  # le binôme: l'agent Risque relit aussitôt le portefeuille de son gestionnaire
@@ -205,6 +215,11 @@ async def build_slots(session: Session, slots: list[str], instructions: dict[str
     await asyncio.gather(*(one(s) for s in slots))
     session.build_round += 1
     session.version += 1
+    # Fermée ici, et non dans l'outil de Pépite: quand le code termine le travail (`ensure_pipeline`), la carte se
+    # ferme aussi.
+    if bus and any(session.portfolios[s].status == "ok" for s in slots):
+        n = sum(1 for r in session.reports.values() for w in r.warnings if w.severity in ("medium", "high"))
+        front(bus, status("risques", "done", f"{n} mise(s) en garde à lire." if n else "Rien de particulier à signaler."))
 
 
 # --------------------------------------------------------------------------- #
@@ -217,7 +232,11 @@ leur agent Risque l'a relu. Tu reçois les portefeuilles, la conformité calcul�
 2. `opinions`: un avis par portefeuille construit (adéquation de 0 à 10, commentaire, points d'attention).
 3. Rapport de risque: lis-le avec soin et tiens-en compte dans ton avis et dans ta note. Les portefeuilles sont
    calculés par l'optimiseur sur tout l'univers admissible: tu ne demandes aucune reconstruction (laisse
-   `reoptimize` vide), tu compares et tu choisis.
+   `reoptimize` vide), tu compares et tu choisis. Un portefeuille avec `relance_assouplie` n'a pas pu respecter
+   toutes les limites du client: le code l'a recalculé avec certaines limites devenues des préférences. Dis-le dans
+   ton avis. Note-le sur son adéquation réelle: le code retire ensuite `penalite_de_relance` points à ta note pour
+   départager le gagnant. Tiens-en compte dans ton choix: un portefeuille relancé ne gagne que si sa note moins la
+   pénalité reste la meilleure.
 4. PROFIL COHÉRENT: les trois portefeuilles sont des variantes en concurrence. Désigne le meilleur dans `winner`:
    celui qui correspond le mieux au profil (niveau de risque, horizon, objectif), qui respecte le mieux les thèmes
    et les préférences du client, puis la diversification, le rendement espéré pour le risque pris et la tenue probable
@@ -243,10 +262,15 @@ def _verdict(session: Session, slot: str, decision: JudgeDecision) -> JudgeVerdi
     opinion = next((o for o in decision.opinions if o.slot == slot), None)
     return JudgeVerdict(
         portfolio_id=slot, compliant=hard == 0, hard_violations=hard, soft_violations=soft, checks=checks,
-        fit_score=opinion.fit_score if opinion else 0,
+        fit_score=opinion.fit_score if opinion else 0, penalty=_penalty(session, p),
         comment=opinion.comment if opinion else "Avis indisponible.",
         suggested_fixes=opinion.suggested_fixes if opinion else [],
     )
+
+
+def _penalty(session: Session, p: Portfolio) -> int:
+    """Profil cohérent: un portefeuille relancé avec contraintes assouplies perd des points face aux autres variantes."""
+    return JUDGE_RELAUNCH_PENALTY if session.coherent and p.relaunch_reason else 0
 
 
 def _judge_tools(session: Session) -> list:
@@ -280,7 +304,8 @@ async def judge_round(session: Session) -> None:
                    "preferences": [describe(c) for c in session.form.constraints]},
         "portefeuilles": [
             {**_portfolio_payload(session, p.id, p),
-             "rapport_de_risque": session.reports[p.id].model_dump(mode="json") if p.id in session.reports else None}
+             "rapport_de_risque": session.reports[p.id].model_dump(mode="json") if p.id in session.reports else None,
+             "penalite_de_relance": _penalty(session, p)}
             for p in built
         ],
     }
@@ -307,8 +332,15 @@ async def judge_round(session: Session) -> None:
     if session.coherent:  # un seul gagnant: le choix du juge, sauf si le code le contredit sur la conformité
         winner = pick_winner(built, session.verdicts, decision.winner) if built else None
         session.winner = winner.id if winner else None
-        session.justification = decision.justification if winner and winner.id == decision.winner else (
-            f"La {winner.mandate.lower()} respecte le mieux tes limites, avec la meilleure note du juge." if winner else "")
+        overruled = session.portfolios.get(decision.winner or "")
+        if winner and winner.id == decision.winner:
+            session.justification = decision.justification
+        elif winner and overruled and session.verdicts[overruled.id].penalty:
+            session.justification = (f"La {winner.mandate.lower()} l’emporte : la {overruled.mandate.lower()} a dû "
+                                     "être recalculée avec des limites assouplies, ce qui lui coûte des points.")
+        else:
+            session.justification = (f"La {winner.mandate.lower()} respecte le mieux tes limites, avec la meilleure "
+                                     "note du juge." if winner else "")
     else:
         session.winner, session.justification = None, ""
 
@@ -337,7 +369,8 @@ def justifications(session: Session, slot: str) -> dict:
         "gestionnaire": {"resume": p.summary, "compromis": p.tradeoffs, "principales_positions": notes},
         "indicateurs": p.metrics.model_dump(exclude={"hhi"}) if p.metrics else None,
         "risque": report.model_dump(mode="json") if report else None,
-        "juge": {"conforme": v.compliant, "note": v.fit_score, "avis": v.comment, "corrections": v.suggested_fixes} if v else None,
+        "juge": {"conforme": v.compliant, "note": v.fit_score, "penalite_de_relance": v.penalty,
+                 "avis": v.comment, "corrections": v.suggested_fixes} if v else None,
         "gagnant": session.winner == slot,
         "essais_du_gestionnaire": worker.state.log if worker else [],
         # Trace du Markowitz global: univers, filtres, positions retenues, A effectif (sans les longues listes).

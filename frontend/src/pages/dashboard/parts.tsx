@@ -66,8 +66,8 @@ export function Kpi({ label, value, unit, note, secondary }: { label: string; va
   )
 }
 
-/** Positions ligne par ligne, filtrables par classe. Les montants partent du montant de départ du client. */
-export function HoldingsTable({ p, amount, detailed = false }: { p: Portfolio; amount: number; detailed?: boolean }) {
+/** Positions ligne par ligne, filtrables par classe. Les montants (`amount`) viennent du backend, sur le montant de départ du client. */
+export function HoldingsTable({ p, detailed = false }: { p: Portfolio; detailed?: boolean }) {
   const [filter, setFilter] = useState<AssetClass | 'all'>('all')
   const rows = p.holdings.filter((h) => filter === 'all' || h.assetClass === filter)
   return (
@@ -104,7 +104,7 @@ export function HoldingsTable({ p, amount, detailed = false }: { p: Portfolio; a
                 <td className="px-4 py-2.5 text-sm text-ink-soft">{kindOf(h) || '—'}</td>
                 {detailed && <td className="px-4 py-2.5 text-ink-soft">{CLASS_LABELS[h.assetClass]}</td>}
                 <td className="px-4 py-2.5 text-right font-semibold text-navy">{pct(h.weight)}</td>
-                <td className="px-4 py-2.5 text-right">{money(h.weight * amount)}</td>
+                <td className="px-4 py-2.5 text-right">{h.amount != null ? money(h.amount) : '—'}</td>
               </tr>
             ))}
           </tbody>

@@ -29,10 +29,12 @@ from typing import AsyncIterator, Optional
 
 from pydantic import ValidationError
 
+from ..projection import clean_contribution
 from ..agents.base import AgentError
 from ..runtime import get_runtime_settings
 from ..market import get_market
 from ..monport import (
+    LINE_CAP,
     MAX_ADJUSTMENT,
     SLOTS,
     TRIO,
@@ -45,7 +47,9 @@ from ..monport import (
     fallback_check,
     front,
     pepite,
+    position_range,
     status,
+    stock_cap,
     to_form,
     to_portfolio,
 )
@@ -145,10 +149,18 @@ def present(session: Session, bus) -> bool:
         presented = [(winner, session.verdicts.get(winner.id), WINNER_NAME, session.justification, [winner.id])]
     else:
         presented = []
+
+        def mix(core: str, satellite: str):
+            """Mélange 80/20 (cœur, satellite), avec le plafond par titre de chacun de leurs profils."""
+            def cap(slot: str) -> float:
+                return stock_cap(session.profiles[slot][1]) if slot in session.profiles else LINE_CAP
+            both = [c for slot in (core, satellite) if slot in session.profiles for c in session.profiles[slot][1]]
+            return blend(market, core, by.get(core), by.get(satellite), cap(core), cap(satellite), position_range(market, both))
+
         for slot, p, sources in (
-            ("prudent", blend(market, "prudent", by.get("prudent"), by.get("conviction")), ["prudent", "conviction"]),
+            ("prudent", mix("prudent", "conviction"), ["prudent", "conviction"]),
             ("equilibre", by.get("equilibre"), ["equilibre"]),
-            ("conviction", blend(market, "conviction", by.get("conviction"), by.get("prudent")), ["conviction", "prudent"]),
+            ("conviction", mix("conviction", "prudent"), ["conviction", "prudent"]),
         ):
             if p is not None:
                 p = p.model_copy(update={"mandate": TRIO[slot][0]})
@@ -157,7 +169,8 @@ def present(session: Session, bus) -> bool:
         front(bus, status("pepite", "done", "Mélanges 80/20 prêts : profil d’abord, préférences d’abord."))
     front(bus, {"type": "portfolios", "session": session.id, "portfolios": {
         p.id: to_portfolio(p, v, market, {"warnings": _warnings_for(session, p.id, sources)}, check.risk_position,
-                           session.skipped, session.notes.get(p.id, []), name, tagline, session.form)
+                           session.skipped, session.notes.get(p.id, []), name, tagline, session.form,
+                           session.prefs, session.contribution)
         for p, v, name, tagline, sources in presented
     }})
     session.shown_version = session.version
@@ -186,6 +199,7 @@ async def build_portfolios(payload: dict, bus, translator: Translator) -> None:
             session.review = review_of(PepiteCheck.model_validate(payload.get("check")))
         except ValidationError:
             session.review = None
+    session.contribution = clean_contribution(payload.get("contribution"))
     if session.lock.locked():
         front(bus, {"type": "error", "message": "Une demande est déjà en cours pour cette conversation."})
         return
