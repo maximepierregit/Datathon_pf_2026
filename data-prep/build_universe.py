@@ -1,4 +1,5 @@
-"""Construit backend/data/universe.parquet à partir des sources réelles (version script de Universe_Cleaned.ipynb).
+"""Construit backend/data/universe.parquet à partir des sources réelles (version script du notebook d'origine
+Universe_Cleaned.ipynb, qui n'est pas dans le dépôt).
 
 Étapes (chaque couche « raw » est mise en cache dans data-prep/data/raw/ et réutilisée si elle existe):
 
@@ -90,7 +91,7 @@ HISTORY_START = {
 }
 VALID_EQUITY_MKT_CAPS = ["Mid Cap", "Large Cap", "Mega Cap"]
 
-# Libellés de themes.csv -> identifiants de thématique du backend (classify.THEMES).
+# Libellés de themes.csv -> identifiants de thématique du backend (THEME_TAGS et THEME_SECTORS de monport.py).
 THEME_IDS = {
     "tech": "tech", "techno": "tech", "technologie": "tech",
     "ai": "ia", "ia": "ia",

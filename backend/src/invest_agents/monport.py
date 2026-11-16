@@ -135,7 +135,6 @@ MAX_ADJUSTMENT = 1000
 # Répartition stratégique du profil (portefeuilles modèles 20/80 … 100/0): plancher d'obligations, fixé par le code
 # pour les portefeuilles qui suivent le profil (« Ton profil », et les 3 variantes quand le profil est cohérent).
 BOND_FLOOR = {"conservateur": 0.80, "modere": 0.60, "equilibre": 0.40, "dynamique": 0.20, "agressif": 0.0}
-BOND_SHIFT = {"prudent": 0.0, "equilibre": 0.0, "conviction": 0.0}  # plus de décalage: seul A distingue les variantes
 BOND_TARGETS = ("Fixed Income", "Bonds")
 CRYPTO_TARGETS = ("Crypto", "Alternative")
 NO_CRYPTO = {"conservateur", "modere"}  # pas de crypto dans un portefeuille qui suit un profil prudent

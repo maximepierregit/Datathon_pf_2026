@@ -4,7 +4,7 @@ import { shownClasses } from './data/catalog'
 import { buildAll, emptyConstraints, PORTFOLIO_META, riskScore, WINNER_META } from './lib/engine'
 import type { BackendPortfolio, ChatMsg, Constraints, ConstraintBlock, Contribution, DashboardLevel, Level, Portfolio, PortfolioId, Profile, ProfileCheck, RiskNote, Share, ShareBlock, Vehicles } from './types'
 
-export const DEFAULT_PROFILE: Profile = {
+const DEFAULT_PROFILE: Profile = {
   age: 35,
   amount: 10000,
   objective: 'fructifier',
@@ -13,7 +13,7 @@ export const DEFAULT_PROFILE: Profile = {
   comfort: 3,
 }
 
-export const DEFAULT_CONTRIBUTION: Contribution = { frequency: 'aucune', amount: 100 }
+const DEFAULT_CONTRIBUTION: Contribution = { frequency: 'aucune', amount: 100 }
 
 export interface AppliedAdjustment {
   id: string

@@ -109,27 +109,6 @@ class InvestorForm(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Agent Extraction (relance conversationnelle)
-# --------------------------------------------------------------------------- #
-class ExtractionResult(BaseModel):
-    """Contraintes extraites d'un message libre, rapprochées du catalogue."""
-
-    constraints: list[Constraint] = Field(
-        default_factory=list, description="Nouvelles contraintes reconnues et rattachées au catalogue."
-    )
-    removals: list[ConstraintRef] = Field(
-        default_factory=list, description="Contraintes existantes que l'utilisateur demande de retirer."
-    )
-    unmatched: list[str] = Field(
-        default_factory=list,
-        description="Passages du message qui ne correspondent à aucune contrainte du catalogue ou sont ambigus.",
-    )
-    clarification_questions: list[str] = Field(
-        default_factory=list, description="Questions à poser à l'utilisateur pour lever les ambiguïtés."
-    )
-
-
-# --------------------------------------------------------------------------- #
 # Agent Profil
 # --------------------------------------------------------------------------- #
 class ProfileAssessment(BaseModel):
@@ -220,14 +199,6 @@ class Portfolio(BaseModel):
     relaxed: list[str] = Field(default_factory=list)
     # Traçabilité backend du Markowitz global (filtres, Sigma, sélection, A effectif); jamais envoyée au frontend.
     diagnostics: Optional[dict] = None
-
-
-class JudgeOpinion(BaseModel):
-    """Sortie structurée de l'agent Juge (avis qualitatif). La conformité vient du code."""
-
-    fit_score: int = Field(ge=0, le=10, description="Adéquation globale du portefeuille au profil, de 0 à 10")
-    comment: str = Field(description="Évaluation en 2 à 4 phrases, en français")
-    suggested_fixes: list[str] = Field(default_factory=list, description="Corrections concrètes si des écarts existent")
 
 
 class JudgeVerdict(BaseModel):

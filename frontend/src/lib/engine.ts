@@ -61,7 +61,7 @@ export function riskBreakdown(p: Profile) {
 }
 
 /** S, de 0 (très prudent) à 1 (très audacieux) : capacité (horizon, âge) et tolérance (baisse, objectif, aisance). */
-export function riskPosition(p: Profile): number {
+function riskPosition(p: Profile): number {
   return riskBreakdown(p).s
 }
 
@@ -246,13 +246,13 @@ function lineWeights(id: PortfolioId, c: Constraints, cw: Record<AssetClass, num
   return out.sort((a, b) => b.weight - a.weight)
 }
 
-export function allocationOf(holdings: Holding[]): Record<AssetClass, number> {
+function allocationOf(holdings: Holding[]): Record<AssetClass, number> {
   const a = Object.fromEntries(CLASSES.map((k) => [k, 0])) as Record<AssetClass, number>
   for (const h of holdings) a[h.assetClass] += h.weight
   return a
 }
 
-export function metricsOf(holdings: Holding[]): Metrics {
+function metricsOf(holdings: Holding[]): Metrics {
   const a = allocationOf(holdings)
   const mu = CLASSES.reduce((s, k) => s + a[k] * CLASS_ASSUMPTIONS[k].mu, 0)
   let variance = 0
@@ -322,7 +322,7 @@ export function coherenceWarnings(score: number, c: Constraints): RiskNote[] {
   return w
 }
 
-export function buildPortfolio(id: PortfolioId, score: number, c: Constraints): Portfolio {
+function buildPortfolio(id: PortfolioId, score: number, c: Constraints): Portfolio {
   const notes: string[] = []
   const cw = classWeights(id, score, c, notes)
   const holdings = lineWeights(id, c, cw, notes)

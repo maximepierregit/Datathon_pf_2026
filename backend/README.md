@@ -14,8 +14,7 @@ cp .env.example .env            # puis exporter les variables (ou laisser les va
 #   export MONPORT_UNIVERSE_PARQUET_URI=s3://monport-datasets-381491955506/universe/universe.parquet
 # b) réel, reconstruit en local depuis la racine du dépôt (Wikipedia + yfinance, cache dans data-prep/data/raw/):
 #   pip install -r data-prep/requirements.txt && python data-prep/build_universe.py
-# c) SYNTHÉTIQUE, pour le développement:
-.venv/bin/python scripts/make_sample_dataset.py
+# (le jeu SYNTHÉTIQUE de scripts/make_sample_dataset.py ne se charge plus tel quel: colonnes et classes d'avant data.py)
 
 .venv/bin/python scripts/run_local.py                          # vérification puis construction (appelle Bedrock)
 .venv/bin/python scripts/run_local.py --chat "exclus la techno"   # puis un message à Pépite
@@ -37,8 +36,14 @@ Colonnes lues dans le dataset: `date`, `symbol`, `total_return_cad` (obligatoire
 | `mcp_server/main.py` | Serveur MCP des outils (runtime `monport_tools`) |
 | `guardrail.py`, `memory.py` | Bedrock Guardrails sur le texte du client; sessions dans AgentCore Memory |
 | `mandates.py` | Les 3 mandats des PM (Défensif, Équilibré, Croissance) |
-| `constraints.py` | Catalogue de contraintes, validation, fusion, conflits, vérification (code pur) |
+| `catalog.py` | Catalogue de contraintes des agents (validation, fusion, conflits, vérification) et pont vers `constraints.py` |
+| `constraints.py` | Moteur de contraintes: univers admissible, contradictions, plan de contraintes linéaires, validation des poids (code pur) |
+| `allocator.py` | Optimisation vue par les agents (Markowitz sur tout l'univers, relance avec limites assouplies), au-dessus de `optimizer.py` |
 | `optimizer.py` | Optimisation moyenne-variance sous contraintes (SLSQP) |
+| `factors.py` | Scores de facteurs des actions (`data-prep/factors_model.ipynb`) et exposition d'un portefeuille |
+| `macro.py` | Contexte macro US et Canada (table `macro_long_z`) |
+| `diagnostics.py`, `evidence.py` | Faits de risque et preuves chiffrées calculés par le code, cités par les agents Risque |
+| `backtest.py`, `projection.py` | Backtest avec rééquilibrage, VaR/ES, et projection sur 10 ans avec les ajouts prévus (code pur) |
 | `tools.py` | Outils Strands liés au contexte de chaque agent |
 | `data.py` | Chargement, validation et matrices de rendements du Parquet (local ou `s3://`), sans estimation |
 | `market.py` | `Market`: catalogue d'actifs, rendements espérés et covariance (méthodes de `config.py`), métriques de portefeuille |
@@ -56,6 +61,7 @@ Colonnes lues dans le dataset: `date`, `symbol`, `total_return_cad` (obligatoire
 {"mode": "monport_check", "profile": { /* Profile */ }, "constraints": { /* Constraints */ }}
 {"mode": "monport", "profile": {}, "constraints": {}, "check": { /* PepiteCheck reçu */ }, "adjustment": "texte libre", "session": "id"}
 {"mode": "monport_chat", "session": "id", "message": "texte libre"}
+{"mode": "monport_rebuild", "session": "id"}   // applique la reconstruction que Pépite a fait confirmer dans le chat
 ```
 
 ## Contrat de sortie (SSE, un JSON par événement)
@@ -110,7 +116,6 @@ redémarrage, sans redéployer. `WSParticipantRole` (local, EC2) lit déjà le b
 
 ## Limites connues
 
-- Le dataset fourni par `make_sample_dataset.py` est synthétique. Les résultats chiffrés n'ont aucune valeur réelle.
 - Rendements et volatilités sont historiques (moyenne et covariance sur la période du dataset).
 - La réflexion du modèle est résumée et arrive surtout en anglais malgré la consigne en français.
 - Un nouvel essai (`MAX_PM_RETRIES`) ne se déclenche que si aucun portefeuille n'est conforme.

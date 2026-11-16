@@ -17,8 +17,7 @@ import pandas as pd
 from strands import tool
 
 from . import factors, gateway
-from .runtime import get_runtime_settings
-from .catalog import DIMENSION_COLUMN, SHARE_TYPES, excluded_mask, share_members
+from .catalog import excluded_mask
 from .market import Market
 from .allocator import Objective, OptimizationResult
 from .schemas import Constraint, ConstraintType as T, PortfolioMetrics
@@ -261,35 +260,6 @@ def make_explain_tools(state: PMState) -> list:
         return out
 
     return [get_portfolio, *make_macro_tools()]
-
-
-def fallback_selection(market: Market, constraints: list[Constraint], objective: Objective) -> list[str]:
-    """Sélection de repli si le PM n'a produit aucun portefeuille valide (garde le pipeline en marche)."""
-    hard = [c for c in constraints if c.hard]
-    a = market.assets[~excluded_mask(market, hard)]
-    n = min(15, get_runtime_settings().max_assets_per_portfolio)
-    key, asc = ("ann_vol", True) if objective == "min_volatility" else ("sharpe", False)
-    picks: list[str] = []
-    # Un poids minimal (plancher d'obligations, crypto imposée…) exige des titres de son groupe, d'abord: sur l'univers
-    # réel, les 15 meilleurs ratios de Sharpe sont tous des actions. 4 titres, pour tenir sous la limite de 40 %.
-    for c in hard:
-        column = DIMENSION_COLUMN.get(c.type.value.removeprefix("min_").removesuffix("_weight"))
-        if c.type.value.startswith("min_") and c.target and column:
-            group = a[a[column].astype(str).str.lower() == c.target.lower()]
-            picks += group.sort_values(key, ascending=asc).index[:4].tolist()
-        elif c.type in SHARE_TYPES and SHARE_TYPES[c.type][1] == "min" and c.target:  # une part: titres du groupe
-            picks += a[share_members(a, c)].sort_values(key, ascending=asc).index[:4].tolist()
-    # Contraintes de facteurs: des actions qui respectent tous les seuils à la fois, les moins volatiles d'abord.
-    # Les mieux notées sont souvent très volatiles (sur l'univers réel, APP ou SNDK en qualité) et feraient
-    # dépasser le plafond de volatilité.
-    # Sous un plafond de volatilité, les actifs les plus calmes: sans eux, un profil prudent n'a aucune sélection valide.
-    if any(c.type is T.MAX_VOLATILITY for c in hard):
-        picks += a.sort_values("ann_vol").index[:10].tolist()
-    fits = factor_fits(a, hard)
-    picks += a.loc[fits].sort_values("ann_vol").index[:8].tolist()
-    picks += a.loc[fits].sort_values("sharpe", ascending=False).index[:4].tolist()
-    picks += a.sort_values(key, ascending=asc).head(n).index.tolist()
-    return list(dict.fromkeys(picks))[: get_runtime_settings().max_assets_per_portfolio]
 
 
 def factor_fits(eligible, hard: list[Constraint]) -> list[str]:

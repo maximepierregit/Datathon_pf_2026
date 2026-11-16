@@ -11,7 +11,7 @@ const STEPS = [
   { label: 'Portefeuilles', match: ['/portefeuille'] },
 ]
 
-export function Header() {
+function Header() {
   const { pathname } = useLocation()
   const current = STEPS.findIndex((s) => s.match.some((m) => pathname.startsWith(m)))
   return (
@@ -41,7 +41,7 @@ export function Header() {
   )
 }
 
-export function Footer() {
+function Footer() {
   return (
     <footer className="border-t border-line-soft bg-mist px-4 py-5 text-center text-xs leading-5 text-ink-soft">
       Prototype réalisé pour le Datathon 2026 · MonPort propose des portefeuilles modèles à titre éducatif.

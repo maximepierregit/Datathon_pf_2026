@@ -314,13 +314,6 @@ def _continuous(plan: ConstraintPlan, settings: dict, mu: np.ndarray, sigma: np.
     return w
 
 
-def _feasible(plan: ConstraintPlan, keep: list[int], floor: float) -> bool:
-    from .optimizer import _linear_lp
-
-    sub = restrict_plan(plan, keep, floor)
-    return _linear_lp(sub, sub.lower_bounds, sub.upper_bounds) is not None
-
-
 def _floored(plan: ConstraintPlan, settings: dict, mu: np.ndarray, sigma: np.ndarray, aversion: float,
              keep: list[int]) -> Optional[tuple[float, np.ndarray]]:
     """Utilité et poids (vecteur complet) de l'optimum sur `keep`, chaque position à au moins 1 %; None si infaisable."""
