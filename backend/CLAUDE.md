@@ -91,7 +91,7 @@ src/invest_agents/
 ## Optimiseur
 
 - Objectifs: `min_volatility`, `max_sharpe`, `max_return`, `mean_variance`. `max_return` exige un `vol_cap`, sinon il concentre. `mean_variance` maximise μᵀw − (A/2)·wᵀΣw et exige `risk_aversion` (A, de 1 très audacieux à 25 très prudent); c'est l'objectif des gestionnaires MonPort, A étant calculé par `monport.risk_aversion`. Sur le dataset synthétique, A = 25 donne environ 4 % de volatilité et A = 1 environ 15 %.
-- Chaque titre retenu pèse au moins `MIN_POSITION_WEIGHT = 1 %`. Taille max: `MAX_ASSETS_PER_PORTFOLIO` (40) et `max_positions`.
+- Chaque titre retenu pèse au moins `MIN_POSITION_WEIGHT = 1 %`, y compris dans les mélanges 80/20 (`monport.enforce_minimum`, qui garde aussi le nombre de positions dans la plage de `allocator.holdings_range`; tests dans `tests/test_blend.py` et `test_blend_count.py`). Taille max: `MAX_ASSETS_PER_PORTFOLIO` (40) et `max_positions`.
 - Statuts: `optimal`, `feasible` (non convergé mais valide), `infeasible`, `invalid_selection`. Les messages sont en français et rédigés pour que le PM puisse corriger sa sélection.
 - Le résidu d'arrondi est placé là où il reste de la marge sous le plafond (sinon un titre dépasse sa limite de 0,01 %).
 - Covariance: annualisée, NaN remplacés, projetée semi-définie positive. `np.diag()` d'un DataFrame est en lecture seule: copier avant `fill_diagonal`.
