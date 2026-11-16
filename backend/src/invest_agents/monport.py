@@ -25,7 +25,7 @@ from .events import EventBus
 from . import evidence, factors
 from .backtest import backtest, risk_contribution
 from .projection import projection_view
-from .allocator import MIN_POSITION_WEIGHT, optimize
+from .allocator import MIN_POSITION_WEIGHT, holdings_range, optimize
 from .tools import factor_fits
 from .schemas import (
     CoherenceIssue,
@@ -799,42 +799,67 @@ def build_profiles(plan: Optional[ConstraintPlan], check: PepiteCheck, prefs: li
 # --------------------------------------------------------------------------- #
 # Portefeuilles: mélange 80/20 et gagnant
 # --------------------------------------------------------------------------- #
+def position_range(market: Market, constraints: list[Constraint]) -> tuple[int, int]:
+    """Plage de positions d'un mélange: celle de l'optimiseur (25 à 70 par défaut), ajustée aux `min/max_positions`
+    durs des profils qu'on mélange (`constraints` = ceux du cœur et du satellite)."""
+    from .config import PORTFOLIO_HOLDINGS
+
+    h = holdings_range(dict(market.settings.get("portfolio_holdings") or PORTFOLIO_HOLDINGS), constraints)
+    return int(h["min_count"]), int(h["max_count"])
+
+
 def stock_cap(constraints: list[Constraint]) -> float:
     """Poids maximal d'un titre détenu en direct dans un profil (`max_stock_weight` dur), sinon la limite de sécurité."""
     caps = [c.value for c in constraints if c.type is T.MAX_STOCK_WEIGHT and c.hard and c.value]
     return min(caps) if caps else LINE_CAP
 
 
-def enforce_minimum(weights: dict[str, float], caps: dict[str, float], minimum: float = MIN_POSITION_WEIGHT) -> dict[str, float]:
-    """« 0 ou au moins 1 % » après un mélange: retire les positions sous le minimum et redistribue leur poids aux autres,
-    au prorata de leur poids, sans dépasser le plafond de chacune (`caps`; 1 par défaut). La somme reste 1.
+def enforce_minimum(weights: dict[str, float], caps: dict[str, float], minimum: float = MIN_POSITION_WEIGHT,
+                    min_count: int = 0, max_count: Optional[int] = None) -> dict[str, float]:
+    """« 0 ou au moins 1 % » après un mélange, avec le nombre de positions voulu (`min_count` à `max_count`).
+
+    1. Les positions sous le minimum sont retirées. S'il en reste moins que `min_count`, les plus grosses des retirées
+       sont gardées et remontées à exactement le minimum; s'il en reste plus que `max_count`, les plus petites sont retirées.
+    2. Le poids libéré (ou emprunté) est redistribué au prorata entre les autres, sans dépasser le plafond de chacune
+       (`caps`; 1 par défaut) ni descendre sous le minimum. La somme reste 1.
 
     Un mélange 80/20 rend petite toute position détenue dans un seul des deux portefeuilles (1 % × 20 % = 0,2 %): le
     moteur ne produit jamais de tels poids, le mélange ne doit pas en créer non plus.
     """
-    w = {s: x for s, x in weights.items() if x >= minimum - 1e-9}
-    if not w:
+    ranked = sorted(weights.items(), key=lambda kv: -kv[1])
+    n = sum(1 for _, x in ranked if x >= minimum - 1e-9)
+    n = max(n, min(min_count, len(ranked)))  # il faut au moins `min_count` positions, si le mélange en contient assez
+    if max_count is not None:
+        n = min(n, max_count)
+    if n == 0:
         return dict(weights)
-    for _ in range(50):
+    w = {s: max(x, minimum) for s, x in ranked[:n]}  # les remontées au minimum sont payées par les plus grosses (ci-dessous)
+    for _ in range(100):
         gap = 1.0 - sum(w.values())
         if abs(gap) < 1e-9:
             break
-        room = {s: caps.get(s, 1.0) - x for s, x in w.items() if caps.get(s, 1.0) - x > 1e-9}
-        if not room:  # plus aucune marge sous les plafonds: on remet à l'échelle plutôt que perdre du capital
+        if gap > 0:  # du poids à donner: aux positions qui ont de la marge sous leur plafond, au prorata de leur poids
+            room = {s: caps.get(s, 1.0) - x for s, x in w.items() if caps.get(s, 1.0) - x > 1e-9}
+            base = {s: w[s] for s in room}
+        else:  # du poids à reprendre: aux positions au-dessus du minimum, au prorata de leur excédent
+            room = {s: x - minimum for s, x in w.items() if x - minimum > 1e-9}
+            base = dict(room)
+        if not room:  # aucune marge: on remet à l'échelle plutôt que perdre du capital
             total = sum(w.values())
             return {s: x / total for s, x in w.items()}
-        base = sum(w[s] for s in room)
+        total = sum(base.values())
         for s, r in room.items():
-            w[s] += min(gap * w[s] / base, r)
+            w[s] += min(abs(gap) * base[s] / total, r) * (1 if gap > 0 else -1)
     return w
 
 
 def blend(market: Market, slot: str, core: Optional[Portfolio], satellite: Optional[Portfolio],
-          core_cap: float = LINE_CAP, satellite_cap: float = LINE_CAP) -> Optional[Portfolio]:
+          core_cap: float = LINE_CAP, satellite_cap: float = LINE_CAP, count: Optional[tuple[int, int]] = None) -> Optional[Portfolio]:
     """Cœur-satellite: 80 % du capital suit `core`, 20 % suit `satellite`. Poids et indicateurs recalculés par le code.
 
-    Chaque position respecte ensuite « 0 ou au moins 1 % » (`enforce_minimum`). Plafond d'un titre détenu en direct:
-    80 % de celui du cœur + 20 % de celui du satellite (`core_cap`, `satellite_cap`); un FNB n'est limité qu'à 40 %.
+    Chaque position respecte ensuite « 0 ou au moins 1 % » (`enforce_minimum`) et le nombre de positions reste dans la
+    plage `count` = (min, max), celle de l'optimiseur. Plafond d'un titre détenu en direct: 80 % de celui du cœur +
+    20 % de celui du satellite (`core_cap`, `satellite_cap`); un FNB n'est limité qu'à 40 %.
     """
     name, description = TRIO[slot]
     if core is None or satellite is None:
@@ -845,7 +870,8 @@ def blend(market: Market, slot: str, core: Optional[Portfolio], satellite: Optio
         for pos in p.positions:
             weights[pos.symbol] = weights.get(pos.symbol, 0.0) + share * pos.weight
     stock = BLEND * core_cap + (1 - BLEND) * satellite_cap
-    weights = enforce_minimum(weights, {s: (LINE_CAP if is_fund(market, s) else min(LINE_CAP, stock)) for s in weights})
+    low, high = count or (0, None)
+    weights = enforce_minimum(weights, {s: (LINE_CAP if is_fund(market, s) else min(LINE_CAP, stock)) for s in weights}, MIN_POSITION_WEIGHT, low, high)
     ordered = sorted(weights.items(), key=lambda kv: -kv[1])
     rounded = {symbol: round(w, 4) for symbol, w in ordered}
     rounded[ordered[0][0]] = round(rounded[ordered[0][0]] + (1.0 - sum(rounded.values())), 4)  # résidu d'arrondi sur le plus gros

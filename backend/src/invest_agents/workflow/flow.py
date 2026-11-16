@@ -47,6 +47,7 @@ from ..monport import (
     fallback_check,
     front,
     pepite,
+    position_range,
     status,
     stock_cap,
     to_form,
@@ -153,7 +154,8 @@ def present(session: Session, bus) -> bool:
             """Mélange 80/20 (cœur, satellite), avec le plafond par titre de chacun de leurs profils."""
             def cap(slot: str) -> float:
                 return stock_cap(session.profiles[slot][1]) if slot in session.profiles else LINE_CAP
-            return blend(market, core, by.get(core), by.get(satellite), cap(core), cap(satellite))
+            both = [c for slot in (core, satellite) if slot in session.profiles for c in session.profiles[slot][1]]
+            return blend(market, core, by.get(core), by.get(satellite), cap(core), cap(satellite), position_range(market, both))
 
         for slot, p, sources in (
             ("prudent", mix("prudent", "conviction"), ["prudent", "conviction"]),

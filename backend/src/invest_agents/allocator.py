@@ -440,6 +440,21 @@ def _risk_contributions(weights: dict[str, float], sigma: pd.DataFrame, top: int
             for i in np.argsort(-rc)[:top]]
 
 
+def holdings_range(holdings: dict, constraints: list[Constraint]) -> dict:
+    """La plage de positions détenues (`min_count`, `max_count`) de `holdings`, ajustée au nombre de positions que le
+    client demande explicitement (`min/max_positions` dures): sa demande l'emporte sur la plage par défaut."""
+    hard = [c for c in constraints if c.hard]
+    user_max = min([int(c.value) for c in hard if c.type is T.MAX_POSITIONS and c.value] or [0]) or None
+    user_min = max([int(c.value) for c in hard if c.type is T.MIN_POSITIONS and c.value] or [0]) or None
+    if user_max is not None:
+        holdings["max_count"] = user_max
+        holdings["min_count"] = min(holdings["min_count"], user_max)
+    if user_min is not None:
+        holdings["min_count"] = user_min
+        holdings["max_count"] = max(holdings["max_count"], user_min)
+    return holdings
+
+
 def optimize_universe(
     market: Market,
     objective: Objective,
@@ -458,17 +473,7 @@ def optimize_universe(
 
     from .config import PORTFOLIO_HOLDINGS
 
-    holdings = dict(holdings or market.settings.get("portfolio_holdings") or PORTFOLIO_HOLDINGS)
-    # Un nombre de positions demandé explicitement par le client (min/max_positions) l'emporte sur la plage.
-    hard = [c for c in constraints if c.hard]
-    user_max = min([int(c.value) for c in hard if c.type is T.MAX_POSITIONS and c.value] or [0]) or None
-    user_min = max([int(c.value) for c in hard if c.type is T.MIN_POSITIONS and c.value] or [0]) or None
-    if user_max is not None:
-        holdings["max_count"] = user_max
-        holdings["min_count"] = min(holdings["min_count"], user_max)
-    if user_min is not None:
-        holdings["min_count"] = user_min
-        holdings["max_count"] = max(holdings["max_count"], user_min)
+    holdings = holdings_range(dict(holdings or market.settings.get("portfolio_holdings") or PORTFOLIO_HOLDINGS), constraints)
     started = time.perf_counter()
     symbols, diag = universe_symbols(market, constraints)
     if not symbols:
@@ -551,5 +556,5 @@ def optimize_universe(
     return OptimizationResult(status, message, weights=weights, metrics=metrics, diagnostics=diag)
 
 
-__all__ = ["A_LADDER", "MIN_POSITION_WEIGHT", "Objective", "OptimizationResult", "optimize", "optimize_universe",
+__all__ = ["A_LADDER", "MIN_POSITION_WEIGHT", "holdings_range", "Objective", "OptimizationResult", "optimize", "optimize_universe",
            "restrict_plan", "select_holdings", "universe_symbols"]
