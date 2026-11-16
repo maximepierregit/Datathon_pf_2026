@@ -309,6 +309,8 @@ async def judge_round(session: Session) -> None:
             for p in built
         ],
     }
+    for p in built:  # les cartes « Limites » s'ouvrent avec le juge et se ferment avec ses verdicts
+        front(bus, status(f"juge-{p.id}", "running", "Vérification de tes limites…"))
     try:
         decision = await session.judge.run(
             bus, "Juge ces portefeuilles.\n\n" + json.dumps(payload, ensure_ascii=False, indent=2), JudgeDecision,
