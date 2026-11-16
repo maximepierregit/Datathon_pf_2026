@@ -56,6 +56,8 @@ export interface Holding {
   name: string
   assetClass: AssetClass
   weight: number
+  /** Montant en dollars sur le montant de départ du client (`to_portfolio()` du backend). */
+  amount?: number
   /** Les champs suivants viennent de `holding_meta()` du backend (absents d'un ancien backend). */
   instrument?: 'action' | 'fnb' | 'crypto'
   /** Secteur d'une action, catégorie d'un FNB. */
@@ -65,9 +67,13 @@ export interface Holding {
   region?: RegionId
 }
 
-/** Indicateurs d'un backtest (`backtest.summarize()` du backend). VaR/ES : sur 12 mois glissants, en perte positive. */
+/**
+ * Indicateurs d'un backtest (`backtest.summarize()` du backend). VaR et ES à 95 % : sur les rendements QUOTIDIENS du
+ * portefeuille, en perte positive. `worst12m` et `best12m` : meilleure et pire période de 12 mois glissants.
+ */
 export interface BacktestStats {
   annualReturn: number
+  cumulativeReturn: number
   volatility: number
   sharpe: number
   maxDrawdown: number
@@ -80,9 +86,10 @@ export interface BacktestStats {
 
 export interface BacktestRun {
   stats: BacktestStats
-  /** Base 100 et recul depuis le dernier sommet (0 à −1, calculé jour par jour), un point par semaine. */
-  series: { date: string; value: number; drawdown: number }[]
-  /** Rendements sur 12 mois glissants, par tranches de 5 points (−40 … +40). `share` de 0 à 1. */
+  /** Un point par semaine : valeur base 100, rendement cumulé (0 au départ) et recul depuis le dernier sommet (0 à −1). */
+  series: { date: string; value: number; cumulative: number; drawdown: number }[]
+  /** Rendements quotidiens par tranches (`bucketStep` points de pourcentage). `bucket` : centre de la tranche en points de
+   * pourcentage ; `share` : part des jours, de 0 à 1 ; `tail` : la tranche de la VaR et celles en dessous. */
   distribution: { bucket: number; share: number; tail: boolean }[]
 }
 
@@ -90,14 +97,14 @@ export interface BacktestRun {
 export interface Backtest {
   start: string
   end: string
+  bucketStep: number
   runs: Record<ContributionFrequency, BacktestRun>
-  /** Vrai pour le moteur d'exemple (rendements simulés), absent pour le backend. */
-  simulated?: boolean
 }
 
 export interface Metrics {
   expectedReturn: number
   volatility: number
+  monthlyVolatility?: number
   worstYear: number
   fees: number
   sharpe: number
@@ -147,6 +154,15 @@ export interface ScoredStock {
   name: string
   weight: number
   scores: Partial<Record<FactorId, number>>
+  /** Part de l'exposition qui vient de cette action : poids × score ÷ part notée (calculé par le backend). */
+  contributions?: Partial<Record<FactorId, number>>
+}
+
+/** Ce que le client a demandé pour un facteur, et si le portefeuille présenté l'atteint (`factor_requests()` du backend). */
+export interface FactorRequest {
+  level: Level
+  threshold: number
+  met: boolean
 }
 
 /**
@@ -157,9 +173,48 @@ export interface FactorView {
   /** Part du portefeuille en actions notées, de 0 à 1. */
   coverage: number
   exposure: Partial<Record<FactorId, number>>
-  /** Poids décroissant. Contribution d'une action à un facteur = poids × score / coverage. */
+  /** Les actions les plus lourdes, poids décroissant. */
   stocks: ScoredStock[]
+  /** Nombre d'actions notées au total. */
+  stockCount?: number
+  /** Les actions au-delà de `stocks`, regroupées. Absent s'il n'y en a pas. */
+  others?: { count: number; weight: number; contributions: Partial<Record<FactorId, number>> } | null
+  requests?: Partial<Record<FactorId, FactorRequest>>
 }
+
+/** Le montant de départ du client en dollars : gain attendu et pire année (`amounts_view()` du backend). */
+export interface Amounts {
+  start: number
+  expectedGain: number
+  /** Négatif. */
+  worstYearLoss: number
+  worstYearValue: number
+}
+
+/** Une ligne de la projection : une année, en dollars (`projection.project()` du backend). */
+export interface ProjectionRow {
+  year: number
+  /** Rendement moyen attendu, ajouts compris. */
+  expected: number
+  invested: number
+  p05: number
+  p25: number
+  p75: number
+  p95: number
+}
+
+export interface Projection {
+  contribution: Contribution
+  periodsPerYear: number
+  rows: ProjectionRow[]
+}
+
+/** Répartition du portefeuille (`breakdowns()` du backend) : la clé est un identifiant (classe, région) ou le libellé d'un secteur. */
+export interface BreakdownRow {
+  key: string
+  weight: number
+}
+export type Breakdown = Record<'classe' | 'region' | 'secteur', BreakdownRow[]>
 
 export interface Portfolio {
   id: PortfolioId
@@ -174,6 +229,9 @@ export interface Portfolio {
   /** Absent d'un ancien backend. */
   factors?: FactorView
   backtest?: Backtest | null
+  amounts?: Amounts | null
+  projection?: Projection | null
+  breakdown?: Breakdown
   /** Part du risque (variance) par classe : contributions d'Euler, poids × covariance avec le portefeuille ÷ variance. */
   riskContribution?: { assetClass: AssetClass; weight: number; risk: number }[] | null
 }

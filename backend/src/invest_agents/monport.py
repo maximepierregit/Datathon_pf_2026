@@ -17,13 +17,14 @@ import numpy as np
 from pydantic import ValidationError
 
 from .runtime import get_runtime_settings
-from .catalog import (DIMENSION_COLUMN, SEP, SHARE_TYPES, describe, detect_conflicts, excluded_mask, share_members,
+from .catalog import (DIMENSION_COLUMN, FTOL, SEP, SHARE_TYPES, describe, detect_conflicts, excluded_mask, share_members,
                       share_targets, validate_all)
 from .constraints import preference_exposure
 from .market import UNKNOWN, Market
 from .events import EventBus
 from . import evidence, factors
 from .backtest import backtest, risk_contribution
+from .projection import projection_view
 from .allocator import optimize
 from .tools import factor_fits
 from .schemas import (
@@ -920,7 +921,10 @@ def evidence_for(p: Portfolio, market: Market, form: InvestorForm) -> dict[str, 
 
 def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, risk_report: Optional[dict],
                  position: float, skipped: list[str], extra: list[str], name: str, tagline: str,
-                 form: Optional[InvestorForm] = None) -> dict:
+                 form: Optional[InvestorForm] = None, prefs: Optional[dict] = None,
+                 contribution: Optional[dict] = None) -> dict:
+    """Le portefeuille tel que le frontend l'affiche. Tous les chiffres du tableau de bord sont calculés ici: le frontend
+    ne fait que les afficher (voir `CLAUDE.md`, « Où sont les calculs »)."""
     holdings, allocation, fees = [], {c: 0.0 for c in CLASSES}, 0.0
     classes: dict[str, str] = {}
     for pos in p.positions:
@@ -935,6 +939,10 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
 
     m = p.metrics
     mu, sigma = (m.expected_return, m.volatility) if m else (0.0, 0.0)
+    amount = float(form.investment_amount_cad) if form else None
+    if amount is not None:  # montant en dollars de chaque position, sur le montant de départ du client
+        for h in holdings:
+            h["amount"] = round(h["weight"] * amount, 2)
     # Les preuves citées sont recalculées sur le portefeuille présenté: un mélange 80/20 a ses propres chiffres.
     proofs = evidence_for(p, market, form) if form else {}
     # Mêmes champs que RiskNote dans frontend/src/types.ts.
@@ -958,10 +966,11 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
         "riskScore": front_score(position),
         "holdings": holdings,
         "allocation": {k: round(v, 4) for k, v in allocation.items()},
-        # Mêmes formules que metricsOf() dans frontend/src/lib/engine.ts, sur les chiffres de l'optimiseur.
+        # Chiffres de l'optimiseur; la pire année est la VaR 99 % paramétrique à un an (μ − 2,33 σ, loi normale).
         "metrics": {
             "expectedReturn": mu,
             "volatility": sigma,
+            "monthlyVolatility": sigma / math.sqrt(12),
             "worstYear": mu - 2.33 * sigma,
             "fees": round(fees, 5),
             "sharpe": m.sharpe if m else 0.0,
@@ -971,10 +980,35 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
         },
         "warnings": warnings,
         "agentNotes": agent_notes,
-        "factors": factor_view(p),
+        "factors": factor_view(p, prefs),
         "backtest": backtest(market.returns, {pos.symbol: pos.weight for pos in p.positions}, market.risk_free_rate),
         "riskContribution": risk_by_class(market, p, classes, allocation),
+        "breakdown": breakdowns(holdings),
+        "amounts": amounts_view(amount, mu, mu - 2.33 * sigma) if amount is not None else None,
+        "projection": projection_view(amount, contribution, mu, sigma) if amount is not None else None,
     }
+
+
+def amounts_view(amount: float, expected_return: float, worst_year: float) -> dict:
+    """Les rendements attendus en dollars, sur le montant de départ du client."""
+    return {"start": round(amount, 2), "expectedGain": round(amount * expected_return, 2),
+            "worstYearLoss": round(amount * worst_year, 2), "worstYearValue": round(amount * (1.0 + worst_year), 2)}
+
+
+def breakdowns(holdings: list[dict]) -> dict:
+    """Répartition du portefeuille par classe, par région et par secteur: [{key, weight}], du plus lourd au plus léger.
+    Le secteur est celui de l'action ou du FNB sectoriel; un FNB diversifié est regroupé sous sa famille."""
+    def by(key) -> list[dict]:
+        sums: dict[str, float] = {}
+        for h in holdings:
+            sums[key(h)] = sums.get(key(h), 0.0) + h["weight"]
+        return [{"key": k, "weight": round(w, 4)} for k, w in sorted(sums.items(), key=lambda kv: -kv[1]) if w > 0.0005]
+
+    def sector(h: dict) -> str:
+        return h.get("sector") or ("Actions diversifiées (FNB)" if h["assetClass"] == "actions" else CLASS_LABELS[h["assetClass"]])
+
+    return {"classe": by(lambda h: h["assetClass"]), "region": by(lambda h: h.get("region") or "mondial"),
+            "secteur": by(sector)}
 
 
 def risk_by_class(market: Market, p: Portfolio, classes: dict[str, str], allocation: dict[str, float]) -> Optional[list]:
@@ -996,16 +1030,49 @@ def risk_by_class(market: Market, p: Portfolio, classes: dict[str, str], allocat
             for c in CLASSES if allocation[c] > 0.0005]
 
 
-def factor_view(p: Portfolio) -> dict:
-    """Expositions aux facteurs et actions notées (FactorView de frontend/src/types.ts), identifiants du frontend."""
+FACTOR_TOP = 8  # actions montrées une à une dans le tableau des contributions; les autres sont regroupées
+
+
+def factor_view(p: Portfolio, prefs: Optional[dict] = None) -> dict:
+    """Expositions aux facteurs (FactorView de frontend/src/types.ts), identifiants du frontend.
+
+    Exposition = Σ wᵢ·zᵢ / Σ wᵢ sur les actions notées. La contribution d'une action est wᵢ·zᵢ / Σ wᵢ: la somme des
+    contributions de toutes les actions redonne l'exposition. `requests` dit, pour chaque facteur que le client a réglé,
+    son niveau, le seuil visé et si le portefeuille présenté l'atteint (même tolérance que `catalog.evaluate`).
+    """
     weights = {pos.symbol: pos.weight for pos in p.positions}
     exposure, coverage = factors.exposures(weights)
     scores = factors.scores_for(weights)
     names = {pos.symbol: pos.name for pos in p.positions}
+    ordered = sorted(scores.index, key=lambda s: -weights[s])
+    total = sum(weights[s] for s in ordered) or 1.0
+
+    def contributions(symbols: list[str]) -> dict[str, float]:
+        return {FRONT_FACTORS[f]: round(sum(weights[s] * float(scores.at[s, f]) for s in symbols) / total, 4)
+                for f in factors.FACTORS}
+
     stocks = [{"ticker": s, "name": names[s], "weight": weights[s],
-               "scores": {FRONT_FACTORS[f]: round(float(scores.at[s, f]), 2) for f in factors.FACTORS}}
-              for s in sorted(scores.index, key=lambda s: -weights[s])]
-    return {"coverage": coverage, "exposure": {FRONT_FACTORS[f]: v for f, v in exposure.items()}, "stocks": stocks}
+               "scores": {FRONT_FACTORS[f]: round(float(scores.at[s, f]), 2) for f in factors.FACTORS},
+               "contributions": contributions([s])}
+              for s in ordered[:FACTOR_TOP]]
+    rest = ordered[FACTOR_TOP:]
+    front_exposure = {FRONT_FACTORS[f]: v for f, v in exposure.items()}
+    return {"coverage": coverage, "exposure": front_exposure, "stocks": stocks, "stockCount": len(ordered),
+            "others": ({"count": len(rest), "weight": round(sum(weights[s] for s in rest), 4), "contributions": contributions(rest)}
+                       if rest else None),
+            "requests": factor_requests(front_exposure, prefs)}
+
+
+def factor_requests(exposure: dict[str, float], prefs: Optional[dict]) -> dict[str, dict]:
+    """Ce que le client a demandé (niveau -2 … +2) et si le portefeuille l'atteint, par facteur du frontend."""
+    out: dict[str, dict] = {}
+    for item, level in ((prefs or {}).get("factors") or {}).items():
+        if item not in exposure or level not in FACTOR_LEVELS:
+            continue
+        threshold = FACTOR_LEVELS[level]
+        met = exposure[item] >= threshold - FTOL if threshold > 0 else exposure[item] <= threshold + FTOL
+        out[item] = {"level": level, "threshold": threshold, "met": bool(met)}
+    return out
 
 
 # --------------------------------------------------------------------------- #

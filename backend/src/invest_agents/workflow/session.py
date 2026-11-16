@@ -56,6 +56,8 @@ class Session:
     skipped: list[str]
     market: Market
     review: Optional[PepiteReview] = None
+    # Ajouts prévus du client: servent seulement à la projection du tableau de bord, jamais donnés aux agents.
+    contribution: Optional[dict] = None
 
     # Profil de risque: le code le calcule, Pépite le déplace au plus de ±2 crans (`adjust_risk_position`).
     adjust_steps: int = 0

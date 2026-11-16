@@ -56,6 +56,16 @@ def test_roundtrip(fake):
     assert restored.pepite is None and restored.workers == {}  # les agents repartent à neuf
 
 
+def test_contribution_survives_a_restore(fake):
+    """Les ajouts prévus servent à la projection: une session restaurée doit les retrouver (sans jamais les donner aux agents)."""
+    s = _session(SessionStore())
+    s.contribution = {"frequency": "mensuelle", "amount": 150.0}
+    memory.save(s)
+    restored = memory.from_state(memory.load(s.id), market="M")
+    assert restored.contribution == {"frequency": "mensuelle", "amount": 150.0}
+    assert "contribution" not in str(restored.form.model_dump())  # le formulaire envoyé aux agents n'en contient pas
+
+
 def test_latest_event_wins(fake):
     s = _session(SessionStore())
     memory.save(s)

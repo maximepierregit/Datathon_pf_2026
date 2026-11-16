@@ -5,7 +5,7 @@ asynchrone, chaque `yield` est relayé au client comme un événement SSE (text/
 
 Charges utiles (voir workflow/flow.py):
     {"mode": "monport_check", "profile": {...}, "constraints": {...}}
-    {"mode": "monport", "profile": {...}, "constraints": {...}, "check": {...}, "adjustment": "...", "session": id}
+    {"mode": "monport", "profile": {...}, "constraints": {...}, "contribution": {...}, "check": {...}, "adjustment": "...", "session": id}
     {"mode": "monport_chat", "session": id, "message": "texte libre"}
     {"mode": "monport_rebuild", "session": id}       # applique la demande que Pépite a fait confirmer dans le chat
 """

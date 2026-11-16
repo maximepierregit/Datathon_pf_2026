@@ -1,14 +1,15 @@
+// Les trois niveaux du tableau de bord. Ces vues ne calculent rien : tous les chiffres (rendements, VaR, projection,
+// montants, répartitions, contributions) viennent du portefeuille construit par le backend (`to_portfolio()`).
 import { useState } from 'react'
 import { Area, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Pepite } from '../../components/Pepite'
 import { Card } from '../../components/ui'
-import { CLASS_COLORS, CLASS_LABELS, PERIODS_PER_YEAR, REBALANCE_LABELS } from '../../data/catalog'
-import { backtestOf, projection, riskContribution } from '../../lib/engine'
-import { contribution as contributionText, kindOf, money, pct, signedPct } from '../../lib/format'
+import { CLASS_COLORS, CLASS_LABELS, REBALANCE_LABELS } from '../../data/catalog'
+import { contribution as contributionText, kindOf, money, pct, percentPoints, signedMoney, signedPct } from '../../lib/format'
 import { useApp } from '../../store'
-import type { ContributionFrequency, Portfolio } from '../../types'
+import type { Backtest, BacktestRun, ContributionFrequency, Portfolio } from '../../types'
 import { FactorExposure } from './Factors'
-import { BacktestNote, BacktestWarning, Breakdown, ChartLegend, ChartTip } from './charts'
+import { BacktestNote, BacktestWarning, Breakdown, ChartLegend, ChartTip, NeedsBackend } from './charts'
 import { AgentNotes, AllocationBar, classesOf, HoldingsTable, InfoTip, Kpi, SectionTitle } from './parts'
 
 const axis = { fontSize: 12, fill: '#565656' }
@@ -20,20 +21,17 @@ const compact = (v: number) => (v >= 1000 ? `${Math.round(v / 1000).toLocaleStri
 const year = (iso: string) => iso.slice(0, 4)
 const dateFr = (iso: string) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('fr-CA', { year: 'numeric', month: 'long', day: 'numeric' })
 
-// ---------- Débutant ----------
-
-function Geography({ p }: { p: Portfolio }) {
-  return (
-    <Card>
-      <Breakdown p={p} title="Où ton argent est investi" views={['region', 'secteur']} />
-    </Card>
-  )
+/** Le backtest de la fréquence demandée, ou rien (historique trop court, ou backend hors ligne). */
+function runOf(p: Portfolio, frequency: ContributionFrequency): { b: Backtest; run: BacktestRun } | null {
+  const b = p.backtest
+  return b ? { b, run: b.runs[frequency] } : null
 }
+
+// ---------- Débutant ----------
 
 export function Beginner({ p, amount }: { p: Portfolio; amount: number }) {
   const eq = p.allocation.actions
-  const gain = p.metrics.expectedReturn * amount
-  const loss = p.metrics.worstYear * amount
+  const a = p.amounts
   return (
     <div className="flex flex-col gap-6">
       <Card>
@@ -48,17 +46,21 @@ export function Beginner({ p, amount }: { p: Portfolio; amount: number }) {
             <div className="flex flex-col gap-2">
               <dt className="text-sm text-slate">Une année normale</dt>
               <dd className="m-0 text-[34px] font-light leading-10 text-navy">≈ {signedPct(p.metrics.expectedReturn, 0)}</dd>
-              <dd className="m-0 text-[15px] leading-6 text-ink-soft">
-                Environ {gain >= 0 ? '+' : '−'}
-                {money(Math.abs(gain))} sur tes {money(amount)} de départ, sans garantie.
-              </dd>
+              {a && (
+                <dd className="m-0 text-[15px] leading-6 text-ink-soft">
+                  Environ {signedMoney(a.expectedGain)} sur tes {money(a.start)} de départ, sans garantie.
+                </dd>
+              )}
             </div>
             <div className="flex flex-col gap-2">
               <dt className="text-sm text-slate">Une mauvaise année</dt>
               <dd className="m-0 text-[34px] font-light leading-10 text-red">{signedPct(p.metrics.worstYear, 0)}</dd>
-              <dd className="m-0 text-[15px] leading-6 text-ink-soft">
-                Tes {money(amount)} pourraient descendre à {money(amount + loss)}, soit {money(Math.abs(loss))} de moins. Avec le temps, les marchés ont toujours fini par remonter.
-              </dd>
+              {a && (
+                <dd className="m-0 text-[15px] leading-6 text-ink-soft">
+                  Tes {money(a.start)} pourraient descendre à {money(a.worstYearValue)}, soit {money(Math.abs(a.worstYearLoss))} de moins. Avec le temps, les marchés ont toujours fini par
+                  remonter.
+                </dd>
+              )}
             </div>
           </dl>
         </Card>
@@ -78,7 +80,11 @@ export function Beginner({ p, amount }: { p: Portfolio; amount: number }) {
         </Card>
       </div>
 
-      <Geography p={p} />
+      {p.breakdown && (
+        <Card>
+          <Breakdown p={p} title="Où ton argent est investi" views={['region', 'secteur']} />
+        </Card>
+      )}
 
       <Card>
         <SectionTitle sub={`${p.holdings.length} placements, regroupés par famille, pour tes ${money(amount)} de départ`}>Ce que tu achètes</SectionTitle>
@@ -97,7 +103,7 @@ export function Beginner({ p, amount }: { p: Portfolio; amount: number }) {
                       <span>{h.name}</span>
                       {kindOf(h) && <span className="text-[13px] text-ink-soft">{kindOf(h)}</span>}
                     </span>
-                    <span className="shrink-0 text-ink-soft">{money(h.weight * amount)}</span>
+                    <span className="shrink-0 text-ink-soft">{h.amount != null ? money(h.amount) : pct(h.weight)}</span>
                   </div>
                 ))}
             </div>
@@ -113,8 +119,7 @@ export function Beginner({ p, amount }: { p: Portfolio; amount: number }) {
 function KpiRow({ p, advanced = false }: { p: Portfolio; advanced?: boolean }) {
   const m = p.metrics
   const frequency = useApp((s) => s.contribution.frequency)
-  const run = backtestOf(p)?.runs[frequency]
-  const s = run?.stats
+  const s = runOf(p, frequency)?.run.stats
   return (
     <div className="grid gap-4 sm:grid-cols-3">
       <Kpi
@@ -128,26 +133,42 @@ function KpiRow({ p, advanced = false }: { p: Portfolio; advanced?: boolean }) {
         label="Volatilité"
         value={pct(m.volatility)}
         note="Variation typique sur un an"
-        secondary={advanced ? [['Pire recul (backtest)', signedPct(s?.maxDrawdown ?? m.maxDrawdown)], ['Vol. mensuelle', pct(m.volatility / Math.sqrt(12))]] : undefined}
+        secondary={
+          advanced
+            ? [
+                ['Pire recul (backtest)', signedPct(s?.maxDrawdown ?? m.maxDrawdown)],
+                ...(m.monthlyVolatility != null ? ([['Vol. mensuelle', pct(m.monthlyVolatility)]] as [string, string][]) : []),
+              ]
+            : undefined
+        }
       />
       <Kpi
         label="Pire année (estimation)"
         value={signedPct(m.worstYear, 0)}
         note="1 chance sur 100"
-        secondary={advanced && s?.var95 != null && s.es95 != null ? [['VaR 95 % (12 mois)', signedPct(-s.var95)], ['ES 95 % (12 mois)', signedPct(-s.es95)]] : undefined}
+        secondary={advanced && s?.var95 != null && s.es95 != null ? [['VaR 95 % (1 jour)', signedPct(-s.var95)], ['ES 95 % (1 jour)', signedPct(-s.es95)]] : undefined}
       />
     </div>
   )
 }
 
-function ProjectionChart({ p, amount }: { p: Portfolio; amount: number }) {
-  const c = useApp((s) => s.contribution)
-  const data = projection(p.metrics, amount, c).map((d) => ({ ...d, wide: [d.p05, d.p95], likely: [d.p25, d.p75] }))
-  const last = data[data.length - 1]
-  const n = PERIODS_PER_YEAR[c.frequency]
+function ProjectionChart({ p }: { p: Portfolio }) {
+  const proj = p.projection
+  if (!proj) {
+    return (
+      <Card>
+        <SectionTitle>Projection sur 10 ans</SectionTitle>
+        <NeedsBackend />
+      </Card>
+    )
+  }
+  // Les zones sont des fourchettes [bas, haut] pour le graphique.
+  const data = proj.rows.map((d) => ({ ...d, wide: [d.p05, d.p95], likely: [d.p25, d.p75] }))
+  const last = proj.rows[proj.rows.length - 1]
+  const c = proj.contribution
   return (
     <Card className="flex flex-col gap-3">
-      <SectionTitle sub={`${money(amount)} au départ${c.frequency === 'aucune' ? '' : ` + ${contributionText(c)}`}`}>Projection sur 10 ans</SectionTitle>
+      <SectionTitle sub={`${money(proj.rows[0].expected)} au départ${c.frequency === 'aucune' ? '' : ` + ${contributionText(c)}`}`}>Projection sur 10 ans</SectionTitle>
       <div className="h-64">
         <ResponsiveContainer>
           <ComposedChart data={data} margin={{ top: 8, right: 8, left: 4, bottom: 0 }}>
@@ -174,7 +195,7 @@ function ProjectionChart({ p, amount }: { p: Portfolio; amount: number }) {
         Dans 10 ans : ≈ <strong className="text-navy">{money(last.expected)}</strong>, dont {money(last.invested)} versés.
       </p>
       <p className="m-0 text-xs text-ink-soft">
-        Rendement moyen de {pct(p.metrics.expectedReturn)} par an{n > 1 ? `, ÷ ${n} et composé à chaque versement` : ''}.
+        Rendement moyen de {pct(p.metrics.expectedReturn)} par an{proj.periodsPerYear > 1 ? `, ÷ ${proj.periodsPerYear} et composé à chaque versement` : ''}.
       </p>
     </Card>
   )
@@ -182,24 +203,24 @@ function ProjectionChart({ p, amount }: { p: Portfolio; amount: number }) {
 
 function DistributionChart({ p }: { p: Portfolio }) {
   const frequency = useApp((s) => s.contribution.frequency)
-  const b = backtestOf(p)
-  const run = b?.runs[frequency]
+  const r = runOf(p, frequency)
+  const step = r?.b.bucketStep ?? 0.5
   return (
     <Card className="flex flex-col gap-3">
-      <SectionTitle sub="Rendement de chaque période de 12 mois du backtest">Distribution des rendements</SectionTitle>
-      {!b || !run || run.stats.var95 === null ? (
-        <p className="m-0 text-[15px] text-ink-soft">Historique trop court pour cette analyse.</p>
+      <SectionTitle sub={`Rendement de chaque jour du backtest, par tranches de ${step.toLocaleString('fr-CA')} point`}>Distribution des rendements</SectionTitle>
+      {!r || r.run.stats.var95 === null ? (
+        <NeedsBackend short />
       ) : (
         <>
           <div className="h-56">
             <ResponsiveContainer>
-              <BarChart data={run.distribution} margin={{ top: 8, right: 8, left: -24, bottom: 0 }}>
+              <BarChart data={r.run.distribution} margin={{ top: 8, right: 8, left: -12, bottom: 0 }} barCategoryGap={1}>
                 {grid}
-                <XAxis dataKey="bucket" tick={axis} tickFormatter={(v) => `${v} %`} />
-                <YAxis tick={axis} tickFormatter={(v) => `${Math.round(v * 100)} %`} />
-                <Tooltip content={<ChartTip title={(v) => `Rendement autour de ${v} %`} format={(v) => pct(v)} />} />
-                <Bar dataKey="share" name="Part des périodes" fill="#7993A2" isAnimationActive={false}>
-                  {run.distribution.map((d) => (
+                <XAxis dataKey="bucket" tick={axis} tickFormatter={(v) => percentPoints(v, 1)} interval={3} />
+                <YAxis tick={axis} tickFormatter={(v) => pct(v, 0)} />
+                <Tooltip content={<ChartTip title={(v) => `Rendement du jour autour de ${percentPoints(Number(v), 1)}`} format={(v) => pct(v)} />} />
+                <Bar dataKey="share" name="Part des jours" fill="#7993A2" isAnimationActive={false}>
+                  {r.run.distribution.map((d) => (
                     <Cell key={d.bucket} fill={d.tail ? '#E41C23' : '#7993A2'} />
                   ))}
                 </Bar>
@@ -208,15 +229,15 @@ function DistributionChart({ p }: { p: Portfolio }) {
           </div>
           <ChartLegend
             items={[
-              { label: 'Périodes de 12 mois', color: '#7993A2', kind: 'box' },
-              { label: '5 % les pires', color: '#E41C23', kind: 'box' },
+              { label: 'Jours', color: '#7993A2', kind: 'box' },
+              { label: '5 % des pires jours', color: '#E41C23', kind: 'box' },
             ]}
           />
           <p className="m-0 text-sm text-ink-soft">
-            VaR 95 % : <strong className="text-navy">{signedPct(-run.stats.var95)}</strong> · ES 95 % :{' '}
-            <strong className="text-navy">{signedPct(-(run.stats.es95 ?? 0))}</strong>
+            En 1 jour — VaR 95 % : <strong className="text-navy">{signedPct(-r.run.stats.var95, 2)}</strong> · ES 95 % :{' '}
+            <strong className="text-navy">{signedPct(-(r.run.stats.es95 ?? 0), 2)}</strong>
           </p>
-          <BacktestNote b={b} />
+          <BacktestNote b={r.b} />
         </>
       )}
     </Card>
@@ -227,16 +248,18 @@ export function Intermediate({ p, amount }: { p: Portfolio; amount: number }) {
   return (
     <div className="flex flex-col gap-6">
       <KpiRow p={p} />
-      <Card>
-        <Breakdown p={p} />
-      </Card>
+      {p.breakdown && (
+        <Card>
+          <Breakdown p={p} />
+        </Card>
+      )}
       <div className="grid gap-6 lg:grid-cols-2">
-        <ProjectionChart p={p} amount={amount} />
+        <ProjectionChart p={p} />
         <DistributionChart p={p} />
       </div>
       <Card>
         <SectionTitle sub={`Pour tes ${money(amount)} de départ`}>Liste proposée de positions</SectionTitle>
-        <HoldingsTable p={p} amount={amount} />
+        <HoldingsTable p={p} />
       </Card>
       <Card>
         <SectionTitle>Notes des agents</SectionTitle>
@@ -251,23 +274,22 @@ export function Intermediate({ p, amount }: { p: Portfolio; amount: number }) {
 function PerformanceTab({ p }: { p: Portfolio }) {
   const userFrequency = useApp((s) => s.contribution.frequency)
   const [frequency, setFrequency] = useState<ContributionFrequency>(userFrequency)
-  const b = backtestOf(p)
-  if (!b) {
+  const r = runOf(p, frequency)
+  if (!r) {
     return (
       <Card>
         <SectionTitle>Performance</SectionTitle>
-        <p className="m-0 text-[15px] text-ink-soft">L’historique commun de tes placements est trop court pour rejouer ce portefeuille.</p>
+        <NeedsBackend />
       </Card>
     )
   }
-  const run = b.runs[frequency]
+  const { b, run } = r
   const s = run.stats
   // Une graduation par année : le premier point de chaque année.
   const yearTicks = run.series.filter((d, i, a) => i > 0 && year(d.date) !== year(a[i - 1].date)).map((d) => d.date)
-  const cumulative = run.series.map((d) => ({ date: d.date, value: d.value / 100 - 1, drawdown: d.drawdown }))
   const rows: [string, string][] = [
     ['Rendement annualisé', signedPct(s.annualReturn)],
-    ['Rendement cumulé', signedPct(s.finalValue / 100 - 1)],
+    ['Rendement cumulé', signedPct(s.cumulativeReturn)],
     ['Volatilité réalisée', pct(s.volatility)],
     ['Ratio de Sharpe', s.sharpe.toFixed(2).replace('.', ',')],
     ['Pire recul', signedPct(s.maxDrawdown)],
@@ -282,7 +304,7 @@ function PerformanceTab({ p }: { p: Portfolio }) {
     <div className="flex flex-col gap-6">
       <Card className="flex flex-col gap-4">
         <SectionTitle sub="Rendement cumulé depuis le départ, puis recul depuis le dernier sommet">Performance</SectionTitle>
-        <BacktestWarning b={b} />
+        <BacktestWarning />
         <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Fréquence de rééquilibrage">
           <span className="mr-1 text-sm text-ink-soft">Rééquilibrage :</span>
           {FREQUENCIES.map((f) => (
@@ -299,20 +321,20 @@ function PerformanceTab({ p }: { p: Portfolio }) {
         </div>
         <div className="h-72">
           <ResponsiveContainer>
-            <ComposedChart data={cumulative} syncId="performance" margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+            <ComposedChart data={run.series} syncId="performance" margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
               {grid}
               <XAxis dataKey="date" tick={axis} tickFormatter={year} ticks={yearTicks} interval={0} />
               <YAxis tick={axis} tickFormatter={(v) => signedPct(v, 0)} width={56} domain={['auto', 'auto']} />
               <ReferenceLine y={0} stroke="#7993A2" />
               <Tooltip content={<ChartTip title={(d) => dateFr(String(d))} format={(v) => signedPct(v)} />} />
-              <Line dataKey="value" name="Rendement cumulé" stroke="#00314D" strokeWidth={2} dot={false} isAnimationActive={false} />
+              <Line dataKey="cumulative" name="Rendement cumulé" stroke="#00314D" strokeWidth={2} dot={false} isAnimationActive={false} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
         {/* Même axe du temps, mêmes marges et même largeur d'axe : les deux graphiques restent alignés. */}
         <div className="h-36">
           <ResponsiveContainer>
-            <ComposedChart data={cumulative} syncId="performance" margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+            <ComposedChart data={run.series} syncId="performance" margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
               {grid}
               <XAxis dataKey="date" tick={axis} tickFormatter={year} ticks={yearTicks} interval={0} />
               <YAxis tick={axis} tickFormatter={(v) => signedPct(v, 0)} width={56} domain={['auto', 0]} />
@@ -349,12 +371,14 @@ function PerformanceTab({ p }: { p: Portfolio }) {
 }
 
 function RiskTab({ p, amount }: { p: Portfolio; amount: number }) {
-  const contrib = p.riskContribution ?? riskContribution(p)
+  const contrib = p.riskContribution
   return (
     <div className="flex flex-col gap-6">
-      <Card>
-        <Breakdown p={p} />
-      </Card>
+      {p.breakdown && (
+        <Card>
+          <Breakdown p={p} />
+        </Card>
+      )}
       <FactorExposure p={p} />
       <div className="grid gap-6 lg:grid-cols-2">
         <DistributionChart p={p} />
@@ -363,40 +387,38 @@ function RiskTab({ p, amount }: { p: Portfolio; amount: number }) {
             <h2 className="flex items-center gap-2 text-[24px] font-semibold leading-7 text-navy">
               Contribution au risque
               <InfoTip label="Comment c’est calculé?">
-                {p.riskContribution ? (
-                  <>
-                    La part de la variation totale du portefeuille qui vient de chaque famille : pour chaque placement, son poids × sa
-                    covariance avec le portefeuille, divisé par la variance du portefeuille. Les parts additionnent à 100 %. Une famille
-                    volatile, ou qui bouge avec le reste, pèse plus dans le risque que dans les poids.
-                  </>
-                ) : (
-                  <>Approximation d’exemple : poids de chaque famille × sa volatilité typique, ramené à 100 %.</>
-                )}
+                La part de la variation totale du portefeuille qui vient de chaque famille : pour chaque placement, son poids × sa covariance avec le
+                portefeuille, divisé par la variance du portefeuille. Les parts additionnent à 100 %. Une famille volatile, ou qui bouge avec le
+                reste, pèse plus dans le risque que dans les poids.
               </InfoTip>
             </h2>
             <p className="m-0 text-sm text-ink-soft">Part du poids vs part du risque</p>
           </div>
-          <ul className="m-0 flex list-none flex-col gap-3 p-0">
-            {contrib.map((c) => (
-              <li key={c.assetClass} className="flex flex-col gap-1 text-sm">
-                <span className="flex justify-between">
-                  <span>{CLASS_LABELS[c.assetClass]}</span>
-                  <span className="text-ink-soft">
-                    poids {pct(c.weight, 0)} · <strong className="text-navy">risque {pct(c.risk, 0)}</strong>
+          {contrib ? (
+            <ul className="m-0 flex list-none flex-col gap-3 p-0">
+              {contrib.map((c) => (
+                <li key={c.assetClass} className="flex flex-col gap-1 text-sm">
+                  <span className="flex justify-between">
+                    <span>{CLASS_LABELS[c.assetClass]}</span>
+                    <span className="text-ink-soft">
+                      poids {pct(c.weight, 0)} · <strong className="text-navy">risque {pct(c.risk, 0)}</strong>
+                    </span>
                   </span>
-                </span>
-                <span className="relative h-2 rounded-full bg-mist">
-                  <span className="absolute inset-y-0 left-0 rounded-full bg-slate-light" style={{ width: `${c.weight * 100}%` }} />
-                  <span className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${Math.max(0, Math.min(1, c.risk)) * 100}%`, background: CLASS_COLORS[c.assetClass], opacity: 0.85, height: '50%', top: '25%' }} />
-                </span>
-              </li>
-            ))}
-          </ul>
+                  <span className="relative h-2 rounded-full bg-mist">
+                    <span className="absolute inset-y-0 left-0 rounded-full bg-slate-light" style={{ width: pct(c.weight, 2) }} />
+                    <span className="absolute inset-y-0 left-0 rounded-full" style={{ width: pct(c.risk, 2), background: CLASS_COLORS[c.assetClass], opacity: 0.85, height: '50%', top: '25%' }} />
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <NeedsBackend short />
+          )}
         </Card>
       </div>
       <Card>
         <SectionTitle sub={`Poids et montants pour tes ${money(amount)} de départ`}>Tes positions</SectionTitle>
-        <HoldingsTable p={p} amount={amount} detailed />
+        <HoldingsTable p={p} detailed />
       </Card>
       <Card>
         <SectionTitle>Journal des agents</SectionTitle>
