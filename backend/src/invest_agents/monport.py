@@ -885,18 +885,26 @@ def blend(market: Market, slot: str, core: Optional[Portfolio], satellite: Optio
         metrics=market.portfolio_metrics(weights),
         summary=f"{BLEND:.0%} du portefeuille « {core.mandate} » et {1 - BLEND:.0%} du portefeuille « {satellite.mandate} ».".replace("%", " %"),
         tradeoffs=core.summary,
+        # Le mélange hérite de la relance assouplie de l'une ou l'autre de ses bases.
+        relaunch_reason=core.relaunch_reason or satellite.relaunch_reason,
+        relaxed=list(dict.fromkeys(core.relaxed + satellite.relaxed)),
     )
 
 
 def pick_winner(portfolios: list[Portfolio], verdicts: dict[str, JudgeVerdict], choice: Optional[str]) -> Portfolio:
-    """Le choix du juge final, s'il est conforme ou si aucun ne l'est; sinon le conforme le mieux noté."""
+    """Le choix du juge final, s'il est conforme ou si aucun ne l'est; sinon le conforme le mieux noté.
+    Un choix pénalisé (portefeuille relancé avec contraintes assouplies) ne tient que si sa note pénalisée reste la
+    meilleure."""
     def rank(p: Portfolio) -> tuple:
         v = verdicts.get(p.id)
-        return (bool(v and v.compliant), v.fit_score if v else 0, p.metrics.sharpe if p.metrics else 0)
+        return (bool(v and v.compliant), v.ranked_score if v else 0, p.metrics.sharpe if p.metrics else 0)
 
     best = max(portfolios, key=rank)
     chosen = next((p for p in portfolios if p.id == choice), None)
-    return chosen if chosen and rank(chosen)[0] >= rank(best)[0] else best
+    if chosen is None or rank(chosen)[0] < rank(best)[0]:
+        return best
+    penalized = bool((v := verdicts.get(chosen.id)) and v.penalty)
+    return best if penalized and rank(best)[:2] > rank(chosen)[:2] else chosen
 
 
 # --------------------------------------------------------------------------- #
@@ -1019,7 +1027,14 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
     agent_notes = [t for t in (p.summary, p.tradeoffs, verdict.comment if verdict else None) if t] + extra
     if skipped:
         agent_notes.append(f"Pas encore pris en compte par les agents : {', '.join(skipped)}.")
-    if verdict and not verdict.compliant:
+    if p.relaunch_reason:  # remplace l'avertissement générique ci-dessous: il dit pourquoi et ce qui a été assoupli
+        what = ("Devenues de simples préférences : " + "; ".join(p.relaxed) + "." if p.relaxed
+                else "Le plafond de risque prévu pour ce portefeuille a été levé.")
+        warnings.insert(0, {"title": "Calcul relancé avec des limites assouplies",
+                            "detail": "Le premier calcul ne pouvait pas respecter toutes tes limites. " + what,
+                            "severity": "high",
+                            "sources": evidence.check_evidence(verdict.checks)[:evidence.MAX_CITED] if verdict else []})
+    elif verdict and not verdict.compliant:
         warnings.insert(0, {"title": "Certaines de tes limites ne sont pas respectées",
                             "detail": "Lis les détails avant de choisir ce portefeuille.", "severity": "high",
                             "sources": evidence.check_evidence(verdict.checks)[:evidence.MAX_CITED]})
@@ -1190,8 +1205,8 @@ class Translator:
                 yield status(card, "running", f"{TOOL_TEXT[e['name']].capitalize()}…")
             elif state == "start":
                 yield status(card, "running", "Construction du portefeuille…")
-            elif state == "warning":
-                yield status(card, "running", "Sélection de secours en cours…")
+            elif state == "warning":  # explication du modèle en échec: le portefeuille calculé est gardé
+                yield status(card, "done", "Portefeuille prêt (explication indisponible).")
             elif state == "done":
                 yield status(card, "done", "Portefeuille prêt.")
 

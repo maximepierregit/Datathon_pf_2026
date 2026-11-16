@@ -214,6 +214,10 @@ class Portfolio(BaseModel):
     summary: str = ""
     tradeoffs: str = ""
     failure_reason: Optional[str] = None
+    # Relance avec contraintes assouplies: pourquoi le premier calcul a échoué (None s'il a réussi) et les contraintes
+    # dures devenues préférences (libellés `catalog.describe`).
+    relaunch_reason: Optional[str] = None
+    relaxed: list[str] = Field(default_factory=list)
     # Traçabilité backend du Markowitz global (filtres, Sigma, sélection, A effectif); jamais envoyée au frontend.
     diagnostics: Optional[dict] = None
 
@@ -232,9 +236,16 @@ class JudgeVerdict(BaseModel):
     hard_violations: int
     soft_violations: int
     checks: list[ConstraintCheck]
-    fit_score: int
+    fit_score: int  # la note du juge, telle qu'il l'a donnée
     comment: str
     suggested_fixes: list[str] = Field(default_factory=list)
+    # Points retirés par le code (profil cohérent, portefeuille relancé avec contraintes assouplies).
+    penalty: int = 0
+
+    @property
+    def ranked_score(self) -> int:
+        """La note qui départage le gagnant: celle du juge, moins la pénalité."""
+        return max(0, self.fit_score - self.penalty)
 
 
 # --------------------------------------------------------------------------- #
