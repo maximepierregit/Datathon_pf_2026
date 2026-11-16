@@ -333,7 +333,15 @@ def _floored(plan: ConstraintPlan, settings: dict, mu: np.ndarray, sigma: np.nda
     x = sub_w[: len(idx)]
     w = np.zeros(len(plan.symbols))
     w[idx] = x
-    return float(x @ mu[idx] - 0.5 * aversion * x @ sigma[np.ix_(idx, idx)] @ x), w
+    return _utility(x, mu[idx], sigma[np.ix_(idx, idx)], aversion, settings), w
+
+
+def _utility(w: np.ndarray, mu: np.ndarray, sigma: np.ndarray, aversion: float, settings: dict) -> float:
+    """L'utilité que maximise l'optimiseur, pénalités de config.REGULARIZATION comprises."""
+    from .optimizer import regularization_coefficients, regularization_penalty
+
+    lambda_d, lambda_v, threshold = regularization_coefficients(settings)
+    return float(w @ mu - 0.5 * aversion * w @ sigma @ w - regularization_penalty(w, sigma, lambda_d, lambda_v, threshold))
 
 
 def select_holdings(plan: ConstraintPlan, settings: dict, mu: np.ndarray, sigma: np.ndarray, aversion: float,
@@ -363,8 +371,15 @@ def select_holdings(plan: ConstraintPlan, settings: dict, mu: np.ndarray, sigma:
     added, removed, notes = [], [], []
     w = w0
 
+    from .optimizer import excess_variance, regularization_coefficients
+
+    lambda_d, lambda_v, threshold = regularization_coefficients(settings)
+    q = excess_variance(sigma, threshold)
+
     def marginal(current: np.ndarray) -> np.ndarray:
-        return mu - aversion * (sigma @ current[:risky_n])
+        """Gradient de l'utilité pénalisée: mu − A·Sigma·w − 2·lambda_D·w − 2·lambda_V·(q ⊙ w)."""
+        w_r = current[:risky_n]
+        return mu - aversion * (sigma @ w_r) - 2 * lambda_d * w_r - 2 * lambda_v * q * w_r
 
     def best_outside(current: np.ndarray, n: int, among=None) -> list[int]:
         gain = marginal(current)
@@ -499,7 +514,7 @@ def optimize_universe(
         diag["seconds_initial_optimization"] = round(time.perf_counter() - t, 2)
         diag["positive_weights_initial"] = int((w0[: len(risky)] > POSITIVE).sum())
         diag["weights_at_least_min_initial"] = int((w0[: len(risky)] >= holdings["min_held_weight"] - 1e-9).sum())
-        u0 = float(w0[: len(risky)] @ mu - 0.5 * aversion0 * w0[: len(risky)] @ sigma @ w0[: len(risky)])
+        u0 = _utility(w0[: len(risky)], mu, sigma, aversion0, settings)
         t = time.perf_counter()
         keep, selection = select_holdings(plan, settings, mu, sigma, aversion0, w0, holdings)
         diag.update(selection)

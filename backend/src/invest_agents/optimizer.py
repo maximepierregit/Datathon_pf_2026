@@ -388,17 +388,58 @@ def _linear_lp(plan: ConstraintPlan, low: np.ndarray, high: np.ndarray) -> np.nd
     return lp.x if lp.success else None
 
 
+def regularization_coefficients(cfg: Mapping[str, Any]) -> tuple[float, float, float]:
+    """(lambda_D, lambda_V, seuil de volatilité) de config.REGULARIZATION; (0, 0, 0,25) si absent."""
+    reg = cfg.get("regularization") or {}
+    return (float(reg.get("diversification_penalty", 0.0)), float(reg.get("high_volatility_penalty", 0.0)),
+            float(reg.get("volatility_threshold", 0.25)))
+
+
+def excess_variance(covariance_annual: np.ndarray, volatility_threshold: float = 0.25) -> np.ndarray:
+    """q_i = max(0, sigma_i^2 − seuil^2), avec sigma_i = sqrt(Sigma_ii) de la covariance annualisée de l'optimiseur."""
+    variance = np.maximum(np.diag(np.asarray(covariance_annual, dtype=float)), 0.0)
+    return np.maximum(variance - volatility_threshold ** 2, 0.0)
+
+
+def regularization_penalty(
+    weights: np.ndarray, covariance_annual: np.ndarray, lambda_d: float, lambda_v: float,
+    volatility_threshold: float = 0.25, q: np.ndarray | None = None,
+) -> float:
+    """lambda_D·Σ w_i² + lambda_V·Σ q_i·w_i²: concentration, puis gros poids dans les titres au-delà du seuil."""
+    w = np.asarray(weights, dtype=float)
+    q = excess_variance(covariance_annual, volatility_threshold) if q is None else q
+    return float(lambda_d * np.sum(w ** 2) + lambda_v * np.sum(q * w ** 2))
+
+
+def regularization_gradient(
+    weights: np.ndarray, covariance_annual: np.ndarray, lambda_d: float, lambda_v: float,
+    volatility_threshold: float = 0.25, q: np.ndarray | None = None,
+) -> np.ndarray:
+    """Gradient de la pénalité: 2·lambda_D·w + 2·lambda_V·(q ⊙ w)."""
+    w = np.asarray(weights, dtype=float)
+    q = excess_variance(covariance_annual, volatility_threshold) if q is None else q
+    return 2 * lambda_d * w + 2 * lambda_v * q * w
+
+
 def _solve_slsqp(
     mu: np.ndarray, sigma: np.ndarray, A: float, plan: ConstraintPlan,
     cfg: Mapping[str, Any], lower: np.ndarray, upper: np.ndarray,
     initial: np.ndarray,
 ) -> tuple[np.ndarray, str, int]:
-    """SLSQP avec gradient analytique et contraintes linéaires d'origine."""
+    """SLSQP avec gradient analytique et contraintes linéaires d'origine.
+
+    Maximise U = w'mu − A/2·w'Sigma w − lambda_D·Σ w² − lambda_V·Σ q·w² (pénalités de config.REGULARIZATION,
+    nulles par défaut). Les pénalités sont des préférences souples: aucune contrainte n'est ajoutée.
+    """
+    lambda_d, lambda_v, threshold = regularization_coefficients(cfg)
+    q = excess_variance(sigma, threshold)  # calculé une fois: la diagonale de Sigma ne change pas pendant la résolution
+
     def negative_utility(w: np.ndarray) -> float:
-        return float(-w @ mu + 0.5 * A * (w @ sigma @ w))
+        penalty = regularization_penalty(w, sigma, lambda_d, lambda_v, threshold, q=q)
+        return float(-w @ mu + 0.5 * A * (w @ sigma @ w) + penalty)
 
     def derivative(w: np.ndarray) -> np.ndarray:
-        return -mu + A * sigma @ w
+        return -mu + A * sigma @ w + regularization_gradient(w, sigma, lambda_d, lambda_v, threshold, q=q)
 
     _, groups = scipy_constraints(plan)
     result = minimize(
@@ -525,12 +566,14 @@ def optimize_weights(
     validate_weights(w, plan, enforce_minimum_holding=True)
     expected = float(w @ annual_mu)
     variance = max(0.0, float(w @ annual_sigma @ w))
+    lambda_d, lambda_v, threshold = regularization_coefficients(cfg)
+    penalty = regularization_penalty(w, annual_sigma, lambda_d, lambda_v, threshold)
     return PortfolioResult(
         weights=pd.Series(w, index=plan.symbols, name="weight"),
         expected_return_annual=expected,
         volatility_annual=float(np.sqrt(variance)),
         variance_annual=variance,
-        utility=float(expected - 0.5 * A * variance),
+        utility=float(expected - 0.5 * A * variance - penalty),  # utilité pénalisée, celle que l'optimiseur maximise
         risk_aversion_A=A,
         cash_weight=float(w[plan.index_of(plan.cash_symbol)]) if plan.cash_symbol else 0.0,
         solver_message=msg,
