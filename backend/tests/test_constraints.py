@@ -137,11 +137,13 @@ def test_16_no_inferred_etf_country_without_controls():
     assert "SPY" in r.symbols and "XBB.TO" in r.symbols
 
 
-def test_17_ticker_preference_require():
-    r = constraints.filter_eligible_universe(universe_demo(), agent(preferences={"symbol": {"NVDA": "require"}}))
+def test_17_ticker_preference_exact():
+    cfg = agent(preferences={"symbol": {"nvda": {"mode": "exact", "weight": 0.05}}})
+    r = constraints.filter_eligible_universe(universe_demo(), cfg)
     assert "NVDA" in r.required_symbols
-    p = constraints.build_constraint_plan(r.universe, agent(preferences={"symbol": {"NVDA": "require"}}))
-    assert p.lower_bounds[p.index_of("NVDA")] == pytest.approx(0.01)
+    p = constraints.build_constraint_plan(r.universe, cfg)
+    i = p.index_of("NVDA")
+    assert p.lower_bounds[i] == pytest.approx(0.05) and p.upper_bounds[i] == pytest.approx(0.05)
 
 
 def test_18_preference_exclude_group():
@@ -149,19 +151,20 @@ def test_18_preference_exclude_group():
     assert "LMT" not in r.symbols
 
 
-def test_19_group_require_without_amount_refused():
-    with pytest.raises(constraints.ConstraintError, match="require_group_min_weight"):
-        constraints.filter_eligible_universe(universe_demo(), agent(preferences={"theme": {"ia": "require"}}))
+def test_19_exact_without_amount_refused():
+    with pytest.raises(ValueError, match="exige un poids"):
+        agent(preferences={"theme": {"ia": {"mode": "exact"}}})
 
 
-def test_20_group_require_with_explicit_floor():
-    cfg = agent(preferences={"theme": {"ia": "require"}})
-    cfg["preferences"]["require_group_min_weight"] = 0.1
+def test_20_theme_exact_is_a_share_of_the_equity_sleeve():
+    cfg = agent(preferences={"theme": {"tech": {"mode": "exact", "weight": 0.1}}})
     r = constraints.filter_eligible_universe(universe_demo(), cfg)
     p = constraints.build_constraint_plan(r.universe, cfg)
-    g = next(g for g in p.groups if g.name == "theme:ia")
-    assert g.minimum == pytest.approx(0.1)
-    assert g.coefficients[p.index_of("NVDA")] == pytest.approx(1.0)
+    g = next(g for g in p.groups if g.name == "pref_exact:theme:tech")
+    assert g.minimum == 0.0 and g.maximum == 0.0  # (e_tech − 0,1 × equity) @ w = 0
+    assert g.coefficients[p.index_of("NVDA")] == pytest.approx(0.9)
+    assert g.coefficients[p.index_of("SPY")] == pytest.approx(-0.1)  # FNB tagué tech: poche, jamais groupe
+    assert g.coefficients[p.index_of("XBB.TO")] == 0.0
 
 
 def test_21_group_bound_sector_and_cash():
@@ -272,12 +275,10 @@ def test_34_bounded_scipy_constraints():
     assert np.isclose(linear[0].lb, 1.0)
 
 
-def test_35_soft_more_is_recorded_and_not_silently_enforced():
-    cfg = agent(preferences={"theme": {"ia": "more"}})
-    p = plan(cfg)
-    assert p.soft_preferences[0].level == "more"
-    with pytest.raises(constraints.UnresolvedPreferenceError, match="souples"):
-        constraints.assert_ready_for_optimization(p)
+@pytest.mark.parametrize("level", ["less", "more", "require"])
+def test_35_legacy_levels_are_refused_not_silently_ignored(level):
+    with pytest.raises(ValueError, match="inconnu"):
+        agent(preferences={"theme": {"ia": level}})
 
 
 def test_36_base_has_no_unresolved_soft_preference():

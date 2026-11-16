@@ -28,7 +28,7 @@ def test_agent_mode_input():
         "min_cash_weight": 0.10,
         "excluded_symbols": ["nvda", " NVDA "],
         "excluded_themes": ["vice"],
-        "preferences": {"theme": {"ia": "more"}},
+        "preferences": {"theme": {"ia": {"mode": "exact", "weight": 0.20}}},
         "group_limits": {"asset_class": {"Equity": {"max": 0.65}}},
     })
     assert cfg["execution_mode"] == "agent"
@@ -36,7 +36,7 @@ def test_agent_mode_input():
     assert cfg["constraints"]["min_cash_weight"] == 0.10
     assert cfg["constraints"]["excluded_symbols"] == ["NVDA"]
     assert cfg["constraints"]["excluded_themes"] == ["vice"]
-    assert cfg["agent_preferences"]["theme"]["ia"] == "more"
+    assert cfg["agent_preferences"]["theme"]["ia"] == {"mode": "exact", "weight": 0.20}
     assert cfg["constraints"]["group_limits"]["asset_class"]["Equity"]["max"] == 0.65
 
 
@@ -103,14 +103,18 @@ def test_rf_is_35_for_both_capm_variants():
 
 def test_cash_rate_is_separate_cad_assumption():
     cfg = config.get_base_settings()
-    # La version V4 suit l'hypothèse cash = 0% explicitement modifiée.
-    assert cfg["cash"]["annual_expected_return"] == 0.0
+    # Hypothèse de cash CAD de config.py (1 %), distincte du Rf CAPM de 3,5 %.
+    assert cfg["cash"]["annual_expected_return"] == pytest.approx(0.01)
+    assert cfg["cash"]["annual_expected_return"] != cfg["estimation"]["capm_shrinkage"]["rf_annual"]
 
 
 def test_ewma_full_history_and_capm_window():
+    """mu utilise l'historique individuel maximal de chaque titre: aucune fenêtre ne le tronque."""
     cfg = config.get_base_settings()
     assert cfg["estimation"]["ewma"]["lookback_observations"] is None
-    assert cfg["estimation"]["capm_shrinkage"]["lookback_observations"] == 756
+    assert cfg["estimation"]["capm_shrinkage"]["lookback_observations"] is None
+    assert cfg["estimation"]["capm_shrinkage"]["historical_lookback_observations"] is None
+    assert cfg["estimation"]["historical"]["lookback_observations"] is None
 
 
 def test_capm_full_history_is_valid_option():

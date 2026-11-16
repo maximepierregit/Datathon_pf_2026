@@ -46,7 +46,7 @@ import numpy as np
 import pandas as pd
 
 from . import factors
-from .config import RISK_AVERSION, get_agent_settings
+from .config import INSTRUMENT_SELECTION, RISK_AVERSION, get_agent_settings
 from .constraints import (
     ConstraintError,
     ConstraintInfeasibleError,
@@ -56,6 +56,7 @@ from .constraints import (
     build_constraint_plan,
     check_linear_feasibility,
     filter_eligible_universe,
+    preference_exposure,
     validate_weights,
 )
 from .market import UNKNOWN, Market, theme_tags
@@ -94,7 +95,6 @@ SPECS: dict[T, Spec] = {
                                     "Exclure un type d'instrument (Stock = action détenue en direct, Cryptocurrency = "
                                     "crypto détenue en direct, ETF = FNB)"),
     T.EXCLUDE_SYMBOL: Spec("symbol", "none", None, "Exclure un titre"),
-    T.EXCLUDE_THEME: Spec("theme", "none", None, "Exclure une thématique (actions et FNB étiquetés)"),
     T.MAX_SECTOR_WEIGHT: Spec("sector", "fraction", "max", "Poids maximal d'un secteur"),
     T.MIN_SECTOR_WEIGHT: Spec("sector", "fraction", "min", "Poids minimal d'un secteur"),
     T.MAX_COUNTRY_WEIGHT: Spec("country", "fraction", "max", "Poids maximal d'un pays"),
@@ -112,17 +112,46 @@ SPECS: dict[T, Spec] = {
     T.MAX_COUNTRY_SHARE: Spec("country", "fraction", "max",
                               "Part maximale de la poche actions dans un ou plusieurs pays"),
     T.MIN_THEME_SHARE: Spec("theme", "fraction", "min",
-                            "Part minimale de la poche actions dans une ou plusieurs thématiques"),
+                            "Part minimale de la poche actions dans une ou plusieurs thématiques (actions en direct "
+                            "étiquetées seulement)"),
     T.MAX_THEME_SHARE: Spec("theme", "fraction", "max",
-                            "Part maximale de la poche actions dans une ou plusieurs thématiques"),
+                            "Part maximale de la poche actions dans une ou plusieurs thématiques (actions en direct "
+                            "étiquetées seulement)"),
     # Exposition = moyenne des z-scores des actions détenues en direct, pondérée par leur poids (voir factors.py).
     T.MIN_FACTOR_EXPOSURE: Spec("factor", "score", "min",
                                 "Exposition minimale à un facteur, en écarts-types (0.5 = actions en moyenne un "
                                 "demi écart-type au-dessus de leur secteur)"),
     T.MAX_FACTOR_EXPOSURE: Spec("factor", "score", "max",
                                 "Exposition maximale à un facteur, en écarts-types (-0.2 = légèrement sous la moyenne)"),
+    T.EXCLUDE_THEME: Spec("theme", "none", None, "Exclure une thématique (actions détenues en direct seulement)"),
+    T.EXACT_ASSET_CLASS_WEIGHT: Spec("asset_class", "fraction", "exact",
+                                     "Poids exact d'une classe d'actifs, FNB compris (0.30 = exactement 30 %)"),
+    T.EXACT_INSTRUMENT_TYPE_WEIGHT: Spec("instrument_type", "fraction", "exact",
+                                         "Poids exact d'un type d'instrument (Cryptocurrency = crypto détenue en direct)"),
+    T.EXACT_COUNTRY_WEIGHT: Spec("country", "fraction", "exact",
+                                 "Part exacte de la poche actions tenue par les actions détenues en direct d'un ou "
+                                 "plusieurs pays (0.30 = 30 % de la poche; les FNB d'actions sont dans la poche, "
+                                 "jamais dans le groupe)"),
+    T.EXACT_SECTOR_WEIGHT: Spec("sector", "fraction", "exact",
+                                "Part exacte de la poche actions tenue par les actions détenues en direct d'un ou "
+                                "plusieurs secteurs"),
+    T.EXACT_THEME_WEIGHT: Spec("theme", "fraction", "exact",
+                               "Part exacte de la poche actions tenue par les actions détenues en direct d'une ou "
+                               "plusieurs thématiques"),
 }
 FACTOR_TYPES = {T.MIN_FACTOR_EXPOSURE, T.MAX_FACTOR_EXPOSURE}
+# Pourcentages exacts du questionnaire -> dimension du moteur (`config.agent_preferences`).
+EXACT_TYPES = {
+    T.EXACT_ASSET_CLASS_WEIGHT: "asset_class",
+    T.EXACT_INSTRUMENT_TYPE_WEIGHT: "instrument_type",
+    T.EXACT_COUNTRY_WEIGHT: "country",
+    T.EXACT_SECTOR_WEIGHT: "sector",
+    T.EXACT_THEME_WEIGHT: "theme",
+}
+MULTI_TARGET_TYPES = {T.EXACT_COUNTRY_WEIGHT, T.EXACT_SECTOR_WEIGHT, T.EXACT_THEME_WEIGHT}
+# Exclusions confiées au moteur comme préférences « exclude » des actions détenues en direct.
+STOCK_EXCLUSIONS = {T.EXCLUDE_SECTOR: "sector", T.EXCLUDE_COUNTRY: "country", T.EXCLUDE_THEME: "theme"}
+EXACT_TOL = 1e-3  # 0,1 point: les poids sont arrondis à 4 décimales, un groupe en somme plusieurs
 SCORE_RANGE = 3.0  # une exposition au-delà de ±3 écarts-types n'a pas de sens
 FACTOR_SLEEVE_MIN = 0.10  # avec une contrainte de facteur, au moins 10 % en actions notées (sinon 0 action la respecte)
 FACTOR_MARGIN = 0.01  # l'optimiseur vise un peu au-delà du seuil: les poids sont ensuite arrondis à 4 décimales
@@ -180,9 +209,11 @@ def catalog_prompt(allowed: dict[str, list[str]]) -> str:
         "Pour max_sector_weight et max_country_weight, la cible \"*\" signifie « chaque secteur » ou « chaque pays » "
         "(ex.: « pas plus de 25 % par secteur »). Pour un secteur ou un pays précis, utilise son libellé.",
         "Les *_share se calculent sur la poche actions, actions en direct et FNB d'actions (0.45 = 45 % de cette "
-        "poche). Secteur et pays: seules les actions en direct du groupe comptent pour la part. Thématique: tout "
-        "actif étiqueté compte, FNB thématiques compris (screen_assets avec `theme` les liste). Leur cible accepte "
-        "plusieurs libellés séparés par « | ».",
+        "poche); secteur, pays et thématique: seules les actions en direct du groupe comptent pour la part, jamais un "
+        "FNB, même étiqueté. Leur cible accepte plusieurs libellés séparés par « | ».",
+        "Les exact_*_weight sont des égalités (0.45 = exactement 45 %). Classe d'actifs et type d'instrument: part du "
+        "portefeuille total. Pays, secteur et thématique: part de la poche actions (actions en direct et FNB "
+        "d'actions), tenue par les seules actions détenues en direct du groupe; leur cible accepte « | ».",
         "",
         "VALEURS ACCEPTÉES POUR LES CIBLES (utiliser exactement ces libellés):",
         f"- sector: {', '.join(allowed['sector'])}",
@@ -206,7 +237,7 @@ def catalog_prompt(allowed: dict[str, list[str]]) -> str:
 # Validation
 # --------------------------------------------------------------------------- #
 def _match_target(dimension: str, raw: str, allowed: dict[str, list[str]]) -> tuple[Optional[str], list[str]]:
-    options = allowed[dimension]
+    options = allowed.get(dimension, [])
     lookup = {o.lower(): o for o in options}
     key = raw.strip().lower()
     if key in lookup:
@@ -224,7 +255,7 @@ def validate_constraint(c: Constraint, allowed: dict[str, list[str]]) -> tuple[O
             return None, f"« {c.type.value} » exige une cible ({DIMENSION_FR[spec.dimension]})."
         if c.type in WILDCARD_TYPES and c.target.strip() == ANY:
             matched, suggestions = ANY, []
-        elif c.type in SHARE_TYPES:  # une région: les pays absents de l'univers sont ignorés
+        elif c.type in SHARE_TYPES or c.type in MULTI_TARGET_TYPES:  # une région: pays absents ignorés
             found = [_match_target(spec.dimension, t, allowed) for t in share_targets(c)]
             matched = SEP.join(m for m, _ in found if m) or None
             suggestions = [s for _, more in found for s in more]
@@ -331,6 +362,39 @@ def detect_conflicts(constraints: list[Constraint]) -> list[str]:
         shares = sum((c.value or 0) for c in hard if c.type.value == f"min_{dim}_share")
         if shares > 1 + 1e-9:
             out.append(f"Conflit: la somme des parts minimales par {DIMENSION_FR[dim]} dépasse 100 % ({shares:.0%}).")
+    out += _exact_conflicts(hard)
+    return out
+
+
+def _exact_conflicts(hard: list[Constraint]) -> list[str]:
+    """Pourcentages exacts contre exclusions, planchers, plafonds, et sommes de groupes disjoints."""
+    out: list[str] = []
+    exact = [c for c in hard if c.type in EXACT_TYPES and c.target]
+    excluded = {(SPECS[c.type].dimension, t.lower()) for c in hard if SPECS[c.type].kind == "none" and c.target
+                for t in share_targets(c)}
+    bounds = {(SPECS[c.type].dimension, (c.target or "").lower(), SPECS[c.type].direction): c.value
+              for c in hard if c.type in GROUP_TYPES and c.target and c.value is not None}
+    for c in exact:
+        dim, value = EXACT_TYPES[c.type], c.value or 0.0
+        if value > 0 and any((dim, t.lower()) in excluded for t in share_targets(c)):
+            out.append(f"Conflit sur {c.target}: exclu, mais exactement {value:.0%} est demandé.")
+        low, high = bounds.get((dim, c.target.lower(), "min")), bounds.get((dim, c.target.lower(), "max"))
+        if (low is not None and low > value + 1e-9) or (high is not None and high < value - 1e-9):
+            out.append(f"Conflit sur {c.target}: exactement {value:.0%} demandé, hors de ses limites.")
+        # Pays, secteur, thématique ne comptent que des actions détenues en direct, de classe Equity.
+        no_stocks = ("instrument_type", "stock") in excluded or any(("asset_class", e) in excluded
+                                                                   for e in EQUITY_CLASSES)
+        if c.type in MULTI_TARGET_TYPES and value > 0 and no_stocks:
+            out.append(f"Conflit sur {c.target}: {value:.0%} demandé en actions détenues en direct, mais les actions "
+                       "sont exclues.")
+    # Des groupes disjoints d'une même dimension ne peuvent pas dépasser 100 % ensemble. Les thématiques se
+    # chevauchent (NVDA est ia et tech): jamais additionnées, comme deux dimensions différentes.
+    for dim in ("asset_class", "instrument_type", "country", "sector"):
+        groups = [c for c in exact if EXACT_TYPES[c.type] == dim]
+        labels = [{t.lower() for t in share_targets(c)} for c in groups]
+        total = sum(c.value or 0 for c in groups)
+        if len(groups) > 1 and sum(map(len, labels)) == len(set().union(*labels)) and total > 1 + 1e-9:
+            out.append(f"Conflit: les pourcentages exacts par {DIMENSION_FR[dim]} totalisent {total:.0%}.")
     return out
 
 
@@ -357,6 +421,11 @@ def describe(c: Constraint) -> str:
     elif c.type in SHARE_TYPES:
         sign = "≤" if spec.direction == "max" else "≥"
         label = f"Part de la poche actions, {DIMENSION_FR[spec.dimension]} {', '.join(share_targets(c))} {sign} {pct}"
+    elif c.type in MULTI_TARGET_TYPES:
+        label = (f"Part de la poche actions, {DIMENSION_FR[spec.dimension]} {', '.join(share_targets(c))} "
+                 f"(actions détenues en direct) = {pct}")
+    elif c.type in EXACT_TYPES:
+        label = f"Poids {DIMENSION_FR[spec.dimension]} {', '.join(share_targets(c))} = {pct}"
     elif c.type in FACTOR_TYPES:
         sign = "≥" if spec.direction == "min" else "≤"
         name = factors.FACTOR_FR.get(c.target or "", c.target)
@@ -401,12 +470,11 @@ def members(assets: pd.DataFrame, dimension: str, targets: Iterable[str]) -> pd.
 
 
 def share_members(assets: pd.DataFrame, c: Constraint) -> pd.Series:
-    """Les actifs qui comptent pour une part: actions en direct du secteur ou du pays, actifs d'actions étiquetés de la
-    thématique."""
+    """Les actifs qui comptent pour une part: les actions détenues en direct du secteur, du pays ou de la thématique.
+    Un FNB, même étiqueté, est dans la poche actions (dénominateur), jamais dans le groupe."""
     dimension = SHARE_TYPES[c.type][0]
-    base = (assets["asset_class"].astype(str).str.lower().isin(EQUITY_CLASSES) if dimension == "theme"
-            else assets["instrument_type"].astype(str).str.lower() == "stock")
-    return base & members(assets, dimension, share_targets(c))
+    stock = assets["instrument_type"].astype(str).str.lower() == "stock"
+    return stock & members(assets, dimension, share_targets(c))
 
 
 def in_share(market: Market, symbol: str, c: Constraint) -> bool:
@@ -461,15 +529,32 @@ def agent_request(
     kept = [c for c in constraints if c.hard or not hard_only]
     excluded_symbols: set[str] = set()
     excluded_classes: set[str] = set()
+    excluded_types: set[str] = set()
+    preferences: dict[str, dict[str, dict[str, Any]]] = {}
     required: dict[str, float] = {}
     group_limits: dict[str, dict[str, dict[str, float]]] = {}
     cap: Optional[float] = None
+
+    def prefer(dimension: str, group: str, mode: str, weight: Optional[float] = None) -> None:
+        current = preferences.setdefault(dimension, {}).get(group)
+        new = {"mode": mode, "weight": weight}
+        if current is not None and current != new:
+            raise ConstraintInfeasibleError(
+                f"{DIMENSION_FR[dimension]} {group}: {current['mode']} et {mode} demandés en même temps.")
+        preferences[dimension][group] = new
 
     for c in kept:
         spec = SPECS[c.type]
         if c.type is T.EXCLUDE_ASSET_CLASS and c.target:
             excluded_classes.add(c.target)
-        elif spec.kind == "none" and c.target:  # secteur, pays, type d'instrument, symbole
+        elif c.type is T.EXCLUDE_INSTRUMENT_TYPE and c.target:
+            excluded_types.add(c.target)
+        elif c.type in STOCK_EXCLUSIONS and c.target:  # actions détenues en direct seulement
+            for target in share_targets(c):
+                prefer(STOCK_EXCLUSIONS[c.type], target, "exclude")
+        elif c.type in EXACT_TYPES and c.target and c.value is not None:
+            prefer(EXACT_TYPES[c.type], c.target, "exact", float(c.value))
+        elif spec.kind == "none" and c.target:  # symbole
             excluded_symbols.update(_targets(market, spec.dimension or "symbol", c.target))
         elif c.type is T.MIN_SYMBOL_WEIGHT and c.target and c.value:
             for s in _targets(market, "symbol", c.target):
@@ -491,6 +576,14 @@ def agent_request(
         "excluded_symbols": sorted(excluded_symbols),
         "excluded_asset_classes": sorted(excluded_classes),
     }
+    # Question 1: les types exclus forment l'un des trois modes du moteur, sinon restent des exclusions de type.
+    remaining = {t for t in INSTRUMENT_SELECTION["mixed"] if t.lower() not in {e.lower() for e in excluded_types}}
+    mode = next((m for m, types in INSTRUMENT_SELECTION.items() if set(types) == remaining), None)
+    request["instrument_selection"] = mode or "mixed"
+    if mode is None and excluded_types:
+        request["excluded_instrument_types"] = sorted(excluded_types)
+    if preferences:
+        request["preferences"] = preferences
     if cap is not None:
         request["max_weight_per_asset"] = cap
     if required:
@@ -705,6 +798,10 @@ def evaluate(market: Market, weights: dict[str, float], constraints: list[Constr
         col = DIMENSION_COLUMN[dimension]
         return sum(w for s, w in held.items() if str(a.loc[s, col]).lower() == t)
 
+    def preference_weight(dimension: str, target: str) -> float:
+        """Même coefficient que le moteur: pays, secteur et thématique ne comptent que les actions en direct."""
+        return sum(w * preference_exposure(s, a.loc[s], dimension, target) for s, w in held.items())
+
     def max_group_weight(dimension: str) -> float:
         col = DIMENSION_COLUMN[dimension]
         sums: dict[str, float] = {}
@@ -748,6 +845,20 @@ def evaluate(market: Market, weights: dict[str, float], constraints: list[Constr
             target = v or 0.0
             passed = actual is not None and (actual >= target - FTOL if spec.direction == "min"
                                              else actual <= target + FTOL)
+        elif c.type in MULTI_TARGET_TYPES:  # part de la poche actions; sans poche actions, une part > 0 manque
+            equity = sum(w for s, w in held.items() if is_equity(market, s))
+            group = preference_weight(EXACT_TYPES[c.type], c.target or "")
+            if equity > HELD:
+                actual = group / equity
+                passed = abs(actual - (v or 0.0)) <= EXACT_TOL / equity
+            else:
+                passed = (v or 0.0) <= EXACT_TOL and group <= HELD
+        elif c.type in EXACT_TYPES:
+            actual = preference_weight(EXACT_TYPES[c.type], c.target or "")
+            passed = abs(actual - (v or 0.0)) <= EXACT_TOL
+        elif c.type is T.EXCLUDE_THEME:
+            actual = preference_weight("theme", c.target or "")
+            passed = actual <= HELD
         elif spec.kind == "none":
             actual = group_weight(spec.dimension or "symbol", c.target or "")
             passed = actual <= HELD
@@ -779,7 +890,8 @@ def evaluate(market: Market, weights: dict[str, float], constraints: list[Constr
 
 
 __all__ = [
-    "ANY", "DIMENSION_COLUMN", "DIMENSION_FR", "HELD", "SEP", "SHARE_TYPES", "SPECS", "TOL", "WTOL", "Spec",
+    "ANY", "DIMENSION_COLUMN", "DIMENSION_FR", "EXACT_TOL", "EXACT_TYPES", "HELD", "MULTI_TARGET_TYPES", "SEP",
+    "SHARE_TYPES", "SPECS", "TOL", "WTOL", "Spec",
     "agent_request", "audit", "catalog_prompt", "describe", "detect_conflicts", "engine_universe",
     "evaluate", "excluded_mask", "in_share", "is_equity", "is_fund", "is_stock", "members", "merge_constraints",
     "plan_for", "screen", "settings_for", "share_members", "share_targets", "validate_all", "validate_constraint",

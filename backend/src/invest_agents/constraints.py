@@ -7,7 +7,16 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
-from .config import PREFERENCE_DIMENSIONS, PREFERENCE_LEVELS, UNKNOWN_EXPOSURE_POLICIES, validate_settings
+from .config import (
+    EQUITY_SLEEVE_CLASSES,
+    INSTRUMENT_SELECTION,
+    PREFERENCE_DIMENSIONS,
+    PREFERENCE_GROUP_SEPARATOR,
+    PREFERENCE_MODES,
+    STOCK_ONLY_PREFERENCE_DIMENSIONS,
+    UNKNOWN_EXPOSURE_POLICIES,
+    validate_settings,
+)
 
 
 # Les pays/secteurs de l'univers sont fiables uniquement pour les actions.
@@ -249,30 +258,87 @@ def _exposure(
     return {}, False
 
 
-def _preferences(settings: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+def _preferences(settings: Mapping[str, Any]) -> dict[str, dict[str, dict[str, Any]]]:
+    """Préférences du questionnaire, {dimension: {groupe: {"mode", "weight"}}}, groupes en minuscules.
+
+    Neutre n'apparaît pas : il n'ajoute aucune contrainte. Un groupe peut réunir plusieurs libellés (« a|b »).
+    """
     raw = settings.get("agent_preferences", {})
     if not isinstance(raw, Mapping):
         raise ConstraintError("agent_preferences invalide.")
-    out: dict[str, dict[str, str]] = {}
+    out: dict[str, dict[str, dict[str, Any]]] = {}
     for dimension, groups in raw.items():
         if dimension not in PREFERENCE_DIMENSIONS or not isinstance(groups, Mapping):
             raise ConstraintError(f"Préférences invalides : {dimension!r}.")
-        out[dimension] = {}
-        for group, level in groups.items():
-            if _key(level) not in PREFERENCE_LEVELS:
-                raise ConstraintError(f"Préférence {dimension}/{group} invalide.")
-            out[dimension][_key(group)] = _key(level)
+        for group, pref in groups.items():
+            if not isinstance(pref, Mapping) or _key(pref.get("mode")) not in PREFERENCE_MODES:
+                raise ConstraintError(f"Préférence {dimension}/{group} invalide : {pref!r}.")
+            mode = _key(pref["mode"])
+            if mode == "neutral":
+                continue
+            weight = None if mode == "exclude" else _fraction(pref.get("weight"), f"Préférence {dimension}/{group}")
+            out.setdefault(dimension, {})[_key(group)] = {"mode": mode, "weight": weight}
     return out
 
 
+def _group_labels(group: str) -> set[str]:
+    return {_key(p) for p in str(group).split(PREFERENCE_GROUP_SEPARATOR) if _key(p)}
+
+
+def preference_exposure(symbol: str, row: pd.Series, dimension: str, group: str) -> float:
+    """Coefficient e_g d'un instrument pour un groupe de préférence (0 ou 1).
+
+    Classes d'actifs, types d'instrument, symboles : tout instrument admissible, FNB compris.
+    Régions, pays, secteurs, industries, thématiques : actions détenues en direct SEULEMENT. Un FNB ou une crypto
+    vaut 0, même avec un look-through : il ne compte jamais pour satisfaire ni pour violer ces préférences.
+    Une action peut appartenir à plusieurs thématiques (tags « ia;tech » du Parquet).
+    """
+    labels = _group_labels(group)
+    if dimension == "symbol":
+        return float(_key(symbol) in labels)
+    if dimension in STOCK_ONLY_PREFERENCE_DIMENSIONS:
+        if _key(row.get("instrument_type")) != "stock":
+            return 0.0
+        if dimension == "theme":
+            tags = {_key(t) for t in _text(row.get("theme")).split(";") if _key(t)}
+            return float(bool(tags & labels))
+    return float(_key(row.get(dimension)) in labels)
+
+
+def _preference_exclusions(settings: Mapping[str, Any]) -> dict[str, set[str]]:
+    """Groupes à 0 % : « exclude », ou « exact » à 0 %."""
+    out: dict[str, set[str]] = {}
+    for dimension, groups in _preferences(settings).items():
+        for group, pref in groups.items():
+            if pref["mode"] == "exclude" or (pref["weight"] is not None and pref["weight"] <= TOL):
+                out.setdefault(dimension, set()).add(group)
+    return out
+
+
+def _exact_groups(settings: Mapping[str, Any]) -> dict[str, dict[str, float]]:
+    """Pourcentages exacts strictement positifs, {dimension: {groupe: fraction}}."""
+    out: dict[str, dict[str, float]] = {}
+    for dimension, groups in _preferences(settings).items():
+        for group, pref in groups.items():
+            if pref["mode"] == "exact" and pref["weight"] > TOL:
+                out.setdefault(dimension, {})[group] = pref["weight"]
+    return out
+
+
+def _allowed_instruments(settings: Mapping[str, Any]) -> set[str]:
+    selection = settings["constraints"]["instrument_selection"]
+    if selection not in INSTRUMENT_SELECTION:
+        raise ConstraintError(f"instrument_selection invalide : {selection!r}.")
+    return {_key(t) for t in INSTRUMENT_SELECTION[selection]}
+
+
 def _hard_exclusions(settings: Mapping[str, Any]) -> dict[str, set[str]]:
+    """Exclusions des champs excluded_* (contrat BASE et agent). Les préférences ont leurs propres règles."""
     c = settings["constraints"]
     out: dict[str, set[str]] = {}
     for dimension, fieldname in EXCLUSION_KEYS.items():
         out[dimension] = {_key(s) for s in c.get(fieldname, [])}
     out["symbol"] = {_key(s) for s in c.get("excluded_symbols", [])}
-    for dimension, groups in _preferences(settings).items():
-        out.setdefault(dimension, set()).update(g for g, level in groups.items() if level == "exclude")
     return out
 
 
@@ -280,29 +346,13 @@ def _required_symbols(settings: Mapping[str, Any]) -> tuple[str, ...]:
     c = settings["constraints"]
     required = {_ticker(s) for s in c["required_symbols"]}
     required.update(_ticker(s) for s in c["required_symbol_min_weights"])
-    required.update(g.upper() for g, level in _preferences(settings).get("symbol", {}).items()
-                    if level == "require")
+    required.update(g.upper() for g in _exact_groups(settings).get("symbol", {}))
     return tuple(sorted(required))
 
 
 def _required_groups(settings: Mapping[str, Any]) -> dict[str, dict[str, float]]:
-    """Seuils d'une préférence require GROUPE, uniquement si explicites."""
-    result: dict[str, dict[str, float]] = {}
-    minimum = settings["preferences"]["require_group_min_weight"]
-    for dimension, groups in _preferences(settings).items():
-        if dimension == "symbol":
-            continue
-        for group, level in groups.items():
-            if level == "require":
-                if minimum is None:
-                    raise ConstraintError(
-                        f"Préférence require {dimension}/{group} : renseigner "
-                        "preferences.require_group_min_weight dans config.py avant l'optimisation.")
-                w = _fraction(minimum, "preferences.require_group_min_weight")
-                if w <= 0:
-                    raise ConstraintError("Une exigence de présence doit avoir un minimum strictement positif.")
-                result.setdefault(dimension, {})[group] = w
-    return result
+    """Groupes qui exigent au moins un instrument exposé : les pourcentages exacts > 0 (hors symboles)."""
+    return {d: g for d, g in _exact_groups(settings).items() if d != "symbol"}
 
 
 def _unknown_policy(settings: Mapping[str, Any]) -> str:
@@ -316,16 +366,17 @@ def _unknown_policy(settings: Mapping[str, Any]) -> str:
 def _controlled_economic_dimensions(settings: Mapping[str, Any]) -> set[str]:
     """Dimensions exigeant une exposition connue, sinon l'instrument est rejeté.
 
-    Exclusions et présences obligatoires l'exigent toujours (une garantie est nécessaire).
+    Les exclusions excluded_* l'exigent toujours (une garantie est nécessaire).
     Les plafonds (group_limits) l'exigent seulement en politique "strict".
+    Les préférences du questionnaire n'y entrent pas : sur ces dimensions, elles ne comptent que les actions
+    détenues en direct, dont l'exposition est connue ; un FNB y vaut 0 par définition, sans incertitude.
     """
     exclusions = _hard_exclusions(settings)
     group_limits = settings["constraints"]["group_limits"]
-    required_groups = _required_groups(settings)
     capped_strictly = _unknown_policy(settings) == "strict"
     return {
         d for d in ECONOMIC_DIMENSIONS
-        if exclusions.get(d) or required_groups.get(d) or (capped_strictly and group_limits.get(d))
+        if exclusions.get(d) or (capped_strictly and group_limits.get(d))
     }
 
 
@@ -364,6 +415,9 @@ def filter_eligible_universe(
     c = cfg["constraints"]
     required = _required_symbols(cfg)
     exclusions = _hard_exclusions(cfg)
+    pref_exclusions = _preference_exclusions(cfg)
+    instruments = _allowed_instruments(cfg)
+    selection = c["instrument_selection"]
     economic_controls = _controlled_economic_dimensions(cfg)
     minimum_history = cfg["data"]["min_observations"]
     ineligible: dict[str, list[str]] = {}
@@ -382,8 +436,8 @@ def filter_eligible_universe(
         if float(row["observations"]) < minimum_history:
             reasons.append(f"short_history:<{minimum_history}")
         instrument = _key(row.get("instrument_type"))
-        if c["etf_only"] and instrument != "etf":
-            reasons.append("etf_only")
+        if instrument not in instruments:
+            reasons.append(f"instrument_selection:{selection}")
         for dimension, groups in exclusions.items():
             if not groups:
                 continue
@@ -391,6 +445,10 @@ def filter_eligible_universe(
             hits = sorted(g for g in groups if exposures.get(g, 0) > TOL)
             if hits:
                 reasons.append(f"excluded_{dimension}:" + ",".join(hits))
+        for dimension, groups in pref_exclusions.items():
+            hits = sorted(g for g in groups if preference_exposure(symbol, row, dimension, g) > TOL)
+            if hits:
+                reasons.append(f"preference_exclude_{dimension}:" + ",".join(hits))
         for dimension in economic_controls:
             _, complete = _exposure(symbol, row, dimension, exposure_overrides)
             if not complete:
@@ -414,11 +472,9 @@ def filter_eligible_universe(
     chosen = meta.loc[~meta.index.isin(ineligible)].copy()
     if chosen.empty:
         raise ConstraintInfeasibleError("Aucun instrument admissible après filtrage strict.")
-    for dimension, groups in _required_groups(cfg).items():
-        for group in groups:
-            if not any(_exposure(s, row, dimension, exposure_overrides)[0].get(group, 0) > TOL
-                       for s, row in chosen.iterrows()):
-                raise ConstraintInfeasibleError(f"Aucun instrument ne peut satisfaire require {dimension}/{group}.")
+    contradictions = preference_contradictions(chosen, cfg)
+    if contradictions:
+        raise ConstraintInfeasibleError("Préférences incompatibles : " + " ".join(contradictions))
 
     rejects = pd.DataFrame([
         {"symbol": symbol, "reasons": tuple(reasons)}
@@ -434,6 +490,40 @@ def filter_eligible_universe(
     if exclusions.get("theme"):
         notes.append("Exclusion thématique fondée sur les tags du Parquet, sans garantie look-through des ETF.")
     return ScreeningResult(chosen.sort_index(), rejects, required, tuple(notes))
+
+
+def preference_contradictions(eligible: pd.DataFrame, settings: Mapping[str, Any]) -> list[str]:
+    """Contradictions entre réponses, détectées AVANT l'optimisation, sur l'univers déjà filtré.
+
+    - un pourcentage exact > 0 qu'aucun instrument admissible ne peut porter (FNB seulement + Technologie 45 %,
+      titres individuels seulement + Fixed Income 30 %, actions exclues + Canada 30 %) ;
+    - des pourcentages exacts qui dépassent 100 % sur des groupes DISJOINTS d'une même dimension. Les thématiques se
+      chevauchent (NVDA est à la fois ia et tech) : leurs pourcentages ne sont jamais additionnés, et des dimensions
+      différentes ne le sont pas non plus. La faisabilité complète (plafonds, chevauchements) relève ensuite de
+      `check_linear_feasibility`.
+    """
+    meta = _normalize_universe(eligible)
+    selection = settings["constraints"]["instrument_selection"]
+    out: list[str] = []
+    for dimension, groups in _required_groups(settings).items():
+        for group, weight in sorted(groups.items()):
+            if any(preference_exposure(s, row, dimension, group) > TOL for s, row in meta.iterrows()):
+                continue
+            scope = " (actions détenues en direct seulement)" if dimension in STOCK_ONLY_PREFERENCE_DIMENSIONS else ""
+            why = ""
+            if dimension in STOCK_ONLY_PREFERENCE_DIMENSIONS and selection == "etf_only":
+                why = " : FNB seulement ne permet aucune action, et les FNB ne comptent pas ici"
+            out.append(f"{dimension}/{group} = {weight:.0%} demandé, mais aucun instrument admissible n'y est "
+                       f"exposé{scope}{why}.")
+    for dimension, groups in _exact_groups(settings).items():
+        if dimension == "theme" or len(groups) < 2:
+            continue
+        labels = [_group_labels(g) for g in groups]
+        disjoint = sum(len(x) for x in labels) == len(set().union(*labels))
+        total = sum(groups.values())
+        if disjoint and total > 1 + TOL:
+            out.append(f"Les pourcentages exacts de {dimension} totalisent {total:.0%}, plus que 100 %.")
+    return out
 
 
 def _pairwise_duplicate(
@@ -497,12 +587,11 @@ def select_candidates(
     need = _required_groups(cfg)
     for dimension, groups in need.items():
         for group in sorted(groups):
-            already = any(_exposure(s, all_meta.loc[s], dimension, exposure_overrides)[0].get(group, 0) > TOL
-                          for s in selected)
+            already = any(preference_exposure(s, all_meta.loc[s], dimension, group) > TOL for s in selected)
             if already:
                 continue
             matches = [s for s in remaining
-                       if _exposure(s, all_meta.loc[s], dimension, exposure_overrides)[0].get(group, 0) > TOL]
+                       if preference_exposure(s, all_meta.loc[s], dimension, group) > TOL]
             if not matches:
                 raise ConstraintInfeasibleError(f"Aucun candidat possible pour {dimension}/{group}.")
             matches.sort(key=lambda s: (-float(all_meta.loc[s, "observations"]), s))
@@ -603,7 +692,6 @@ def _group_specs(
     flagged = _flagged_dimensions(settings)
     unknown: dict[str, set[str]] = {}
     inert: list[str] = []
-    req_groups = _required_groups(settings)
     bounds_by_dimension: dict[str, dict[str, dict[str, float]]] = {}
     for dimension, groups in c["group_limits"].items():
         for group_name, bounds in groups.items():
@@ -611,10 +699,6 @@ def _group_specs(
             normalized = bounds_by_dimension.setdefault(dimension, {}).setdefault(label, {})
             for k, v in bounds.items():
                 normalized[k] = _fraction(v, f"group_limits.{dimension}.{group_name}.{k}")
-    for dimension, groups in req_groups.items():
-        for group_name, minimum in groups.items():
-            bound = bounds_by_dimension.setdefault(dimension, {}).setdefault(group_name, {})
-            bound["min"] = max(bound.get("min", 0), minimum)
     for dimension, param in (
         ("asset_class", "max_weight_by_asset_class"),
         ("instrument_type", "max_weight_by_instrument_type"),
@@ -648,6 +732,38 @@ def _group_specs(
             if high < 1.0 - TOL and not np.any(coeff > TOL):
                 inert.append(f"{dimension}:{group_name}")
             linear.append(GroupConstraint(f"{dimension}:{group_name}", coeff, low, high))
+
+    # Préférences du questionnaire. Les symboles passent par les bornes (build_constraint_plan).
+    # - Classes d'actifs, types d'instrument : e_g @ w = p, en fraction du portefeuille total (cash inclus).
+    # - Régions, pays, secteurs, thématiques (actions détenues en direct seulement) : part p de la poche actions,
+    #   (e_g − p × equity) @ w = 0, où equity vaut 1 pour tout instrument de classe Equity (FNB d'actions compris).
+    #   Avec p > 0, au moins une action du groupe doit être détenue (>= min_held_weight) : sinon une poche actions
+    #   vide satisferait l'égalité à vide (0 = p × 0).
+    # - Exclure, ou 0 % : e_g @ w = 0.
+    min_held = _fraction(c["min_held_weight"], "min_held_weight")
+    equity = np.array([float(s in meta.index and _key(meta.loc[s].get("asset_class")) in
+                             {_key(e) for e in EQUITY_SLEEVE_CLASSES}) for s in symbols], dtype=float)
+    for dimension, groups in sorted(_preferences(settings).items()):
+        if dimension == "symbol":
+            continue
+        for group_name, pref in sorted(groups.items()):
+            target = 0.0 if pref["mode"] == "exclude" else float(pref["weight"])
+            coeff = np.array([
+                preference_exposure(s, meta.loc[s], dimension, group_name) if s in meta.index else 0.0
+                for s in symbols
+            ], dtype=float)
+            name = f"pref_{pref['mode']}:{dimension}:{group_name}"
+            if target > TOL and not np.any(coeff > TOL):
+                raise ConstraintInfeasibleError(
+                    f"Aucun actif n'est exposé à {dimension}/{group_name} ({target:.0%} exact demandé).")
+            if target <= TOL:
+                if np.any(coeff > TOL):  # sinon déjà garanti par le filtrage; 0·w = 0 rendrait SLSQP singulier
+                    linear.append(GroupConstraint(name, coeff, 0.0, 0.0))
+            elif dimension in STOCK_ONLY_PREFERENCE_DIMENSIONS:
+                linear.append(GroupConstraint(name, coeff - target * equity, 0.0, 0.0))
+                linear.append(GroupConstraint(f"pref_presence:{dimension}:{group_name}", coeff, min_held, 1.0))
+            else:
+                linear.append(GroupConstraint(name, coeff, target, target))
     return linear, {d: tuple(sorted(v)) for d, v in sorted(unknown.items())}, tuple(inert)
 
 
@@ -690,6 +806,16 @@ def build_constraint_plan(
         i = symbols.index(ticker)
         floor = c["required_symbol_min_weights"].get(ticker, min_held)
         lower[i] = max(lower[i], _fraction(floor, "required_symbol_min_weights." + ticker))
+    # Pourcentage exact sur un titre : borne inférieure = borne supérieure.
+    for ticker, weight in _exact_groups(cfg).get("symbol", {}).items():
+        i = symbols.index(_ticker(ticker))
+        if weight < min_held - TOL:
+            raise ConstraintInfeasibleError(
+                f"{ticker.upper()} : {weight:.2%} exact demandé, sous le minimum de {min_held:.0%} par titre détenu.")
+        if weight > upper[i] + TOL:
+            raise ConstraintInfeasibleError(
+                f"{ticker.upper()} : {weight:.0%} exact demandé, au-dessus du plafond de {upper[i]:.0%} par titre.")
+        lower[i], upper[i] = weight, weight
     if cash_symbol:
         lower[-1] = _fraction(c["min_cash_weight"], "min_cash_weight")
         upper[-1] = _fraction(c["max_cash_weight"], "max_cash_weight")
@@ -707,26 +833,13 @@ def build_constraint_plan(
     for name in inert_groups:
         notices.append(f"Plafond {name} INERTE : aucun candidat n'a d'exposition connue à ce groupe "
                        "(nom inexistant dans les métadonnées, ou look-through absent).")
-    soft: list[SoftPreference] = []
-    prefs = _preferences(cfg)
-    pref_cfg = cfg["preferences"]
-    for dimension, group_levels in prefs.items():
-        for group, level in group_levels.items():
-            if level in {"less", "more"}:
-                calibrated = (
-                    pref_cfg["soft_penalty_strength"] is not None
-                    and pref_cfg["reference_allocation_source"] is not None
-                    and pref_cfg[f"{level}_target_delta"] is not None
-                )
-                soft.append(SoftPreference(dimension, group, level, calibrated))
-    if soft:
-        notices.append("Les préférences less/more exigent une pénalisation calibrée dans optimizer.py.")
+    # Exclure / Neutre / Exact sont tous matérialisés en contraintes dures : plus aucune préférence souple.
     return ConstraintPlan(
         symbols=symbols, risky_symbols=risky, lower_bounds=lower, upper_bounds=upper,
         groups=tuple(groups), required_symbols=required, minimum_held_weight=min_held,
         cash_symbol=cash_symbol, sum_tolerance=float(cfg["optimization"]["sum_weights_tolerance"]),
         constraint_tolerance=float(cfg["optimization"]["constraint_tolerance"]),
-        soft_preferences=tuple(soft), notices=tuple(notices),
+        soft_preferences=(), notices=tuple(notices),
         unknown_exposures=unknown_exposures, inert_groups=inert_groups,
     )
 
@@ -869,6 +982,7 @@ __all__ = [
     "ConstraintPlan", "GroupConstraint", "ScreeningResult", "SoftPreference",
     "UnresolvedPreferenceError", "assert_ready_for_optimization",
     "build_constraint_plan", "check_linear_feasibility", "filter_eligible_universe",
+    "preference_contradictions", "preference_exposure",
     "scipy_constraints", "select_candidates", "summarize_plan", "unknown_exposure_weights",
     "validate_weights",
 ]

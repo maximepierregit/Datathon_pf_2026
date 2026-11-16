@@ -10,7 +10,7 @@ Aucun rendement manquant n'est fabriqué (ni zéro, ni report de la veille).
 from __future__ import annotations
 import difflib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Mapping, Optional
 
@@ -25,6 +25,7 @@ from .schemas import PortfolioMetrics
 logger = logging.getLogger(__name__)
 
 UNKNOWN = "Non classé"
+# `theme`: tags vérifiés du Parquet (« ia;tech »), lus par les préférences thématiques des actions détenues en direct.
 META_COLUMNS = ["name", "sector", "industry", "country", "currency", "asset_class", "instrument_type", "market",
                 "category", "category_group", "theme"]
 
@@ -187,6 +188,98 @@ def estimate_covariance(returns: pd.DataFrame, settings: Mapping[str, Any]) -> n
 
 
 # --------------------------------------------------------------------------- #
+# Univers d'optimisation: filtre d'historique et Sigma commune (Ledoit-Wolf)
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class HistoryFilter:
+    """Titres dont l'historique couvre l'horizon de covariance, et ceux qui en sont exclus (avec la raison)."""
+
+    requested_start: pd.Timestamp
+    horizon_start: pd.Timestamp  # première date du panel >= requested_start (le 1er janvier n'est pas une séance)
+    latest_allowed_start: pd.Timestamp  # horizon_start + tolérance de calendrier
+    eligible: tuple[str, ...]
+    excluded: pd.DataFrame  # index symbol: instrument_type, asset_class, first_date, reason
+
+
+def history_filter(returns: pd.DataFrame, assets: pd.DataFrame, settings: Mapping[str, Any]) -> HistoryFilter:
+    """Filtre 2: un titre doit avoir un rendement exploitable au tout début de l'horizon (à quelques séances près).
+
+    La tolérance couvre seulement les calendriers différents (jours fériés, crypto qui cote le 1er janvier) et
+    l'initialisation des rendements. Un titre listé des semaines plus tard est exclu, quel que soit son nombre
+    d'observations. Rien n'est retiré des données: le titre sort seulement de l'univers d'optimisation.
+    """
+    cfg = settings["covariance_history"]
+    requested = pd.Timestamp(cfg["start_date"])
+    dates = returns.index[returns.index >= requested]
+    if dates.empty:
+        raise ValueError(f"Aucune date du panel n'est postérieure au début demandé ({requested.date()}).")
+    horizon = pd.Timestamp(dates[0])
+    limit = pd.Timestamp(np.busday_offset(horizon.date(), int(cfg["max_start_delay_business_days"]), roll="forward"))
+    first = returns.loc[returns.index >= requested].apply(lambda s: s.first_valid_index())
+    rows, eligible = [], []
+    for symbol in returns.columns:
+        start = first.get(symbol)
+        if not cfg["require_full_horizon"] or (start is not None and pd.notna(start) and pd.Timestamp(start) <= limit):
+            eligible.append(symbol)
+            continue
+        meta = assets.loc[symbol] if symbol in assets.index else {}
+        reason = "aucun rendement depuis le début de l'horizon" if start is None or pd.isna(start) else (
+            f"premier rendement le {pd.Timestamp(start).date()}, après le {limit.date()}")
+        rows.append({"symbol": symbol, "instrument_type": meta.get("instrument_type"),
+                     "asset_class": meta.get("asset_class"),
+                     "first_date": None if start is None or pd.isna(start) else pd.Timestamp(start).date(),
+                     "reason": reason})
+    excluded = pd.DataFrame(rows, columns=["symbol", "instrument_type", "asset_class", "first_date", "reason"])
+    return HistoryFilter(requested, horizon, limit, tuple(eligible),
+                         excluded.set_index("symbol").sort_values("first_date"))
+
+
+def synchronized_returns(returns: pd.DataFrame, horizon_start: pd.Timestamp) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Rendements des titres sur leurs dates COMMUNES depuis le début de l'horizon, sans rien imputer.
+
+    Supprimer simplement les dates non communes perdrait les rendements des marchés ouverts ce jour-là (un jour
+    férié américain est une séance à Toronto). On recompose donc chaque titre en indice de rendement total sur ses
+    propres séances, puis on prend le rendement de cet indice entre deux dates communes consécutives: un rendement
+    de deux jours couvre le jour férié, et le rendement cumulé de chaque titre est exactement conservé.
+    """
+    window = returns.loc[returns.index >= horizon_start]
+    levels = (1.0 + window.fillna(0.0)).cumprod().where(window.notna())  # niveaux aux seules séances du titre
+    common = levels.dropna(how="any")
+    base = pd.DataFrame(1.0, index=[horizon_start - pd.Timedelta(days=1)], columns=levels.columns)
+    synced = pd.concat([base, common]).pct_change(fill_method=None).iloc[1:]
+    span_years = (common.index[-1] - base.index[0]).days / 365.25 if len(common) else 0.0
+    info = {
+        "effective_start_date": str(common.index[0].date()) if len(common) else None,
+        "effective_end_date": str(common.index[-1].date()) if len(common) else None,
+        "window_dates": int(len(window)),
+        "common_observations": int(len(synced)),
+        "calendar_dates_removed": int(len(window) - len(common)),
+        "periods_per_year_effective": round(len(synced) / span_years, 2) if span_years > 0 else None,
+    }
+    return synced, info
+
+
+def ledoit_wolf_universe(synced: pd.DataFrame, settings: Mapping[str, Any],
+                         periods_per_year: float) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Une seule matrice Ledoit-Wolf (cible identité mise à l'échelle) sur tout l'univers synchronisé, annualisée
+    selon la fréquence réelle des observations communes."""
+    from sklearn.covariance import LedoitWolf
+
+    if synced.isna().any().any():
+        raise ValueError("La matrice des rendements synchronisés contient encore des valeurs manquantes.")
+    if len(synced) < settings["covariance"]["min_joint_observations"]:
+        raise ValueError(f"Seulement {len(synced)} dates communes pour {synced.shape[1]} titres.")
+    model = LedoitWolf(assume_centered=settings["covariance"]["ledoit_wolf"]["assume_centered"])
+    model.fit(synced.to_numpy(dtype=float))
+    annual = model.covariance_ * periods_per_year
+    annual = (annual + annual.T) / 2
+    eigen = float(np.linalg.eigvalsh(annual).min())
+    info = {"shrinkage_coefficient": round(float(model.shrinkage_), 6), "covariance_dimension": list(annual.shape),
+            "minimum_eigenvalue": eigen, "annualization_periods_per_year": periods_per_year}
+    return pd.DataFrame(annual, index=synced.columns, columns=synced.columns), info
+
+
+# --------------------------------------------------------------------------- #
 # Marché
 # --------------------------------------------------------------------------- #
 @dataclass
@@ -194,10 +287,43 @@ class Market:
     assets: pd.DataFrame  # index = symbol ; métadonnées + ann_return (mu de config), ann_vol, sharpe, n_obs
     returns: pd.DataFrame  # date x symbol, rendements quotidiens en CAD, NaN structurels conservés
     settings: dict[str, Any]  # instantané de config.get_settings()
+    _cache: dict = field(default_factory=dict, repr=False, compare=False)
 
     @property
     def risk_free_rate(self) -> float:
         return float(self.settings["estimation"]["capm_shrinkage"]["rf_annual"])
+
+    # ------------------------------------------------------------------ #
+    # Univers d'optimisation (calculé une fois par marché, commun aux 3 variantes)
+    # ------------------------------------------------------------------ #
+    def history(self) -> HistoryFilter:
+        if "history" not in self._cache:
+            self._cache["history"] = history_filter(self.returns, self.assets, self.settings)
+        return self._cache["history"]
+
+    def universe_covariance(self) -> tuple[pd.DataFrame, dict[str, Any]]:
+        """Sigma Ledoit-Wolf annualisée de TOUS les titres qui passent le filtre d'historique, et ses diagnostics."""
+        if "covariance" not in self._cache:
+            import time
+
+            h = self.history()
+            started = time.perf_counter()
+            synced, info = synchronized_returns(self.returns[list(h.eligible)], h.horizon_start)
+            periods = info["periods_per_year_effective"] or float(self.settings["covariance"]["periods_per_year"])
+            sigma, lw = ledoit_wolf_universe(synced, self.settings, periods)
+            diagnostics = {
+                "requested_start_date": str(h.requested_start.date()),
+                "horizon_start_date": str(h.horizon_start.date()),
+                "latest_allowed_start_date": str(h.latest_allowed_start.date()),
+                "assets_before_history_filter": int(self.returns.shape[1]),
+                "assets_after_history_filter": len(h.eligible),
+                "assets_excluded_for_short_history": int(len(h.excluded)),
+                **info, **lw,
+                "seconds": round(time.perf_counter() - started, 2),
+            }
+            logger.info("Sigma Ledoit-Wolf de l'univers: %s", diagnostics)
+            self._cache["covariance"] = (sigma, diagnostics)
+        return self._cache["covariance"]
 
     # ------------------------------------------------------------------ #
     # Catalogue
@@ -211,7 +337,9 @@ class Market:
             "instrument_type": sorted(a["instrument_type"].dropna().astype(str).unique().tolist()),
             "symbol": sorted(a.index.tolist()),
             "factor": available_factors(a.index),
-            "theme": sorted(set().union(*map(theme_tags, a["theme"]))),
+            # Thématiques portées par au moins une action détenue en direct: les FNB étiquetés ne comptent jamais.
+            "theme": sorted(set().union(*map(theme_tags, a.loc[a["instrument_type"].astype(str) == "Stock", "theme"])))
+            if "theme" in a else [],
         }
 
     def search(self, query: str, limit: int = 10) -> list[dict]:
@@ -256,6 +384,10 @@ class Market:
         if unknown:
             raise ValueError(f"Symboles absents de l'univers: {', '.join(unknown)}")
         mu = self.assets.loc[symbols, "ann_return"].to_numpy(dtype=float)
+        # Titres de l'univers d'optimisation: la sous-matrice de la Sigma commune, la même que voit l'optimiseur.
+        if set(symbols) <= set(self.history().eligible):
+            sigma, _ = self.universe_covariance()
+            return mu, sigma.loc[symbols, symbols].to_numpy(dtype=float)
         cov = estimate_covariance(self.returns[symbols], self.settings)
         return mu, cov
 
@@ -320,6 +452,20 @@ def build_market(data: OptimizerData, settings: Mapping[str, Any]) -> Market:
     return Market(assets=assets, returns=returns, settings=dict(settings))
 
 
+def main() -> None:
+    """Rapport du filtre d'historique et de la Sigma commune sur le vrai Parquet: `python -m invest_agents.market`."""
+    pd.set_option("display.width", 160)
+    market = get_market()
+    h = market.history()
+    print(f"Début demandé {h.requested_start.date()}, début effectif {h.horizon_start.date()}, "
+          f"dernier début accepté {h.latest_allowed_start.date()}")
+    print(f"{len(market.assets)} titres, {len(h.eligible)} gardés, {len(h.excluded)} exclus pour historique court:")
+    print(h.excluded.to_string())
+    _, diagnostics = market.universe_covariance()
+    for key, value in diagnostics.items():
+        print(f"{key}: {value}")
+
+
 @lru_cache(maxsize=1)
 def get_market() -> Market:
     """Charge le Parquet défini dans config.py (local ou s3://) et construit le marché, une seule fois."""
@@ -334,3 +480,7 @@ def get_market() -> Market:
         region_overrides=d["region_overrides"] or None,
     )
     return build_market(data, settings)  # `data` (panel complet) est libéré au retour
+
+
+if __name__ == "__main__":
+    main()

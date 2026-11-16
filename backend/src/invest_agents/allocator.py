@@ -55,6 +55,7 @@ class OptimizationResult:
     weights: dict[str, float] = field(default_factory=dict)
     metrics: Optional[PortfolioMetrics] = None
     failed_checks: list[ConstraintCheck] = field(default_factory=list)
+    diagnostics: dict = field(default_factory=dict)  # traçabilité du Markowitz global (`optimize_universe`)
 
     @property
     def ok(self) -> bool:
@@ -253,4 +254,302 @@ def optimize(
     return OptimizationResult(status, message, weights=weights, metrics=metrics)
 
 
-__all__ = ["A_LADDER", "MIN_POSITION_WEIGHT", "Objective", "OptimizationResult", "optimize"]
+# --------------------------------------------------------------------------- #
+# Markowitz global: tous les titres admissibles, puis 25 à 60 positions détenues (cible 50)
+# --------------------------------------------------------------------------- #
+POSITIVE = 1e-6  # poids considéré comme positif dans la solution continue
+
+
+def universe_symbols(market: Market, constraints: list[Constraint]) -> tuple[list[str], dict]:
+    """Filtre 1 (questionnaire: seuls les titres réellement interdits) puis filtre 2 (historique depuis 2021).
+
+    Les contraintes de pondération (30 % d'obligations, 45 % de technologie…) ne retirent aucun titre: elles restent
+    des contraintes de Markowitz.
+    """
+    hard = [c for c in constraints if c.hard]
+    admissible = market.assets.index[~excluded_mask(market, hard)].tolist()
+    history = market.history()
+    long_enough = set(history.eligible)
+    kept = [s for s in admissible if s in long_enough]
+    short = [s for s in admissible if s not in long_enough]
+    return kept, {
+        "initial_universe": int(len(market.assets)),
+        "eligible_after_questionnaire": len(admissible),
+        "excluded_by_questionnaire": sorted(set(market.assets.index) - set(admissible)),
+        "excluded_for_short_history": short,
+        "eligible_after_history_filter": len(kept),
+    }
+
+
+def restrict_plan(plan: ConstraintPlan, keep: list[int], floor: float) -> ConstraintPlan:
+    """Le plan réduit aux positions retenues: chaque position risquée détenue pèse au moins `floor`."""
+    import dataclasses
+
+    from .constraints import GroupConstraint
+
+    risky_n = len(plan.risky_symbols)
+    index = sorted(set(keep) | ({risky_n} if plan.cash_symbol else set()))
+    symbols = tuple(plan.symbols[i] for i in index)
+    lower = np.array([plan.lower_bounds[i] if i >= risky_n else max(plan.lower_bounds[i], floor) for i in index])
+    upper = np.array([plan.upper_bounds[i] for i in index])
+    groups = tuple(GroupConstraint(g.name, g.coefficients[index], g.minimum, g.maximum) for g in plan.groups)
+    return dataclasses.replace(
+        plan, symbols=symbols, risky_symbols=tuple(s for s in symbols if s != plan.cash_symbol),
+        lower_bounds=lower, upper_bounds=upper, groups=groups,
+        required_symbols=tuple(s for s in plan.required_symbols if s in symbols))
+
+
+def _continuous(plan: ConstraintPlan, settings: dict, mu: np.ndarray, sigma: np.ndarray, aversion: float) -> np.ndarray:
+    """Optimum continu de Markowitz (avant la règle 0 ou >= 1 %), avec le solveur du moteur."""
+    from .optimizer import _linear_lp, _solve_slsqp
+
+    if plan.cash_symbol:  # cash synthétique: rendement de config, variance et covariances nulles
+        mu = np.append(mu, float(settings["cash"]["annual_expected_return"]))
+        sigma = np.pad(sigma, ((0, 1), (0, 1)))
+    low, high = plan.lower_bounds.copy(), plan.upper_bounds.copy()
+    start = _linear_lp(plan, low, high)
+    if start is None:
+        raise ConstraintInfeasibleError("Budget, groupes et bornes: problème linéaire impossible sur l'univers.")
+    w, _, _ = _solve_slsqp(mu, sigma, aversion, plan, settings, low, high, start)
+    return w
+
+
+def _feasible(plan: ConstraintPlan, keep: list[int], floor: float) -> bool:
+    from .optimizer import _linear_lp
+
+    sub = restrict_plan(plan, keep, floor)
+    return _linear_lp(sub, sub.lower_bounds, sub.upper_bounds) is not None
+
+
+def _floored(plan: ConstraintPlan, settings: dict, mu: np.ndarray, sigma: np.ndarray, aversion: float,
+             keep: list[int]) -> Optional[tuple[float, np.ndarray]]:
+    """Utilité et poids (vecteur complet) de l'optimum sur `keep`, chaque position à au moins 1 %; None si infaisable."""
+    idx = sorted(keep)
+    sub = restrict_plan(plan, idx, float(plan.minimum_held_weight))
+    try:
+        sub_w = _continuous(sub, settings, mu[idx], sigma[np.ix_(idx, idx)], aversion)
+    except (ConstraintInfeasibleError, OptimizationError):
+        return None
+    x = sub_w[: len(idx)]
+    w = np.zeros(len(plan.symbols))
+    w[idx] = x
+    return float(x @ mu[idx] - 0.5 * aversion * x @ sigma[np.ix_(idx, idx)] @ x), w
+
+
+def select_holdings(plan: ConstraintPlan, settings: dict, mu: np.ndarray, sigma: np.ndarray, aversion: float,
+                    w0: np.ndarray, holdings: dict) -> tuple[list[int], dict]:
+    """Choisit les positions détenues dans la plage [min_count, max_count], à partir de l'optimum continu global.
+
+    Aucune cible fixe: le nombre final dépend de A, des rendements, des covariances et des contraintes.
+    Heuristique, sans garantie d'optimum global (cardinalité et « 0 ou >= 1 % » ne sont pas convexes):
+    1. part des titres que Markowitz détient (plus gros poids d'abord, au plus `max_count`);
+    2. complète jusqu'à `min_count` avec les titres d'utilité marginale mu_i − A·(Sigma·w)_i la plus élevée: ce terme
+       tient compte de la covariance avec le portefeuille courant (un titre peu corrélé y gagne même avec un
+       rendement modeste);
+    3. garantit un titre à chaque groupe imposé (pourcentage exact, présence d'une action);
+    4. continue d'ajouter par lots de 5 tant que chaque position ajoutée coûte au plus `max_marginal_utility_cost`
+       d'utilité (positions toutes à >= 1 %), sans dépasser `max_count`.
+    Cas extrêmes: si l'univers est plus petit que `min_count`, ou si les planchers de 1 % rendent le problème
+    infaisable avec les contraintes du client, le portefeuille descend sous `min_count` et le diagnostic le dit.
+    """
+    minimum, maximum = int(holdings["min_count"]), int(holdings["max_count"])
+    cost_limit = float(holdings.get("max_marginal_utility_cost", 0.0))
+    floor = float(plan.minimum_held_weight)
+    risky_n = len(plan.risky_symbols)
+    required = {i for i in range(risky_n) if plan.lower_bounds[i] > 1e-9}
+    order = [i for i in np.argsort(-w0[:risky_n]) if w0[i] > POSITIVE]
+    keep = list(dict.fromkeys(sorted(required) + order))[: max(maximum, len(required))]
+    dropped = [plan.symbols[i] for i in order if i not in keep]
+    added, removed, notes = [], [], []
+    w = w0
+
+    def marginal(current: np.ndarray) -> np.ndarray:
+        return mu - aversion * (sigma @ current[:risky_n])
+
+    def best_outside(current: np.ndarray, n: int, among=None) -> list[int]:
+        gain = marginal(current)
+        pool = [i for i in np.argsort(-gain) if i not in keep and (among is None or among(i))]
+        return pool[:n]
+
+    # 2. Le minimum de la plage (si l'univers le permet).
+    while len(keep) < min(minimum, risky_n):
+        batch = best_outside(w, min(10, minimum - len(keep)))
+        if not batch:
+            break
+        keep += batch
+        added += [plan.symbols[i] for i in batch]
+        sub = restrict_plan(plan, keep, 0.0)
+        try:  # nouveaux poids (sans plancher) pour réévaluer l'utilité marginale des titres restants
+            idx = sorted(keep)
+            sub_w = _continuous(sub, settings, mu[idx], sigma[np.ix_(idx, idx)], aversion)
+            w = np.zeros_like(w0)
+            w[idx] = sub_w[: len(idx)]
+        except (ConstraintInfeasibleError, OptimizationError):
+            pass
+    # 3. Chaque groupe qui exige un poids > 0 doit avoir un membre.
+    for g in plan.groups:
+        if g.minimum > 1e-9 and not any(g.coefficients[i] > 1e-9 for i in keep):
+            member = best_outside(w, 1, among=lambda i: i < risky_n and g.coefficients[i] > 1e-9)
+            if member:
+                keep += member
+                added += [plan.symbols[member[0]]]
+    # Planchers de 1 % infaisables avec les contraintes: retirer les titres d'utilité marginale la plus faible.
+    gain = marginal(w)
+    current = _floored(plan, settings, mu, sigma, aversion, keep)
+    while current is None:
+        removable = sorted((i for i in keep if i not in required), key=lambda i: gain[i])
+        if not removable:
+            raise ConstraintInfeasibleError(
+                f"Aucun portefeuille ne respecte les contraintes avec {len(keep)} positions à {floor:.0%} ou plus.")
+        keep.remove(removable[0])
+        removed.append(plan.symbols[removable[0]])
+        current = _floored(plan, settings, mu, sigma, aversion, keep)
+    utility, w = current
+    # 4. Diversifier tant que c'est presque gratuit.
+    extended = 0
+    while len(keep) < min(maximum, risky_n):
+        batch = best_outside(w, min(5, maximum - len(keep)))
+        if not batch:
+            break
+        trial = _floored(plan, settings, mu, sigma, aversion, keep + batch)
+        if trial is None or (utility - trial[0]) / len(batch) > cost_limit:
+            break
+        keep += batch
+        added += [plan.symbols[i] for i in batch]
+        extended += len(batch)
+        utility, w = trial
+    if len(keep) < minimum:
+        notes.append(f"{len(keep)} positions, sous le minimum de {minimum}: "
+                     + (f"seulement {risky_n} titres admissibles." if risky_n < minimum
+                        else "les contraintes du client ne permettent pas plus de positions à 1 % ou plus."))
+    return sorted(keep), {"dropped_from_initial_optimum": dropped, "added_for_count": added,
+                          "added_for_diversification": extended, "removed_for_feasibility": removed,
+                          "count_notes": notes}
+
+
+def _risk_contributions(weights: dict[str, float], sigma: pd.DataFrame, top: int = 5) -> list[dict]:
+    symbols = list(weights)
+    w = np.array([weights[s] for s in symbols])
+    s = sigma.loc[symbols, symbols].to_numpy()
+    marginal = s @ w
+    total = float(w @ marginal)
+    if total <= 0:
+        return []
+    rc = w * marginal / total
+    return [{"symbol": symbols[i], "weight": round(float(w[i]), 4), "risk_share": round(float(rc[i]), 4)}
+            for i in np.argsort(-rc)[:top]]
+
+
+def optimize_universe(
+    market: Market,
+    objective: Objective,
+    constraints: list[Constraint],
+    *,
+    vol_cap: Optional[float] = None,
+    risk_aversion: Optional[float] = None,
+    holdings: Optional[dict] = None,
+) -> OptimizationResult:
+    """Markowitz sur TOUS les titres qui passent le questionnaire et le filtre d'historique, sans sélection du LLM.
+
+    mu: rendement espéré individuel (historique maximal de chaque titre, `Market.assets.ann_return`).
+    Sigma: Ledoit-Wolf commune de l'univers (`Market.universe_covariance`), la même pour les trois variantes.
+    """
+    import time
+
+    from .config import PORTFOLIO_HOLDINGS
+
+    holdings = dict(holdings or market.settings.get("portfolio_holdings") or PORTFOLIO_HOLDINGS)
+    # Un nombre de positions demandé explicitement par le client (min/max_positions) l'emporte sur la plage.
+    hard = [c for c in constraints if c.hard]
+    user_max = min([int(c.value) for c in hard if c.type is T.MAX_POSITIONS and c.value] or [0]) or None
+    user_min = max([int(c.value) for c in hard if c.type is T.MIN_POSITIONS and c.value] or [0]) or None
+    if user_max is not None:
+        holdings["max_count"] = user_max
+        holdings["min_count"] = min(holdings["min_count"], user_max)
+    if user_min is not None:
+        holdings["min_count"] = user_min
+        holdings["max_count"] = max(holdings["max_count"], user_min)
+    started = time.perf_counter()
+    symbols, diag = universe_symbols(market, constraints)
+    if not symbols:
+        return OptimizationResult("infeasible", "Aucun titre ne passe les contraintes et le filtre d'historique.",
+                                  diagnostics=diag)
+    try:
+        sigma_all, cov_diag = market.universe_covariance()
+        plan = catalog.plan_for(market, symbols, constraints, risk_aversion=risk_aversion, verify=True)
+        settings = catalog.settings_for(market, constraints, risk_aversion=risk_aversion)
+    except (ConstraintInfeasibleError, ConstraintError) as exc:
+        why = (" Le filtre d'historique a retiré des titres qui auraient pu la satisfaire: "
+               f"{', '.join(diag['excluded_for_short_history'][:8])}." if diag["excluded_for_short_history"] else "")
+        return OptimizationResult("infeasible", f"{exc}{why}", diagnostics=diag)
+    diag["covariance"] = cov_diag
+    risky = list(plan.risky_symbols)
+    mu = market.assets.loc[risky, "ann_return"].to_numpy(dtype=float)
+    sigma = sigma_all.loc[risky, risky].to_numpy(dtype=float)
+    diag["assets_sent_to_markowitz"] = len(risky)
+    aversion0 = {"min_volatility": A_MAX, "max_return": A_MIN}.get(objective, risk_aversion or A_MAX / 5)
+    try:
+        t = time.perf_counter()
+        w0 = _continuous(plan, settings, mu, sigma, aversion0)
+        diag["seconds_initial_optimization"] = round(time.perf_counter() - t, 2)
+        diag["positive_weights_initial"] = int((w0[: len(risky)] > POSITIVE).sum())
+        diag["weights_at_least_min_initial"] = int((w0[: len(risky)] >= holdings["min_held_weight"] - 1e-9).sum())
+        u0 = float(w0[: len(risky)] @ mu - 0.5 * aversion0 * w0[: len(risky)] @ sigma @ w0[: len(risky)])
+        t = time.perf_counter()
+        keep, selection = select_holdings(plan, settings, mu, sigma, aversion0, w0, holdings)
+        diag.update(selection)
+        diag["holdings_after_selection"] = len(keep)
+        sub = restrict_plan(plan, keep, float(holdings["min_held_weight"]))
+        sub_risky = list(sub.risky_symbols)
+        sub_mu = pd.Series(market.assets.loc[sub_risky, "ann_return"].to_numpy(dtype=float), index=sub_risky)
+        sub_sigma = sigma_all.loc[sub_risky, sub_risky]
+        aversion = aversion0
+        if objective == "max_sharpe":
+            run, found = _best_sharpe(market, sub, settings, sub_mu, sub_sigma)
+            if run is None:
+                return OptimizationResult("infeasible", "Aucune pondération ne respecte les contraintes.",
+                                          diagnostics=diag)
+            aversion = found or aversion
+        else:
+            run = _solve(market, sub, settings, sub_mu, sub_sigma, aversion)
+        cap = _volatility_cap(constraints, vol_cap)
+        if cap is not None:
+            run, aversion = _under_cap(market, sub, settings, sub_mu, sub_sigma, run, aversion, cap)
+        diag["seconds_selection_and_reoptimization"] = round(time.perf_counter() - t, 2)
+    except ConstraintInfeasibleError as exc:
+        return OptimizationResult("infeasible", str(exc), diagnostics=diag)
+    except (OptimizationError, ConstraintError) as exc:
+        return OptimizationResult("infeasible", f"Optimisation impossible: {exc}", diagnostics=diag)
+
+    weights = _weights(run)
+    metrics = market.portfolio_metrics(weights)
+    checks = evaluate(market, weights, [c for c in constraints if c.hard])
+    failed = [c for c in checks if not c.passed]
+    top = sorted(weights.values(), reverse=True)
+    diag.update({
+        "final_holdings": len(weights),
+        "holdings_range": [int(holdings["min_count"]), int(holdings["max_count"])],
+        "A_requested": risk_aversion, "A_initial_optimization": aversion0, "A_effective": aversion,
+        "utility_initial_optimum": round(u0, 6), "utility_final": round(float(run.utility), 6),
+        "effective_holdings_count": metrics.effective_n, "top_5_weight": round(sum(top[:5]), 4),
+        "risk_contributions_top": _risk_contributions(weights, sigma_all),
+        "active_bounds": sorted(s for s, w in weights.items()
+                                if s in sub.symbols and abs(w - sub.upper_bounds[sub.index_of(s)]) < 1e-3),
+        "constraints_satisfied": not failed,
+        "seconds_total": round(time.perf_counter() - started, 2),
+    })
+    logger.info("Markowitz global: %s", {k: v for k, v in diag.items() if k != "excluded_by_questionnaire"})
+    if failed:
+        return OptimizationResult("infeasible", "Contraintes non respectées: " + "; ".join(
+            f"{c.label} ({c.message})" for c in failed[:4]), weights=weights, metrics=metrics, failed_checks=failed,
+            diagnostics=diag)
+    status = "feasible" if run.notices else "optimal"
+    message = (f"Markowitz global sur {len(risky)} titres, {len(weights)} positions détenues, "
+               f"aversion au risque A = {aversion:g}.")
+    if audit := catalog.audit(market, weights, constraints, risk_aversion=risk_aversion):
+        status, message = "feasible", f"{message} Écart d'arrondi signalé par le moteur: {audit}"
+    return OptimizationResult(status, message, weights=weights, metrics=metrics, diagnostics=diag)
+
+
+__all__ = ["A_LADDER", "MIN_POSITION_WEIGHT", "Objective", "OptimizationResult", "optimize", "optimize_universe",
+           "restrict_plan", "select_holdings", "universe_symbols"]

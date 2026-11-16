@@ -59,11 +59,30 @@ VALID_INSTRUMENT_TYPES = frozenset({"Stock", "ETF", "Cryptocurrency"})
 # "strict" = l'instrument est rejeté (défaut, mode AGENT) ; "flag" = plafond appliqué aux
 # expositions connues, instrument conservé et signalé (mode BASE).
 UNKNOWN_EXPOSURE_POLICIES = frozenset({"strict", "flag"})
-PREFERENCE_LEVELS = frozenset({"exclude", "less", "neutral", "more", "require"})
+# Réponses du questionnaire : Exclure (0 % exactement), Neutre (aucune contrainte), pourcentage exact.
+# Forme interne d'une préférence : {"mode": "exclude" | "neutral" | "exact", "weight": None | fraction}.
+PREFERENCE_MODES = frozenset({"exclude", "neutral", "exact"})
+PREFERENCE_LEVELS = PREFERENCE_MODES  # ancien nom, conservé pour les imports
 PREFERENCE_DIMENSIONS = frozenset({
     "asset_class", "instrument_type", "region", "country",
-    "sector", "industry", "theme", "factor", "symbol",
+    "sector", "industry", "theme", "symbol",
 })
+# Dimensions des questions 3 et 4 (géographie, secteurs, thématiques) : seules les actions détenues en direct
+# (instrument_type == "Stock") y sont comptées. Un FNB ou une crypto y a un coefficient nul, même si un
+# look-through existe : il n'est ni exclu par ces préférences, ni utilisable pour les satisfaire.
+STOCK_ONLY_PREFERENCE_DIMENSIONS = frozenset({"region", "country", "sector", "industry", "theme"})
+# Sur ces dimensions, un pourcentage exact est une PART DE LA POCHE ACTIONS (ce que dit le questionnaire) :
+#   Σ actions en direct du groupe = p × Σ instruments de classe Equity (actions en direct + FNB d'actions).
+# Les FNB d'actions comptent dans la poche (dénominateur), jamais dans le groupe (numérateur).
+EQUITY_SLEEVE_CLASSES = frozenset({"Equity"})
+# Un groupe de préférence peut réunir plusieurs libellés : « Consumer Staples|Consumer Discretionary ».
+PREFERENCE_GROUP_SEPARATOR = "|"
+# Question 1 : instruments admissibles. Le cash synthétique reste permis dans les trois modes.
+INSTRUMENT_SELECTION = {
+    "etf_only": frozenset({"ETF"}),
+    "mixed": frozenset({"ETF", "Stock", "Cryptocurrency"}),
+    "stocks_only": frozenset({"Stock", "Cryptocurrency"}),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -94,8 +113,10 @@ ESTIMATION = {
     # deux peuvent avoir asset_class='Alternative'.
     "method_by_instrument_type": {"Cryptocurrency": "ewma"},
     "method_by_symbol": {"BITW": "ewma"},  # ETP de crypto (Bitwise 10)
+    # Fenêtres de mu : historique individuel MAXIMAL de chaque titre (None = tout ce qui est disponible jusqu'à
+    # la date d'estimation). mu n'exige jamais de dates communes avec les autres titres.
     "historical": {
-        "lookback_observations": 1260,  # ~ 5 années de séances
+        "lookback_observations": None,  # avant : 1260 (~5 ans) ; tout l'historique du titre
         "min_observations": 120,
     },
     "ewma": {
@@ -104,18 +125,19 @@ ESTIMATION = {
         "min_observations": 120,
     },
     "capm_shrinkage": {
-        "lookback_observations": 756,   # ~ 3 ans pour bêta ; None = tout l'historique
+        # Bêta sur les dates communes au titre et à SPY seulement (pas à tout l'univers), tout l'historique.
+        "lookback_observations": None,   # avant : 756 (~3 ans)
         "min_paired_observations": 120,
         "market_proxy": "SPY",        # baseline unique, pas un CAPM multi-classe
         "rf_annual": RF_ANNUAL,  # taux CAPM commun = 3,5 %, hypothèse
         "erp_annual": 0.05,        # hypothèse illustrative, pas une donnée live
         "alpha": 0.50,            # poids de la cible CAPM
-        "historical_lookback_observations": 1260,  # None = toute la période
+        "historical_lookback_observations": None,  # avant : 1260 ; toute la période du titre
     },
     "capm_benchmark_shrinkage": {
-        "lookback_observations": 756,  # bêta ; None = historique intégral
+        "lookback_observations": None,  # bêta ; avant : 756 ; historique intégral commun titre/benchmark
         "min_paired_observations": 120,
-        "historical_lookback_observations": 1260,
+        "historical_lookback_observations": None,  # avant : 1260
         "rf_annual": RF_ANNUAL,
         "alpha": 0.50,
         # Ne PAS appliquer mécaniquement la prime SPY à tous les benchmarks.
@@ -204,7 +226,8 @@ BENCHMARKS = {
 COVARIANCE = {
     "method": "ledoit_wolf",       # alternative : "sample"
     "periods_per_year": DATA["periods_per_year"],
-    "lookback_observations": 1260,
+    # None = tout l'échantillon commun depuis le début de l'horizon (voir COVARIANCE_HISTORY) ; avant : 1260.
+    "lookback_observations": None,
     "min_observations_per_asset": DATA["min_observations"],
     # IMPORTANT : pré-sélectionner les candidats avant de supprimer les
     # lignes NaN, sinon les titres fraîchement listés éliminent l'historique.
@@ -234,6 +257,33 @@ COVARIANCE = {
 # 5. CANDIDATS ET DIVERSIFICATION : UNIVERS ≠ TITRES DÉTENUS
 # ---------------------------------------------------------------------------
 
+# Univers d'optimisation de MonPort : un titre n'y entre que si son historique remonte au début de l'horizon.
+# Sinon un seul titre récent réduirait l'échantillon commun de Sigma (Ledoit-Wolf) à quelques mois.
+# Le début effectif est la première date du panel >= start_date (le 1er janvier 2021 n'est pas une séance) ;
+# max_start_delay_business_days absorbe seulement les calendriers boursiers et l'initialisation des rendements.
+COVARIANCE_HISTORY = {
+    "start_date": "2021-01-01",
+    "require_full_horizon": True,
+    "method": "ledoit_wolf",
+    "max_start_delay_business_days": 5,
+}
+
+# Positions réellement DÉTENUES par chaque portefeuille de MonPort (pas des candidats). Aucune cible fixe:
+# l'optimiseur part des titres que Markowitz détient, complète jusqu'à min_count, puis ajoute des titres tant que
+# chacun coûte au plus max_marginal_utility_cost d'utilité annuelle (diversification presque gratuite), sans
+# dépasser max_count. Le nombre final dépend donc de A, des rendements, des covariances et des contraintes.
+# Cas extrêmes: un nombre de positions demandé par le client (min/max_positions), ou un univers admissible trop
+# petit (ex.: tout exclu sauf la crypto), l'emporte sur cette plage; le diagnostic le signale.
+PORTFOLIO_HOLDINGS = {
+    "min_count": 25,
+    "max_count": 70,
+    "min_held_weight": 0.01,
+    # 1 point de base d'utilité annuelle par position ajoutée au-delà de min_count. Mesuré sur un univers synthétique
+    # de 769 titres (mu de 2 % à 14 %): environ 28 titres détenus par Markowitz seul, arrêt vers 45 à 50.
+    "max_marginal_utility_cost": 0.0001,
+}
+
+# Présélection du pipeline autonome (optimizer.run_pipeline) ; MonPort n'en a plus besoin (Markowitz global).
 CANDIDATES = {
     "enabled": True,
     "target_count": 50,  # cible indicative, ajustable ; non forcée à 50
@@ -289,7 +339,8 @@ CONSTRAINTS = {
     "excluded_symbols": [],
     "required_symbols": [],   # présence obligatoire ; min_held_weight si détenu
     "required_symbol_min_weights": {},
-    "etf_only": False,       # liquidités autorisées même en ETF-only
+    # Voir INSTRUMENT_SELECTION ; liquidités autorisées dans les trois modes.
+    "instrument_selection": "mixed",
     "min_cash_weight": 0.0,  # le questionnaire peut imposer davantage
     "max_cash_weight": 1.0,  # 100 % exprimé en fraction (NE PAS écrire 100.0)
     "excluded_asset_classes": [],
@@ -314,22 +365,18 @@ CONSTRAINTS = {
 }
 
 PREFERENCES = {
-    "levels": ["exclude", "less", "neutral", "more", "require"],
-    # Un niveau n'implique PAS de pourcentage arbitraire.
+    "modes": sorted(PREFERENCE_MODES),
+    # Exclure et Exact sont des contraintes d'égalité strictes ; Neutre n'ajoute rien.
     "meaning": {
-        "exclude": "hard_zero",
-        "less": "soft_underweight",
-        "neutral": "no_extra_constraint",
-        "more": "soft_overweight",
-        "require": "hard_presence",
+        "exclude": "hard_zero",            # e_g @ w == 0
+        "neutral": "no_extra_constraint",  # Markowitz décide
+        # Classes, types, symboles : e_g @ w == weight (fraction du portefeuille total, cash inclus).
+        # Régions, pays, secteurs, thématiques : (e_g - weight × equity) @ w == 0 (part de la poche actions).
+        "exact": "hard_equality",
     },
-    "less_target_delta": None,     # à décider avec l'équipe
-    "more_target_delta": None,     # à décider avec l'équipe
-    "require_group_min_weight": None,  # à décider ; individuel = 1 % min
-    "soft_penalty_strength": None,   # à calibrer dans la fonction d'utilité
-    "reference_allocation_source": None,
+    "stock_only_base": "equity_sleeve",
     "available_dimensions": sorted(PREFERENCE_DIMENSIONS),
-    "do_not_convert_unknown_preferences_to_hard_limits": True,
+    "stock_only_dimensions": sorted(STOCK_ONLY_PREFERENCE_DIMENSIONS),
 }
 
 
@@ -340,7 +387,7 @@ PREFERENCES = {
 CASH = {
     "enabled": True,
     "symbol": "CASH-CAD",          # actif synthétique : absent du Parquet
-    "annual_expected_return": 0.0,  # MODIFIABLE : hypothèse de cash CAD à 0 % (distincte du Rf CAPM=3,5 %)
+    "annual_expected_return": 0.01,  # MODIFIABLE : hypothèse de cash CAD à 1 % (distincte du Rf CAPM=3,5 %)
     "annual_volatility": 0.0,       # approximation de cash nominal sans risque
     "zero_covariance_assumption": True,
     "exclude_from_min_held_weight": True,
@@ -437,8 +484,8 @@ BASE_CONSTRAINTS = {
     "excluded_symbols": [],
     "required_symbols": [],
     "required_symbol_min_weights": {},
-    # False = actions, ETF et crypto autorisés.
-    "etf_only": False,
+    # "mixed" = actions, ETF et crypto autorisés ("etf_only", "stocks_only" : voir INSTRUMENT_SELECTION).
+    "instrument_selection": "mixed",
     # --------------------------------------------------------
     # 4. CASH — VARIABLE D'AJUSTEMENT
     # --------------------------------------------------------
@@ -521,7 +568,7 @@ BASE_CONSTRAINTS = {
 # Aucune de ces valeurs ne doit servir de profil implicite d'un client réel.
 BASE_PROFILE = {
     "risk_aversion_A": 5.0,
-    # Les niveaux less/more ne sont PAS convertis en poids arbitraires.
+    # Forme : {"theme": {"tech": {"mode": "exact", "weight": 0.20}}} ; vide = tout est neutre.
     "preferences": {},
 }
 BASE_PROFILE_ALLOWED_KEYS = frozenset({"risk_aversion_A", "preferences"})
@@ -536,7 +583,7 @@ BASE_PROFILE_ALLOWED_KEYS = frozenset({"risk_aversion_A", "preferences"})
 # Ne pas remplir ce modèle dans config.py pour les utilisateurs réels.
 AGENT_REQUEST_TEMPLATE = {
     "risk_aversion_A": None,   # OBLIGATOIRE dans la requête réelle
-    "etf_only": None,
+    "instrument_selection": None,  # "etf_only" | "mixed" | "stocks_only"
     "min_cash_weight": None,
     "max_cash_weight": None,
     "max_weight_per_asset": None,
@@ -580,6 +627,8 @@ def _get_engine_defaults() -> dict[str, Any]:
         "estimation": ESTIMATION,
         "benchmarks": BENCHMARKS,
         "covariance": COVARIANCE,
+        "covariance_history": COVARIANCE_HISTORY,
+        "portfolio_holdings": PORTFOLIO_HOLDINGS,
         "candidates": CANDIDATES,
         "risk_aversion": RISK_AVERSION,
         "constraints": CONSTRAINTS,
@@ -802,6 +851,59 @@ def _weight(value: Any, name: str, *, allow_none: bool = False) -> float | None:
     return number
 
 
+def normalize_preference(value: Any, name: str) -> dict[str, Any]:
+    """Une réponse du questionnaire, sous la forme {"mode", "weight"}.
+
+    "exact" exige une fraction finie dans [0, 1] (0.45 = 45 %) : un pourcentage brut comme 45 est refusé,
+    jamais lu comme 45 fois le capital. "exclude" et "neutral" n'ont pas de poids. Les chaînes
+    "exclude" et "neutral" sont acceptées comme raccourcis ; les anciens niveaux less/more/require sont refusés.
+    """
+    if isinstance(value, str):
+        value = {"mode": value, "weight": None}
+    if not isinstance(value, Mapping) or set(value) - {"mode", "weight"} or "mode" not in value:
+        raise ValueError(f"{name} : préférence attendue sous la forme {{'mode': ..., 'weight': ...}}.")
+    mode = str(value["mode"]).strip().lower()
+    if mode not in PREFERENCE_MODES:
+        raise ValueError(f"{name} : mode {value['mode']!r} inconnu (valides : {sorted(PREFERENCE_MODES)}).")
+    weight = value.get("weight")
+    if mode != "exact":
+        if weight is not None:
+            raise ValueError(f"{name} : le mode {mode!r} n'accepte pas de poids.")
+        return {"mode": mode, "weight": None}
+    if weight is None:
+        raise ValueError(f"{name} : le mode 'exact' exige un poids.")
+    number = _finite_number(weight, f"{name}.weight")
+    if not 0.0 <= number <= 1.0:
+        raise ValueError(f"{name}.weight doit être une fraction dans [0, 1] (45 % = 0.45), reçu {number}.")
+    return {"mode": "exact", "weight": number}
+
+
+def _normalize_preferences(preferences: Any) -> dict[str, dict[str, dict[str, Any]]]:
+    """Préférences par dimension et par groupe ; les neutres sont retirées (elles n'ajoutent rien)."""
+    if not isinstance(preferences, Mapping):
+        raise TypeError("preferences doit être un dictionnaire par dimension.")
+    normalized: dict[str, dict[str, dict[str, Any]]] = {}
+    for dimension, values in preferences.items():
+        if dimension not in PREFERENCE_DIMENSIONS:
+            raise ValueError(f"Dimension de préférence inconnue : {dimension}")
+        if not isinstance(values, Mapping):
+            raise TypeError(f"La dimension {dimension} doit être un mapping.")
+        output: dict[str, dict[str, Any]] = {}
+        for key, raw in values.items():
+            parts = [p.strip() for p in str(key).split(PREFERENCE_GROUP_SEPARATOR)]
+            if not all(parts):
+                raise ValueError(f"Groupe vide dans la dimension {dimension} : {key!r}.")
+            item = PREFERENCE_GROUP_SEPARATOR.join(parts)
+            if dimension == "symbol":
+                item = item.upper()
+            pref = normalize_preference(raw, f"preferences.{dimension}.{item}")
+            if pref["mode"] != "neutral":
+                output[item] = pref
+        if output:
+            normalized[dimension] = output
+    return normalized
+
+
 def validate_settings(settings: Mapping[str, Any] | None = None) -> None:
     """Vérifier la cohérence interne ; n'ouvre aucun fichier de données."""
     cfg = settings if settings is not None else get_settings()
@@ -865,8 +967,24 @@ def validate_settings(settings: Mapping[str, Any] | None = None) -> None:
 
     if cov["method"] not in VALID_COVARIANCE_METHODS:
         raise ValueError("Méthode de covariance inconnue.")
-    if cov["min_joint_observations"] < 2 or cov["lookback_observations"] < cov["min_joint_observations"]:
+    if cov["min_joint_observations"] < 2 or (
+            cov["lookback_observations"] is not None and cov["lookback_observations"] < cov["min_joint_observations"]):
         raise ValueError("Historique joint insuffisant pour Ledoit-Wolf.")
+    history = cfg["covariance_history"]
+    if history["method"] != "ledoit_wolf" or not isinstance(history["require_full_horizon"], bool):
+        raise ValueError("covariance_history : méthode ledoit_wolf et require_full_horizon booléen attendus.")
+    delay = history["max_start_delay_business_days"]
+    if not isinstance(delay, int) or isinstance(delay, bool) or not 0 <= delay <= 10:
+        raise ValueError("max_start_delay_business_days doit être un entier entre 0 et 10 (calendriers seulement).")
+    holdings = cfg["portfolio_holdings"]
+    counts = [holdings[k] for k in ("min_count", "max_count")]
+    if any(not isinstance(n, int) or isinstance(n, bool) or n < 1 for n in counts) or counts != sorted(counts):
+        raise ValueError("portfolio_holdings : entiers min_count <= max_count attendus.")
+    if _finite_number(holdings["max_marginal_utility_cost"], "max_marginal_utility_cost") < 0:
+        raise ValueError("portfolio_holdings.max_marginal_utility_cost doit être >= 0.")
+    held = _weight(holdings["min_held_weight"], "portfolio_holdings.min_held_weight")
+    if not 0 < held or held * holdings["min_count"] > 1:
+        raise ValueError("portfolio_holdings : min_count positions à min_held_weight dépassent 100 %.")
     if cov["sample"]["min_pairwise_observations"] < 2:
         raise ValueError("min_pairwise_observations doit être >= 2.")
     if cov["ledoit_wolf"]["target"] != "scaled_identity":
@@ -921,8 +1039,15 @@ def validate_settings(settings: Mapping[str, Any] | None = None) -> None:
         raise ValueError("Solveur non couvert par la configuration actuelle.")
     if optim["constraint_tolerance"] <= 0 or optim["sum_weights_tolerance"] <= 0:
         raise ValueError("Les tolérances d'optimisation doivent être positives.")
-    if set(cfg["preferences"]["levels"]) != PREFERENCE_LEVELS:
-        raise ValueError("Les niveaux de sentiments sont incomplets.")
+    if "etf_only" in constraints:
+        raise ValueError("etf_only est remplacé par instrument_selection (etf_only | mixed | stocks_only).")
+    if constraints["instrument_selection"] not in INSTRUMENT_SELECTION:
+        raise ValueError(f"instrument_selection doit valoir {sorted(INSTRUMENT_SELECTION)}.")
+    if set(cfg["preferences"]["modes"]) != PREFERENCE_MODES:
+        raise ValueError("Les modes de préférence doivent être exactement exclude, neutral et exact.")
+    prefs = cfg.get("agent_preferences", {})
+    if _normalize_preferences(prefs) != {d: g for d, g in prefs.items() if g}:
+        raise ValueError("agent_preferences n'est pas sous forme normalisée {mode, weight}.")
 
 
 def apply_portfolio_request(
@@ -933,20 +1058,20 @@ def apply_portfolio_request(
     """Fusion limitée d'une requête agent avec les réglages du portefeuille.
 
     L'agent ne peut pas modifier les modèles de marché, les fenêtres, les
-    benchmarks ou les paramètres solveur par cette fonction. Les poids
-    Moins/Plus ne sont PAS transformés en pourcentages arbitraires.
+    benchmarks ou les paramètres solveur par cette fonction.
 
     Champs reconnus : risk_aversion_A, min_cash_weight, max_cash_weight,
-    max_weight_per_asset, etf_only, excluded_symbols, required_symbols,
+    max_weight_per_asset, instrument_selection (etf_only accepté comme
+    alias booléen), excluded_symbols, required_symbols,
     required_symbol_min_weights, excluded_asset_classes, excluded_* autres,
-    group_limits, preferences.
+    group_limits, preferences ({dimension: {groupe: {mode, weight}}}).
     """
     if not isinstance(request, Mapping):
         raise TypeError("request doit être un mapping/dictionnaire.")
     cfg = copy.deepcopy(settings) if settings is not None else get_settings()
     allowed = {
         "risk_aversion_A", "min_cash_weight", "max_cash_weight",
-        "max_weight_per_asset", "etf_only", "excluded_symbols",
+        "max_weight_per_asset", "instrument_selection", "etf_only", "excluded_symbols",
         "required_symbols", "required_symbol_min_weights", "preferences",
         "excluded_asset_classes", "excluded_instrument_types", "excluded_sectors",
         "excluded_countries", "excluded_regions", "excluded_themes", "excluded_factors",
@@ -966,10 +1091,20 @@ def apply_portfolio_request(
     for field in ("min_cash_weight", "max_cash_weight", "max_weight_per_asset"):
         if field in request:
             c[field] = _weight(request[field], field, allow_none=field == "max_weight_per_asset")
-    if "etf_only" in request:
+    selection = request.get("instrument_selection")
+    if selection is not None:
+        selection = str(selection).strip().lower()
+        if selection not in INSTRUMENT_SELECTION:
+            raise ValueError(f"instrument_selection doit valoir {sorted(INSTRUMENT_SELECTION)}, reçu {selection!r}.")
+    if "etf_only" in request:  # alias de l'ancien contrat booléen
         if not isinstance(request["etf_only"], bool):
             raise TypeError("etf_only doit être un booléen.")
-        c["etf_only"] = request["etf_only"]
+        alias = "etf_only" if request["etf_only"] else "mixed"
+        if selection is not None and selection != alias:
+            raise ValueError(f"etf_only={request['etf_only']} contredit instrument_selection={selection!r}.")
+        selection = alias
+    if selection is not None:
+        c["instrument_selection"] = selection
     for field in ("excluded_symbols", "required_symbols"):
         if field in request:
             values = request[field]
@@ -1033,26 +1168,7 @@ def apply_portfolio_request(
             c["group_limits"][dimension] = normalized_groups
 
     if "preferences" in request:
-        preferences = request["preferences"]
-        if not isinstance(preferences, Mapping):
-            raise TypeError("preferences doit être un dictionnaire par dimension.")
-        normalized: dict[str, dict[str, str]] = {}
-        for dimension, values in preferences.items():
-            if dimension not in PREFERENCE_DIMENSIONS:
-                raise ValueError(f"Dimension de préférence inconnue : {dimension}")
-            if not isinstance(values, Mapping):
-                raise TypeError(f"La dimension {dimension} doit être un mapping.")
-            output: dict[str, str] = {}
-            for key, level in values.items():
-                label = str(level).strip().lower()
-                if label not in PREFERENCE_LEVELS:
-                    raise ValueError(f"Préférence inconnue pour {dimension}/{key} : {level}")
-                item = str(key).strip()
-                if not item:
-                    raise ValueError(f"Groupe vide dans la dimension {dimension}.")
-                output[item] = label
-            normalized[dimension] = output
-        cfg["agent_preferences"] = normalized
+        cfg["agent_preferences"] = _normalize_preferences(request["preferences"])
 
     validate_settings(cfg)
     return cfg

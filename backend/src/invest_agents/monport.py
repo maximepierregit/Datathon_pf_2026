@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from .runtime import get_runtime_settings
 from .catalog import (DIMENSION_COLUMN, SEP, SHARE_TYPES, describe, detect_conflicts, excluded_mask, share_members,
                       share_targets, validate_all)
+from .constraints import preference_exposure
 from .market import UNKNOWN, Market
 from .events import EventBus
 from . import evidence, factors
@@ -78,6 +79,7 @@ REGION_COUNTRIES = {
     "asie": ["Japan", "Australia", "Hong Kong", "Singapore", "New Zealand", "South Korea", "Taiwan"],
     "emergents": ["China", "India", "Brazil", "Mexico", "South Africa", "Indonesia", "Thailand"],
 }
+# Thématiques avec un secteur GICS (« tech » = Information Technology), sinon étiquettes du Parquet (THEME_TAGS).
 THEME_SECTORS = {
     "tech": ["Technology", "Information Technology"],
     "sante": ["Health Care"],
@@ -87,8 +89,9 @@ THEME_SECTORS = {
     "consommation": ["Consumer Staples", "Consumer Discretionary"],
     "industrie": ["Industrials"],
 }
-# Thématiques sans secteur: étiquettes de la colonne `theme` du Parquet (data-prep/themes.csv), posées titre par titre,
-# FNB thématiques compris. « vice » = alcool, tabac, jeux et cannabis.
+# Thématiques sans secteur: étiquettes de la colonne `theme` du Parquet (data-prep/themes.csv), posées titre par titre.
+# Seules les actions détenues en direct étiquetées comptent (un FNB étiqueté n'est ni compté ni exclu).
+# « vice » = alcool, tabac, jeux et cannabis.
 THEME_TAGS = {
     "ia": ["ia"],
     "energie-propre": ["energie-propre"],
@@ -110,19 +113,16 @@ FACTOR_LEVELS = {2: 0.5, 1: 0.2, -1: -0.2, -2: -0.5}
 FACTOR_NOTE = "MonPort: factors."
 FRONT_FACTORS = {engine: front for front, engine in FACTOR_TARGETS.items()}
 
-# Classes, régions, thématiques: « exclure », ou un pourcentage saisi (absent = neutre, libre pour l'optimiseur).
-# Classes: % du portefeuille. Régions et thématiques: % de la poche actions, tenu par les actions détenues en direct
-# (les FNB n'ont ni pays ni secteur connu, voir `catalog.SHARE_TYPES`). Imposé à ± SHARE_TOLERANCE.
+# Classes, régions, thématiques: Exclure (« exclure », 0 % exactement), Neutre (clé absente, libre pour l'optimiseur)
+# ou un pourcentage saisi de 0 à 100, imposé EXACTEMENT.
+# Classes: part du portefeuille total, tous les instruments admissibles, FNB compris; « crypto » = crypto détenue en
+# direct (type Cryptocurrency, pas toute la classe Alternative).
+# Régions et thématiques: part de la poche actions (actions en direct et FNB d'actions), tenue par les seules actions
+# détenues en direct du groupe; un FNB n'y compte jamais (voir `config.EQUITY_SLEEVE_CLASSES`).
 EXCLUDE = "exclure"
+CRYPTO_TYPE = "Cryptocurrency"
 THEME_NOTE = "MonPort: themes."
-SHARE_TOLERANCE = 0.02
 BLOCKS = ("classes", "regions", "themes")
-DIMENSION_TYPES = {
-    "asset_class": (T.EXCLUDE_ASSET_CLASS, T.MAX_ASSET_CLASS_WEIGHT, T.MIN_ASSET_CLASS_WEIGHT),
-    "country": (T.EXCLUDE_COUNTRY, T.MAX_COUNTRY_SHARE, T.MIN_COUNTRY_SHARE),
-    "sector": (T.EXCLUDE_SECTOR, T.MAX_SECTOR_SHARE, T.MIN_SECTOR_SHARE),
-    "theme": (T.EXCLUDE_THEME, T.MAX_THEME_SHARE, T.MIN_THEME_SHARE),
-}
 
 LOSS_BY_REACTION = {0: 10.0, 1: 15.0, 2: 25.0, 3: 35.0}  # baisse de 20 %: je vends tout … j'investis plus
 OBJECTIVES = {"securiser": "preservation", "fructifier": "balanced", "viser-haut": "growth"}
@@ -134,7 +134,7 @@ MAX_ADJUSTMENT = 1000
 # Répartition stratégique du profil (portefeuilles modèles 20/80 … 100/0): plancher d'obligations, fixé par le code
 # pour les portefeuilles qui suivent le profil (« Ton profil », et les 3 variantes quand le profil est cohérent).
 BOND_FLOOR = {"conservateur": 0.80, "modere": 0.60, "equilibre": 0.40, "dynamique": 0.20, "agressif": 0.0}
-BOND_SHIFT = {"prudent": 0.10, "equilibre": 0.0, "conviction": -0.10}
+BOND_SHIFT = {"prudent": 0.0, "equilibre": 0.0, "conviction": 0.0}  # plus de décalage: seul A distingue les variantes
 BOND_TARGETS = ("Fixed Income", "Bonds")
 CRYPTO_TARGETS = ("Crypto", "Alternative")
 NO_CRYPTO = {"conservateur", "modere"}  # pas de crypto dans un portefeuille qui suit un profil prudent
@@ -175,15 +175,34 @@ def _targets(block: str, item: str, allowed: dict[str, list[str]]) -> tuple[str,
     return dimension, [present[c.lower()] for c in candidates if c.lower() in present]
 
 
+def _preference_target(block: str, item: str, allowed: dict[str, list[str]]) -> tuple[Optional[str], list[str]]:
+    """(dimension du moteur, libellés) d'un élément du questionnaire; (None, []) s'il n'a pas d'équivalent.
+    « crypto » vise la crypto détenue en direct (type Cryptocurrency), pas toute la classe Alternative."""
+    if block == "classes" and item == "crypto":
+        present = {v.lower(): v for v in allowed.get("instrument_type", [])}
+        return ("instrument_type", [present[CRYPTO_TYPE.lower()]]) if CRYPTO_TYPE.lower() in present else (None, [])
+    dimension, targets = _targets(block, item, allowed)
+    return (dimension if targets else None), targets
+
+
+EXCLUDE_TYPES = {"asset_class": T.EXCLUDE_ASSET_CLASS, "instrument_type": T.EXCLUDE_INSTRUMENT_TYPE,
+                 "country": T.EXCLUDE_COUNTRY, "sector": T.EXCLUDE_SECTOR, "theme": T.EXCLUDE_THEME}
+EXACT_TYPES = {"asset_class": T.EXACT_ASSET_CLASS_WEIGHT, "instrument_type": T.EXACT_INSTRUMENT_TYPE_WEIGHT,
+               "country": T.EXACT_COUNTRY_WEIGHT, "sector": T.EXACT_SECTOR_WEIGHT, "theme": T.EXACT_THEME_WEIGHT}
+EXACT_DIMENSION = {t: d for d, t in EXACT_TYPES.items()}
+
+
 def _dedupe(constraints: list[Constraint]) -> list[Constraint]:
-    """Une exclusion l'emporte sur un poids visé (ex.: FNB seulement et « Imposer » les actions); pour une même cible,
-    on garde la contrainte la plus forte."""
+    """Une exclusion l'emporte sur un plancher ou un plafond visé (ex.: FNB seulement et un plancher d'actions de
+    Pépite); pour une même cible, on garde la contrainte la plus forte. Un pourcentage EXACT du client n'est jamais
+    effacé par une exclusion: les deux restent, et le conflit est signalé (`detect_conflicts`)."""
     excluded = {(c.type.value.removeprefix("exclude_"), (c.target or "").lower()) for c in constraints
                 if c.type.value.startswith("exclude_")}
     unique: dict[tuple[str, str], Constraint] = {}
     for c in constraints:
         dimension = c.type.value.removeprefix("min_").removeprefix("max_").removesuffix("_weight")
-        if not c.type.value.startswith("exclude_") and (dimension, (c.target or "").lower()) in excluded:
+        bound = c.type.value.startswith(("min_", "max_"))
+        if bound and (dimension, (c.target or "").lower()) in excluded:
             continue
         key = (c.type.value, (c.target or "").lower())
         if key not in unique or (c.hard and not unique[key].hard):
@@ -204,10 +223,11 @@ def fund_types(allowed: dict[str, list[str]]) -> list[str]:
 
 
 def share_of(choice: Any) -> Optional[float]:
-    """Le pourcentage saisi, en fraction; None pour « exclure », neutre ou une valeur illisible."""
-    if isinstance(choice, bool) or not isinstance(choice, (int, float)):
+    """Le pourcentage saisi (0 à 100) converti en fraction (45 -> 0.45); None pour « exclure », neutre ou une valeur
+    hors de [0, 100] ou non finie (jamais ramenée de force dans l'intervalle)."""
+    if isinstance(choice, bool) or not isinstance(choice, (int, float)) or not math.isfinite(choice):
         return None
-    return _clamp(float(choice) / 100)
+    return float(choice) / 100 if 0 <= choice <= 100 else None
 
 
 def shown_classes(prefs: dict) -> list[str]:
@@ -240,34 +260,39 @@ def is_exclusion(c: Constraint) -> bool:
         c.type is T.MAX_FACTOR_EXPOSURE and c.hard and (c.note or "").startswith(FACTOR_NOTE))
 
 
+def preference_choice(choice: Any) -> dict[str, Any]:
+    """Une réponse du questionnaire sous la forme interne {"mode": exclude | neutral | exact, "weight"}."""
+    if choice == EXCLUDE:
+        return {"mode": "exclude", "weight": None}
+    share = share_of(choice)
+    return {"mode": "neutral", "weight": None} if share is None else {"mode": "exact", "weight": share}
+
+
 def preference_constraints(prefs: dict, allowed: dict[str, list[str]]) -> tuple[list[Constraint], list[str]]:
-    """Traduit les exclusions et les pourcentages saisis en contraintes dures. Retourne aussi ce qui n'a pas pu l'être."""
+    """Traduit Exclure et les pourcentages saisis en contraintes dures (égalités). Neutre n'ajoute rien.
+    Retourne aussi ce qui n'a pas pu l'être (élément sans équivalent dans l'univers, valeur illisible)."""
     out: list[Constraint] = []
     skipped: list[str] = []
     for block in BLOCKS:
         for item, choice in (prefs.get(block) or {}).items():
-            share = share_of(choice)
-            if choice != EXCLUDE and share is None:
+            pref = preference_choice(choice)
+            if pref["mode"] == "neutral":
+                if choice is not None and choice != "neutre":
+                    skipped.append(f"{BLOCK_LABELS[block]} « {item} » (valeur {choice!r} illisible, laissée neutre)")
                 continue
             if block == "classes" and item not in shown_classes(prefs):
                 continue
-            dimension, targets = _targets(block, item, allowed)
-            exclude, cap, floor = DIMENSION_TYPES[dimension]
+            dimension, targets = _preference_target(block, item, allowed)
             if not targets:
                 skipped.append(f"{BLOCK_LABELS[block]} « {item} »")
                 continue
             note = f"MonPort: {block}.{item} = {choice}"  # « MonPort: themes.ia = 20 » (voir THEME_NOTE)
-            if choice == EXCLUDE:
-                out += [Constraint(type=exclude, target=t, hard=True, note=note) for t in targets]
+            if pref["mode"] == "exclude":
+                out += [Constraint(type=EXCLUDE_TYPES[dimension], target=t, hard=True, note=note) for t in targets]
                 continue
-            # Une classe vise une seule classe du dataset; une région ou une thématique, tous ses pays, secteurs ou
-            # étiquettes.
-            target = targets[0] if block == "classes" else SEP.join(targets)
-            low, high = share - SHARE_TOLERANCE, share + SHARE_TOLERANCE
-            if low > 0:
-                out.append(Constraint(type=floor, target=target, value=round(low, 4), hard=True, note=note))
-            if high < 1:
-                out.append(Constraint(type=cap, target=target, value=round(high, 4), hard=True, note=note))
+            # Une région ou une thématique réunit plusieurs pays, secteurs ou étiquettes: un seul groupe, une égalité.
+            out.append(Constraint(type=EXACT_TYPES[dimension], target=SEP.join(targets), value=round(pref["weight"], 6),
+                                  hard=True, note=note))
     factors_out, factors_skipped = factor_constraints(prefs, allowed)
     out += factors_out
     skipped += factors_skipped
@@ -282,28 +307,14 @@ def preference_constraints(prefs: dict, allowed: dict[str, list[str]]) -> tuple[
     return _dedupe(out), skipped
 
 
-def relax_overlaps(market: Market, constraints: list[Constraint]) -> list[Constraint]:
-    """Deux thématiques chiffrées qui se recoupent (NVIDIA est « tech » et « ia »): le plafond de l'une contredirait le
-    plancher de l'autre, et l'optimiseur s'en sortirait sans aucune action (une part de rien est respectée). On garde
-    leurs planchers: chaque titre compte dans toutes ses thématiques."""
-    theme_of = {id(c): (c.note or "").removeprefix(THEME_NOTE).split(" = ")[0] for c in constraints
-                if c.type in SHARE_TYPES and (c.note or "").startswith(THEME_NOTE)}
-    if len(set(theme_of.values())) < 2:
-        return constraints
-    groups: dict[str, Any] = {}
-    for c in constraints:
-        if id(c) in theme_of:
-            groups[theme_of[id(c)]] = share_members(market.assets, c)
-    overlapping = {a for a in groups for b in groups if a != b and (groups[a] & groups[b]).any()}
-    return [c for c in constraints if not (theme_of.get(id(c)) in overlapping and SHARE_TYPES[c.type][1] == "max")]
-
-
+# Thématiques qui se recoupent (NVIDIA est « tech » et « ia »): chaque titre compte dans toutes ses thématiques, et
+# chaque pourcentage reste une égalité exacte. Une part ne peut plus être respectée « à vide » (sans aucune action):
+# le moteur exige au moins une action du groupe (`constraints._group_specs`, groupe pref_presence).
 def to_form(profile: dict, prefs: dict, market: Market) -> tuple[InvestorForm, list[str]]:
     reaction = int(profile.get("lossReaction", 2))
     objective = OBJECTIVES.get(str(profile.get("objective")), "balanced")
     horizon = int(profile.get("horizon", 10))
     constraints, skipped = preference_constraints(prefs, market.allowed_values())
-    constraints = relax_overlaps(market, constraints)
     form = InvestorForm(
         age=min(110, max(18, int(profile.get("age", 35)))),
         investment_amount_cad=float(profile.get("amount", 10000)),
@@ -373,6 +384,42 @@ def front_score(s: float) -> int:
     return math.floor(5 + 90 * s + 0.5)  # arrondi de Math.round, pas celui de round() (au pair)
 
 
+def preference_contradictions(prefs: dict) -> list[str]:
+    """Choix du questionnaire impossibles à respecter ensemble, détectés avant toute optimisation.
+
+    Le code ne contourne jamais un pourcentage du client: ces cas sont signalés, pas corrigés en silence. Les
+    pourcentages de dimensions différentes se chevauchent (une action canadienne de technologie compte dans les deux):
+    ils ne sont additionnés qu'à l'intérieur des régions, qui sont disjointes, et des classes. Régions et thématiques
+    sont des parts de la poche actions: elles ne se comparent pas au pourcentage d'actions du portefeuille.
+    """
+    vehicles = prefs.get("vehicles")
+    classes = prefs.get("classes") or {}
+    exact = {b: {k: share_of(v) for k, v in (prefs.get(b) or {}).items() if share_of(v) is not None}
+             for b in ("classes", "regions", "themes")}
+    stock_targets = {**{f"région « {k} »": v for k, v in exact["regions"].items() if v > 0},
+                     **{f"thématique « {k} »": v for k, v in exact["themes"].items() if v > 0}}
+    out = []
+    if vehicles == "fnb":
+        if exact["classes"].get("crypto"):
+            out.append("FNB seulement exclut la crypto détenue en direct : la part de crypto demandée est impossible.")
+        for name, v in stock_targets.items():
+            out.append(f"FNB seulement ne permet aucune action en direct, et les FNB ne comptent pas pour la "
+                       f"{name} : {v:.0%} est impossible.")
+    if vehicles == "titres":
+        for k, v in exact["classes"].items():
+            if v > 0 and k not in shown_classes(prefs):
+                out.append(f"Titres individuels seulement : aucun titre de la classe {CLASS_LABELS.get(k, k).lower()} "
+                           f"n'est disponible, {v:.0%} est impossible.")
+    stocks_out = classes.get("actions") == EXCLUDE or exact["classes"].get("actions") == 0
+    if stocks_out and stock_targets:
+        out.append("Les actions sont exclues, mais une région ou une thématique demande des actions en direct.")
+    for block in ("classes", "regions"):
+        total = sum(exact[block].values())
+        if total > 1 + 1e-9:
+            out.append(f"Les pourcentages des {BLOCK_LABELS[block]}s totalisent {total:.0%}, plus que 100 %.")
+    return out
+
+
 def coherence_facts(profile: dict, prefs: dict) -> list[str]:
     score, classes = risk_score(profile), prefs.get("classes") or {}
     crypto, actions = share_of(classes.get("crypto")), share_of(classes.get("actions"))
@@ -392,7 +439,7 @@ def coherence_facts(profile: dict, prefs: dict) -> list[str]:
     if len(kept) == 1:
         out.append(f"Tu n’as gardé qu’un seul type de placement ({CLASS_LABELS[kept[0]].lower()}) : ton portefeuille sera "
                    "très peu diversifié.")
-    return out
+    return out + preference_contradictions(prefs)
 
 
 def _managers(profile: dict, coherent: bool, adjustment: int) -> dict:
@@ -411,10 +458,10 @@ def choices_breakdown(constraints: list[Constraint], s: float) -> dict:
     label = risk_label(s)
     return {
         "contraintes_du_client": [describe(c) for c in constraints] or ["aucune: tout est neutre"],
-        "pourcentages": f"Un pourcentage saisi devient un plancher et un plafond à ± {SHARE_TOLERANCE * 100:g} points, durs. "
-                        "Classes: part du portefeuille. Régions et thématiques: part de la poche actions, tenue par les "
-                        "actions détenues en direct (un FNB n'a ni pays ni secteur), sauf IA, énergie propre, armement "
-                        "et alcool-tabac, étiquetées titre par titre: un FNB étiqueté compte aussi.",
+        "pourcentages": "Un pourcentage saisi est imposé exactement (égalité dure). Classes: part du portefeuille, FNB "
+                        "compris; crypto = crypto détenue en direct. Régions et thématiques: part de la poche actions "
+                        "(actions en direct et FNB d'actions), tenue par les seules actions détenues en direct; un FNB, "
+                        "même étiqueté (IA, énergie propre, armement, alcool-tabac), ne compte jamais.",
         "exclusions": "0 % dans les 3 portefeuilles; un facteur à Exclure aussi.",
         "qui_les_respecte": {"profil_coherent": "les 3 gestionnaires",
                              "profil_incoherent": "Tes contraintes et Tes préférences; Ton profil ne garde que les exclusions"},
@@ -422,13 +469,15 @@ def choices_breakdown(constraints: list[Constraint], s: float) -> dict:
             "regle": "libre: l'optimiseur répartit lui-même en maximisant rendement − A/2 × variance parmi les placements "
                      "permis, sous les garde-fous ci-dessous",
             "plancher_obligations": BOND_FLOOR[label],
-            "plancher_obligations_note": "portefeuilles qui suivent le profil (cohérent: les 3, décalés de ±10 points; "
+            "plancher_obligations_note": "portefeuilles qui suivent le profil (cohérent: les 3, le même plancher; "
                                          "incohérent: Ton profil), logé dans la place que les pourcentages laissent libre",
             "pas_de_crypto": label in NO_CRYPTO,
             "poids_max_par_ligne": LINE_CAP,
             "poids_max_par_titre_direct": round(min(_interpolate(s, STOCK_ANCHORS), LINE_CAP), 3),
             "volatilite_max": round(_interpolate(s, VOL_ANCHORS), 3),
             "poids_min_par_placement_retenu": 0.01,
+            "nombre_de_positions": "25 à 70, selon le coût de la diversification (moins si le client le demande "
+                                   "ou si peu de placements sont admissibles)",
         },
     }
 
@@ -500,8 +549,12 @@ def slot_position(check: PepiteCheck, slot: str) -> Optional[float]:
 
 
 def slot_volatility(check: PepiteCheck, slot: str) -> Optional[float]:
+    """Plafond de volatilité d'un gestionnaire. Profil cohérent: le MÊME pour les 3 variantes (celui du profil),
+    seul A les distingue. Profil incohérent: celui du profil, sauf « Tes préférences » qui n'en a pas."""
     s = slot_position(check, slot)
-    return None if s is None else round(_interpolate(s, VOL_ANCHORS), 3)
+    if s is None:
+        return None
+    return round(_interpolate(check.risk_position if check.coherent else s, VOL_ANCHORS), 3)
 
 
 # --------------------------------------------------------------------------- #
@@ -523,10 +576,12 @@ def follow_profile(constraints: list[Constraint], floor: float, risk_label: str,
     fixed = {t.lower() for t in fixed}
     bonds = next((present[t.lower()] for t in BOND_TARGETS if t.lower() in present), None)
     cryptos = [present[t.lower()] for t in CRYPTO_TARGETS if t.lower() in present] if risk_label in NO_CRYPTO else []
-    cryptos = [t for t in cryptos if t.lower() not in fixed]
+    # Une part de crypto fixée par le client (type Cryptocurrency) l'emporte sur « pas de crypto » du profil.
+    cryptos = [] if CRYPTO_TYPE.lower() in fixed else [t for t in cryptos if t.lower() not in fixed]
     excluded = {(c.target or "").lower() for c in constraints if c.type is T.EXCLUDE_ASSET_CLASS}
     # Le plancher se loge dans la place que les pourcentages du client laissent libre.
-    floor = min(floor, 1 - sum(c.value or 0 for c in constraints if c.type is T.MIN_ASSET_CLASS_WEIGHT and c.hard
+    floor = min(floor, 1 - sum(c.value or 0 for c in constraints
+                                if c.type in (T.EXACT_ASSET_CLASS_WEIGHT, T.MIN_ASSET_CLASS_WEIGHT) and c.hard
                                 and (c.target or "").lower() in fixed))
     if bonds and (floor <= 0 or bonds.lower() in excluded or bonds.lower() in fixed):
         bonds = None
@@ -555,8 +610,8 @@ def promote_preferences(constraints: list[Constraint]) -> list[Constraint]:
 
 
 def _family(c: Constraint) -> str:
-    """« sector_share », « asset_class_weight »…: le plancher et le plafond d'une même cible forment une famille."""
-    return c.type.value.removeprefix("min_").removeprefix("max_")
+    """« sector_share », « asset_class_weight »…: plancher, plafond et poids exact d'une même cible forment une famille."""
+    return c.type.value.removeprefix("min_").removeprefix("max_").removeprefix("exact_")
 
 
 def impose_targets(constraints: list[Constraint], targets: list[Constraint]) -> list[Constraint]:
@@ -571,10 +626,10 @@ def fallback_plan(check: PepiteCheck, prefs: list[Constraint]) -> dict[str, tupl
     exclusions = [c for c in prefs if is_exclusion(c)]
     if check.coherent:
         return {
-            "prudent": ("Un cran plus prudent que tes réponses.", prefs + _limits(slot_volatility(check, "prudent"), weight)),
+            # Mêmes contraintes pour les trois; seule l'aversion au risque A change (S − 0,10 / S / S + 0,10).
+            "prudent": ("Tes réponses, avec une aversion au risque un cran plus élevée.", prefs + _limits(vol, weight)),
             "equilibre": ("Fidèle à tes réponses.", prefs + _limits(vol, weight)),
-            "conviction": ("Un cran plus audacieux que tes réponses.",
-                           prefs + _limits(slot_volatility(check, "conviction"), weight)),
+            "conviction": ("Tes réponses, avec une aversion au risque un cran plus faible.", prefs + _limits(vol, weight)),
         }
     return {
         "prudent": ("Seulement les limites de ton profil.", exclusions + _limits(vol, weight)),
@@ -599,11 +654,12 @@ def guidance_for(aversion: Optional[float]) -> str:
 
 
 def bond_floors(check: PepiteCheck) -> dict[str, float]:
-    """Incohérent: seul « Ton profil » suit la répartition du profil. Cohérent: les 3 variantes, décalées de ±10 points."""
+    """Incohérent: seul « Ton profil » suit la répartition du profil. Cohérent: le MÊME plancher pour les 3 variantes
+    (plus de décalage de ±10 points: seul A distingue les variantes)."""
     base = BOND_FLOOR.get(check.risk_label, 0.0)
     if not check.coherent:
         return {"prudent": base}
-    return {s: min(0.9, max(0.0, base + BOND_SHIFT[s])) if base else 0.0 for s in SLOTS}
+    return {s: base for s in SLOTS}
 
 
 def validate_profile(constraints: list[Constraint], exclusions: list[Constraint],
@@ -676,6 +732,10 @@ def _raise_volatility_cap(market: Market, constraints: list[Constraint]) -> tupl
         elif c.type in SHARE_TYPES and SHARE_TYPES[c.type][1] == "min":
             group = eligible[share_members(eligible, c)]
             picks += group.sort_values("sharpe", ascending=False).index[:3].tolist()
+        elif c.type in EXACT_DIMENSION and (c.value or 0) > 0:  # un pourcentage exact exige des titres du groupe
+            dimension = EXACT_DIMENSION[c.type]
+            exposed = [s for s, row in eligible.iterrows() if preference_exposure(s, row, dimension, c.target or "")]
+            picks += eligible.loc[exposed].sort_values("sharpe", ascending=False).index[:5].tolist()
     picks = list(dict.fromkeys(picks))[: get_runtime_settings().max_assets_per_portfolio]
     others = [c for c in constraints if not (c.hard and c.type is T.MAX_VOLATILITY)]
     lowest = optimize(market, picks, "min_volatility", others)
@@ -698,6 +758,12 @@ def build_profiles(plan: Optional[ConstraintPlan], check: PepiteCheck, prefs: li
     # Tout le reste du questionnaire: pourcentages et facteurs, imposés tels quels.
     targets = [c for c in prefs if not is_exclusion(c)]
     proposed = {p.slot: p for p in (plan.profiles if plan else [])}
+    if check.coherent and "equilibre" in proposed:
+        # Mêmes contraintes pour les 3 variantes: le profil « fidèle » de Pépite (qui intègre l'ajustement libre du
+        # client) sert aux trois. Seul A, tiré de S − 0,10 / S / S + 0,10, les distingue.
+        common = proposed["equilibre"]
+        proposed = {s: common.model_copy(update={"slot": s, "rationale": proposed.get(s, common).rationale})
+                    for s in SLOTS}
     out, replaced = {}, 0
     for slot in SLOTS:
         p = proposed.get(slot)
@@ -718,7 +784,8 @@ def build_profiles(plan: Optional[ConstraintPlan], check: PepiteCheck, prefs: li
             constraints = promote_preferences(constraints)
         if slot in floors:
             # Une classe dont le client a fixé le pourcentage garde son pourcentage, plancher d'obligations compris.
-            fixed = [c.target for c in targets if c.target and _family(c) == "asset_class_weight"] if follows else []
+            fixed = [c.target for c in targets if c.target
+                     and _family(c) in ("asset_class_weight", "instrument_type_weight")] if follows else []
             constraints = follow_profile(constraints, floors[slot], check.risk_label, allowed, fixed)
         # Le plafond de volatilité vient du code, à la position du gestionnaire (filet de sécurité sous A).
         constraints = [c for c in constraints if c.type is not T.MAX_VOLATILITY]
