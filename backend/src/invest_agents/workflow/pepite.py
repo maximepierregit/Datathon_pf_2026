@@ -49,11 +49,12 @@ LEGEND = """LÉGENDE DU JSON DU QUESTIONNAIRE
 - profile.comfort: aisance avec les placements, de 1 (débutant) à 5 (expert).
 - constraints.vehicles: "fnb" = FNB seulement (aucun titre détenu en direct), "titres" = titres individuels seulement
   (actions et crypto détenues en direct, aucun FNB, donc aucune obligation), "tous" = FNB et titres individuels.
-- constraints.classes, regions, themes: "exclure", ou un pourcentage de 0 à 100 que le client impose. Une clé absente
-  vaut Neutre: libre. Classes: % du portefeuille entier. Régions et thématiques: % de la poche actions, tenu par les
-  actions détenues en direct (un FNB n'a ni pays ni secteur connu); ia, energie-propre, armement et alcool-tabac
-  (étiquette « vice »: alcool, tabac, jeux, cannabis) sont des étiquettes posées titre par titre, FNB compris.
-  Les pourcentages d'un même bloc font au plus 100.
+- constraints.classes, regions, themes: "exclure" (0 % exactement), ou un pourcentage EXACT de 0 à 100 que le client
+  impose. Une clé absente vaut Neutre: libre. Classes: % du portefeuille entier, tous les placements, FNB compris
+  (crypto = crypto détenue en direct). Régions et thématiques: % de la poche actions (actions en direct et FNB
+  d'actions), tenu par les seules actions détenues en direct, jamais par un FNB. ia, energie-propre, armement et
+  alcool-tabac (étiquette « vice »: alcool, tabac, jeux, cannabis) sont des étiquettes posées titre par titre; un FNB
+  étiqueté n'y compte pas non plus. Les pourcentages d'un même bloc font au plus 100.
 - constraints.factors: échelle -2 Exclure, -1 Moins, 0 Neutre, 1 Plus, 2 Imposer. Une clé absente vaut Neutre."""
 
 TONE = (
@@ -68,8 +69,8 @@ client ni entre eux: tout passe par toi, avec tes outils.
 CE QUE TU FAIS
 1. Déterminer le profil et les préférences du client, et vérifier qu'ils sont cohérents.
 2. Écrire les 3 profils de contraintes des gestionnaires, lancer leur construction, puis le jugement.
-3. Relancer la construction au besoin: le juge l'exige (portefeuille non conforme, rapport de risque insuffisant) ou le
-   client la confirme, après que tu l'as questionné jusqu'à ce que ses changements soient clairs.
+3. Relancer la construction seulement quand le client la confirme, après que tu l'as questionné jusqu'à ce que ses
+   changements soient clairs. Le juge ne demande plus de reconstruction: il compare et choisit.
 4. Répondre aux questions du client sur ses portefeuilles. Pour le pourquoi et le comment, tu interroges les
    gestionnaires, les agents Risque et le juge, puis tu expliques avec tes mots.
 5. Expliquer des notions de finance de base quand le client en a besoin.
@@ -125,8 +126,9 @@ Règles communes
 - Les exclusions du client (« exclure ») s'appliquent aux 3 profils.
 - Le code traduit lui-même le questionnaire et l'ajoute aux profils: les exclusions dans les 3, « FNB seulement »
   ({direct}) et « titres individuels seulement » (exclude_instrument_type), et les pourcentages saisis par le client,
-  imposés à ± 2 points dans les profils qui suivent ses préférences (min/max_asset_class_weight pour les classes,
-  min/max_country_share pour les régions, min/max_sector_share ou min/max_theme_share pour les thématiques), et les
+  imposés EXACTEMENT dans les profils qui suivent ses préférences (exact_asset_class_weight pour les classes,
+  exact_instrument_type_weight pour la crypto, en part du portefeuille entier; exact_country_weight,
+  exact_sector_weight et exact_theme_weight pour les régions et les thématiques, en part de la poche actions), et les
   facteurs (taille -> small_cap, qualite -> quality, momentum, value, croissance -> growth: Imposer ->
   min_factor_exposure 0.5 dur; Plus -> min_factor_exposure 0.2; Moins -> max_factor_exposure -0.2; Exclure ->
   max_factor_exposure -0.5 dur, dans les 3 profils; aucun avec FNB seulement). Ne les réécris pas: ce que tu écris sur les mêmes cibles est
@@ -330,8 +332,8 @@ def make_pepite_tools(session: Session) -> list:
 
     @tool
     async def judge_portfolios() -> dict:
-        """Fait juger les portefeuilles construits: le code calcule la conformité, le juge compare et peut exiger une
-        réoptimisation. Retourne la conformité, le gagnant (profil cohérent) et ce qu'il faut reconstruire."""
+        """Fait juger les portefeuilles construits: le code calcule la conformité, le juge compare et choisit.
+        Retourne la conformité, les notes du juge et le gagnant (profil cohérent)."""
         if not all(s in session.portfolios for s in SLOTS) or not session.built():
             return {"error": "Construis d'abord les portefeuilles avec build_portfolios."}
         if session.judged_round != session.build_round:  # sinon le juge a déjà parlé sur ces portefeuilles
@@ -387,7 +389,7 @@ def make_pepite_tools(session: Session) -> list:
 
     @tool
     async def ask_judge(question: str) -> str:
-        """Demande au juge d'expliquer sa décision (le gagnant, la conformité, une réoptimisation demandée).
+        """Demande au juge d'expliquer sa décision (le gagnant, la conformité, ses notes).
 
         Args:
             question: La question, reformulée pour le juge.
@@ -429,9 +431,7 @@ Démarche, dans l'ordre:
    s'il répond à tes questions sur une incohérence, tiens-en compte (`set_coherence` si ses réponses la lèvent).
 3. Écris les 3 profils et envoie-les avec `submit_constraint_plan`. Corrige et renvoie si le code les refuse.
 4. `build_portfolios` (les trois), puis `judge_portfolios`.
-5. Si le juge demande de reconstruire des portefeuilles et qu'il reste des relances: `build_portfolios` avec ces `slots`
-   et leurs `instructions`, puis `judge_portfolios` de nouveau.
-6. Réponds au client en 2 ou 3 phrases: profil cohérent, ton portefeuille est prêt et pourquoi il l'emporte (reprends la
+5. Réponds au client en 2 ou 3 phrases: profil cohérent, ton portefeuille est prêt et pourquoi il l'emporte (reprends la
    justification du juge); profil incohérent, trois propositions t'attendent et c'est lui qui choisit.
 
 """
@@ -475,10 +475,10 @@ REBUILD_TASK = """Le client a confirmé les changements dont vous avez parlé da
    qu'il veut prendre, utilise `adjust_risk_position`. La cohérence du profil ne change pas.
 2. Réécris les 3 profils et envoie-les avec `submit_constraint_plan`, avec les mêmes règles qu'à la construction, à
    une différence près: ici, le code n'ajoute plus les pourcentages du questionnaire. Écris-les toi-même dans les
-   profils qui suivent les préférences (± 2 points, en fractions), ceux que le client a changés compris.
+   profils qui suivent les préférences (exact_*_weight, en fractions: du portefeuille entier pour les classes, de la
+   poche actions pour les régions et les thématiques), ceux que le client a changés compris.
    Corrige et renvoie si le code les refuse.
-3. `build_portfolios` (les trois), puis `judge_portfolios`. Si le juge demande de reconstruire et qu'il reste des
-   relances: `build_portfolios` avec ces `slots` et leurs `instructions`, puis `judge_portfolios` de nouveau.
+3. `build_portfolios` (les trois), puis `judge_portfolios`.
 4. Réponds au client en 2 phrases, en texte simple sans balises: ce qui a changé dans ses portefeuilles.
 
 """

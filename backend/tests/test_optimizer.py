@@ -300,13 +300,13 @@ def test_23_forced_required_no_micro_even_when_negative_mu():
     assert x.weights["NVDA"] >= .01-1e-7
 
 
-def test_24_soft_preference_not_silently_ignored():
+def test_24_exact_preference_is_enforced_not_ignored():
     mat, meta=sample_dataset()
-    cfg=cfg_agent_hist({"preferences":{"sector":{"Information Technology":"more"}}})
+    cfg=cfg_agent_hist({"preferences":{"symbol":{"NVDA":{"mode":"exact","weight":0.30}}}})
     p=plan_for(meta.loc[["NVDA","AAPL"]],cfg)
     mu,cov=manual_mu_cov(meta.loc[["NVDA","AAPL"]],[.1,.2])
-    with pytest.raises(constraints.UnresolvedPreferenceError):
-        optimizer.optimize_weights(mu,cov,p,cfg)
+    x=optimizer.optimize_weights(mu,cov,p,cfg)
+    assert x.weights["NVDA"] == pytest.approx(0.30, abs=1e-6)
 
 
 def test_25_bad_covariance_negative_eigenvalue_rejected():
@@ -462,10 +462,12 @@ def test_38_markowitz_analytic_one_asset_plus_cash():
     p = plan_for(meta, cfg)
     mu, cov = manual_mu_cov(meta, [0.1], sigma_value=0.04)
     result = optimizer.optimize_weights(mu, cov, p, cfg)
-    # dU/dw = mu - A*sigma^2*w = 0, donc w = .1/(5*.04) = .5.
-    assert result.weights["NVDA"] == pytest.approx(0.5, abs=1e-5)
-    assert result.cash_weight == pytest.approx(0.5, abs=1e-5)
-    assert result.utility == pytest.approx(0.05 - 0.5 * 5 * 0.04 * .25)
+    # U = w*mu + (1-w)*rc - A/2*sigma^2*w^2 ; dU/dw = 0 donne w = (mu - rc)/(A*sigma^2).
+    rc = cfg["cash"]["annual_expected_return"]
+    w = (0.1 - rc) / (5 * 0.04)
+    assert result.weights["NVDA"] == pytest.approx(w, abs=1e-5)
+    assert result.cash_weight == pytest.approx(1 - w, abs=1e-5)
+    assert result.utility == pytest.approx(w * 0.1 + (1 - w) * rc - 0.5 * 5 * 0.04 * w ** 2)
 
 
 def test_39_pairwise_sample_indefinite_matrix_is_repaired():
