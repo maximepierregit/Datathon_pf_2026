@@ -3,7 +3,7 @@
 // (simulé) prennent le relais.
 import { CLASS_LABELS, UNIVERSE } from './data/catalog'
 import { coherenceWarnings, PORTFOLIO_IDS } from './lib/engine'
-import type { AdjustProposal, AgentId, AgentStatus, Constraints, Portfolio, PipelineEvent, Profile, ProfileCheck } from './types'
+import type { AdjustProposal, AgentId, AgentStatus, Constraints, Contribution, Portfolio, PipelineEvent, Profile, ProfileCheck } from './types'
 
 /**
  * VITE_API_URL : la Function URL du proxy Lambda vers AgentCore Runtime (deploy/state/api-url, injectée par deploy.sh).
@@ -148,12 +148,21 @@ export async function checkProfile(
   return check ? { check, session } : { check: exampleCheck(input.score, input.constraints), session: null }
 }
 
-type PipelineInput = { score: number; profile: Profile; constraints: Constraints; check: ProfileCheck; adjustment: string; session: string | null }
+type PipelineInput = {
+  score: number
+  profile: Profile
+  constraints: Constraints
+  /** Ajouts prévus : le backend s'en sert pour la projection du tableau de bord, jamais les agents. */
+  contribution: Contribution
+  check: ProfileCheck
+  adjustment: string
+  session: string | null
+}
 
 export async function runPipeline(input: PipelineInput, onEvent: (e: PipelineEvent) => void, signal: AbortSignal) {
   await wait(50, signal)
-  const { profile, constraints, check, adjustment, session } = input
-  const body = await openStream({ mode: 'monport', profile, constraints, check, adjustment, session }, signal)
+  const { profile, constraints, contribution, check, adjustment, session } = input
+  const body = await openStream({ mode: 'monport', profile, constraints, contribution, check, adjustment, session }, signal)
   if (!body) return runScript(input, onEvent, signal)
   await relay(body, onEvent, signal)
 }

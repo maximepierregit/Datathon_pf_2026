@@ -29,6 +29,7 @@ from typing import AsyncIterator, Optional
 
 from pydantic import ValidationError
 
+from ..projection import clean_contribution
 from ..agents.base import AgentError
 from ..runtime import get_runtime_settings
 from ..market import get_market
@@ -157,7 +158,8 @@ def present(session: Session, bus) -> bool:
         front(bus, status("pepite", "done", "Mélanges 80/20 prêts : profil d’abord, préférences d’abord."))
     front(bus, {"type": "portfolios", "session": session.id, "portfolios": {
         p.id: to_portfolio(p, v, market, {"warnings": _warnings_for(session, p.id, sources)}, check.risk_position,
-                           session.skipped, session.notes.get(p.id, []), name, tagline, session.form)
+                           session.skipped, session.notes.get(p.id, []), name, tagline, session.form,
+                           session.prefs, session.contribution)
         for p, v, name, tagline, sources in presented
     }})
     session.shown_version = session.version
@@ -186,6 +188,7 @@ async def build_portfolios(payload: dict, bus, translator: Translator) -> None:
             session.review = review_of(PepiteCheck.model_validate(payload.get("check")))
         except ValidationError:
             session.review = None
+    session.contribution = clean_contribution(payload.get("contribution"))
     if session.lock.locked():
         front(bus, {"type": "error", "message": "Une demande est déjà en cours pour cette conversation."})
         return

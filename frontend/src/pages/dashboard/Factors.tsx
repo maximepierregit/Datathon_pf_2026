@@ -1,16 +1,14 @@
 // Exposition aux facteurs (vue Avancé) : une carte par facteur, puis les actions qui font pencher le portefeuille.
 import { useEffect, useState } from 'react'
 import { Card } from '../../components/ui'
-import { FACTOR_IDS, FACTOR_TARGETS, FACTOR_VIEW, LEVELS } from '../../data/catalog'
+import { FACTOR_IDS, FACTOR_VIEW, LEVELS } from '../../data/catalog'
 import { pct } from '../../lib/format'
 import { FactorModel } from './FactorModel'
 import { InfoTip } from './parts'
-import { useApp } from '../../store'
-import type { FactorId, FactorView, Level, Portfolio } from '../../types'
+import type { FactorId, FactorRequest, FactorView, Portfolio } from '../../types'
 
 const RANGE = 1.5 // bornes de la jauge, en écarts-types
 const NEUTRAL = 0.1 // bande blanche autour de 0
-const TOL = 0.01 // même tolérance que FTOL du backend
 
 /** « +0,51 », « −0,21 » (signe moins typographique). */
 function score(v: number, digits = 2): string {
@@ -53,11 +51,11 @@ const TONE = {
 /** Position horizontale (0 à 100 %) d'une valeur sur l'échelle −RANGE … +RANGE. */
 const x = (v: number) => ((Math.max(-RANGE, Math.min(RANGE, v)) + RANGE) / (2 * RANGE)) * 100
 
-function FactorCard({ id, value, level }: { id: FactorId; value: number; level: Level }) {
+function FactorCard({ id, value, request }: { id: FactorId; value: number; request?: FactorRequest }) {
   const view = FACTOR_VIEW[id]
-  const target = level ? FACTOR_TARGETS[level] : undefined
-  const met = target === undefined ? undefined : target > 0 ? value >= target - TOL : value <= target + TOL
-  const levelLabel = LEVELS.find((l) => l.value === level)?.label
+  const target = request?.threshold
+  const met = request?.met
+  const levelLabel = LEVELS.find((l) => l.value === request?.level)?.label
   const sign = Math.abs(value) < NEUTRAL ? 'zero' : value > 0 ? 'pos' : 'neg'
   const tone = TONE[sign]
   // La barre part du centre et rejoint sa valeur (transition CSS, coupée si l'utilisateur réduit les animations).
@@ -122,11 +120,7 @@ function FactorCard({ id, value, level }: { id: FactorId; value: number; level: 
 
 // ---------- Contributions ----------
 
-function Contributions({ f, top = 8 }: { f: FactorView; top?: number }) {
-  const shown = f.stocks.slice(0, top)
-  const rest = f.stocks.slice(top)
-  const contrib = (weight: number, z: number | undefined) => (weight * (z ?? 0)) / f.coverage
-  const restOf = (id: FactorId) => rest.reduce((s, x) => s + contrib(x.weight, x.scores[id]), 0)
+function Contributions({ f }: { f: FactorView }) {
   const cell = (key: string, v: number) => {
     const strong = Math.abs(v) > 0.18
     return (
@@ -135,10 +129,11 @@ function Contributions({ f, top = 8 }: { f: FactorView; top?: number }) {
       </td>
     )
   }
+  const count = f.stockCount ?? f.stocks.length
   return (
     <details className="group rounded-[var(--radius-card)] border border-line-soft">
       <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-2 font-semibold text-navy [&::-webkit-details-marker]:hidden">
-        <span>Qui fait pencher ton portefeuille? <span className="font-normal text-ink-soft">({f.stocks.length} action{f.stocks.length > 1 ? 's' : ''})</span></span>
+        <span>Qui fait pencher ton portefeuille? <span className="font-normal text-ink-soft">({count} action{count > 1 ? 's' : ''})</span></span>
         <svg className="shrink-0 transition-transform group-open:rotate-180" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
           <path d="M6 9l6 6 6-6" />
         </svg>
@@ -159,20 +154,20 @@ function Contributions({ f, top = 8 }: { f: FactorView; top?: number }) {
               </tr>
             </thead>
             <tbody>
-              {shown.map((s) => (
+              {f.stocks.map((s) => (
                 <tr key={s.ticker} className="border-t border-white">
                   <td className="py-1.5 pr-2">
                     <span className="font-semibold text-navy">{s.ticker}</span> <span className="text-ink-soft">{s.name}</span>
                   </td>
                   <td className="px-2 py-1.5 text-right tabular-nums">{pct(s.weight)}</td>
-                  {FACTOR_IDS.map((id) => cell(id, contrib(s.weight, s.scores[id])))}
+                  {FACTOR_IDS.map((id) => cell(id, s.contributions?.[id] ?? 0))}
                 </tr>
               ))}
-              {rest.length > 0 && (
+              {f.others && (
                 <tr className="border-t border-white text-ink-soft">
-                  <td className="py-1.5 pr-2">Autres ({rest.length})</td>
-                  <td className="px-2 py-1.5 text-right tabular-nums">{pct(rest.reduce((s, x) => s + x.weight, 0))}</td>
-                  {FACTOR_IDS.map((id) => cell(id, restOf(id)))}
+                  <td className="py-1.5 pr-2">Autres ({f.others.count})</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{pct(f.others.weight)}</td>
+                  {FACTOR_IDS.map((id) => cell(id, f.others?.contributions[id] ?? 0))}
                 </tr>
               )}
               <tr className="border-t-2 border-line font-semibold">
@@ -217,7 +212,6 @@ function Legend() {
 // ---------- Carte ----------
 
 export function FactorExposure({ p }: { p: Portfolio }) {
-  const levels = useApp((s) => s.constraints.factors)
   const f = p.factors
   if (!f) return null
   return (
@@ -250,7 +244,7 @@ export function FactorExposure({ p }: { p: Portfolio }) {
           <div className="@container">
           <ul className="m-0 grid list-none grid-cols-2 gap-3 p-0 @min-[560px]:grid-cols-3 @min-[880px]:grid-cols-5">
             {FACTOR_IDS.map((id) => (
-              <FactorCard key={id} id={id} value={f.exposure[id] ?? 0} level={(levels[id] ?? 0) as Level} />
+              <FactorCard key={id} id={id} value={f.exposure[id] ?? 0} request={f.requests?.[id]} />
             ))}
           </ul>
           </div>
