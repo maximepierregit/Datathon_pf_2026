@@ -48,11 +48,51 @@ export type PortfolioId = 'prudent' | 'equilibre' | 'conviction'
 
 export type DashboardLevel = 'debutant' | 'intermediaire' | 'avance'
 
+/** Région d'un placement : son pays pour une action, son marché principal pour un FNB. */
+export type RegionId = 'canada' | 'usa' | 'europe' | 'asie' | 'emergents' | 'mondial' | 'autres'
+
 export interface Holding {
   ticker: string
   name: string
   assetClass: AssetClass
   weight: number
+  /** Les champs suivants viennent de `holding_meta()` du backend (absents d'un ancien backend). */
+  instrument?: 'action' | 'fnb' | 'crypto'
+  /** Secteur d'une action, catégorie d'un FNB. */
+  detail?: string
+  /** Secteur GICS (en français) d'une action ou d'un FNB sectoriel ; absent pour un FNB diversifié. */
+  sector?: string | null
+  region?: RegionId
+}
+
+/** Indicateurs d'un backtest (`backtest.summarize()` du backend). VaR/ES : sur 12 mois glissants, en perte positive. */
+export interface BacktestStats {
+  annualReturn: number
+  volatility: number
+  sharpe: number
+  maxDrawdown: number
+  finalValue: number
+  var95: number | null
+  es95: number | null
+  worst12m: number | null
+  best12m: number | null
+}
+
+export interface BacktestRun {
+  stats: BacktestStats
+  /** Base 100 et recul depuis le dernier sommet (0 à −1, calculé jour par jour), un point par semaine. */
+  series: { date: string; value: number; drawdown: number }[]
+  /** Rendements sur 12 mois glissants, par tranches de 5 points (−40 … +40). `share` de 0 à 1. */
+  distribution: { bucket: number; share: number; tail: boolean }[]
+}
+
+/** Backtest sur l'historique du dataset, une simulation par fréquence de rééquilibrage. */
+export interface Backtest {
+  start: string
+  end: string
+  runs: Record<ContributionFrequency, BacktestRun>
+  /** Vrai pour le moteur d'exemple (rendements simulés), absent pour le backend. */
+  simulated?: boolean
 }
 
 export interface Metrics {
@@ -133,6 +173,9 @@ export interface Portfolio {
   agentNotes: string[]
   /** Absent d'un ancien backend. */
   factors?: FactorView
+  backtest?: Backtest | null
+  /** Part du risque (variance) par classe : contributions d'Euler, poids × covariance avec le portefeuille ÷ variance. */
+  riskContribution?: { assetClass: AssetClass; weight: number; risk: number }[] | null
 }
 
 /** Portefeuille tel que l'envoie le backend ; sans nom ni accroche, on prend ceux de PORTFOLIO_META. */

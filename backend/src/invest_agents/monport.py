@@ -13,14 +13,16 @@ import logging
 import math
 from typing import Any, AsyncIterator, Awaitable, Callable, Iterable, Optional
 
+import numpy as np
 from pydantic import ValidationError
 
 from .runtime import get_runtime_settings
 from .catalog import (DIMENSION_COLUMN, SEP, SHARE_TYPES, describe, detect_conflicts, excluded_mask, share_members,
                       share_targets, validate_all)
-from .market import Market
+from .market import UNKNOWN, Market
 from .events import EventBus
 from . import evidence, factors
+from .backtest import backtest, risk_contribution
 from .allocator import optimize
 from .tools import factor_fits
 from .schemas import (
@@ -786,6 +788,56 @@ def front_class(row: Any) -> str:
     return "actions"
 
 
+# Libellés français des métadonnées du dataset (secteurs GICS des actions, catégories des FNB).
+SECTOR_FR = {
+    "Industrials": "Industries", "Financials": "Services financiers", "Information Technology": "Technologie",
+    "Materials": "Matériaux", "Health Care": "Santé", "Consumer Discretionary": "Consommation discrétionnaire",
+    "Energy": "Énergie", "Utilities": "Services publics", "Real Estate": "Immobilier",
+    "Consumer Staples": "Consommation de base", "Communication Services": "Communications",
+}
+CATEGORY_FR = {
+    "Developed Markets": "Marchés développés", "Emerging Markets": "Marchés émergents", "Large Cap": "Grandes capitalisations",
+    "Small Cap": "Petites capitalisations", "Government Bonds": "Obligations gouvernementales",
+    "Treasury Bonds": "Obligations du Trésor américain", "Investment Grade Bonds": "Obligations de qualité",
+    "Corporate Bonds": "Obligations de sociétés", "High Yield Bonds": "Obligations à rendement élevé",
+    "Inflation-Protected Securities": "Obligations à rendement réel", "Allocation": "Portefeuille diversifié",
+    "REITs": "Fiducies immobilières (FPI)", "Commodities Broad Basket": "Matières premières", "Digital Assets": "Actifs numériques",
+}
+GENERIC_GROUPS = {"Equities", "Fixed Income", "Alternative", "Commodities"}  # rien à ajouter à la catégorie
+
+# Région d'un FNB: son marché principal (le dataset n'a pas de pays pour les FNB). Absent = « mondial ».
+ETF_REGION = {
+    **dict.fromkeys(["CLF.TO", "CLG.TO", "VGV.TO", "XRB.TO", "XCB.TO", "XBB.TO", "XIU.TO", "XIC.TO", "VDY.TO", "XESG.TO",
+                     "XFN.TO", "XEG.TO", "XUT.TO", "XMA.TO", "XRE.TO", "XIT.TO"], "canada"),
+    **dict.fromkeys(["AGZ", "GOVT", "IEF", "LQD", "HYG", "BND", "SPY", "IYY", "IWM", "QQQ", "DIA", "ESGU", "ITA", "SHLD",
+                     "MSOS", "XLK", "VGT", "SMH", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE", "XLC"], "usa"),
+    **dict.fromkeys(["EWU", "DAX", "EWG", "EWQ", "VGK"], "europe"),
+    **dict.fromkeys(["EWJ", "JPXN", "IPAC"], "asie"),
+    **dict.fromkeys(["EWY", "MCHI", "INDA", "EWZ", "EWW", "ILF", "EEM", "EDIV", "BKF"], "emergents"),
+    **dict.fromkeys(["COMT", "BITW"], "autres"),
+}
+COUNTRY_REGION = {c: r for r, countries in REGION_COUNTRIES.items() for c in countries} | {"Luxembourg": "europe", "Bermuda": "usa"}
+
+
+def holding_meta(symbol: str, row: Any) -> dict:
+    """Type d'instrument, détail lisible (secteur d'une action, catégorie d'un FNB) et région, pour le frontend."""
+    instrument = str(row.get("instrument_type", "")).lower()
+    if instrument == "stock":
+        sector = str(row.get("sector", ""))
+        label = SECTOR_FR.get(sector, sector if sector != UNKNOWN else "")
+        return {"instrument": "action", "detail": label, "sector": label or None,
+                "region": COUNTRY_REGION.get(str(row.get("country", "")), "autres")}
+    if instrument == "cryptocurrency":
+        return {"instrument": "crypto", "detail": "Cryptomonnaie", "region": "autres"}
+    category, group = str(row.get("category") or ""), str(row.get("category_group") or "")
+    parts = [CATEGORY_FR.get(category, category)]
+    if group and group not in GENERIC_GROUPS:
+        parts.append(SECTOR_FR.get(group, group))
+    # Secteur d'un FNB sectoriel (XLK, XFN.TO…); aucun pour un FNB diversifié.
+    return {"instrument": "fnb", "detail": " · ".join(x for x in parts if x and x != "nan"),
+            "sector": SECTOR_FR.get(group) if group in SECTOR_FR else None, "region": ETF_REGION.get(symbol, "mondial")}
+
+
 def front_allocation(p: Portfolio, market: Market) -> dict[str, float]:
     """Répartition par classe du frontend (actions, obligations…)."""
     allocation = {c: 0.0 for c in CLASSES}
@@ -803,10 +855,14 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
                  position: float, skipped: list[str], extra: list[str], name: str, tagline: str,
                  form: Optional[InvestorForm] = None) -> dict:
     holdings, allocation, fees = [], {c: 0.0 for c in CLASSES}, 0.0
+    classes: dict[str, str] = {}
     for pos in p.positions:
-        row = market.assets.loc[pos.symbol] if pos.symbol in market.assets.index else pos.model_dump()
+        known = pos.symbol in market.assets.index
+        row = market.assets.loc[pos.symbol] if known else pos.model_dump()
         cls = front_class(row)
-        holdings.append({"ticker": pos.symbol, "name": pos.name, "assetClass": cls, "weight": pos.weight})
+        classes[pos.symbol] = cls
+        holdings.append({"ticker": pos.symbol, "name": pos.name, "assetClass": cls, "weight": pos.weight,
+                         **(holding_meta(pos.symbol, row) if known else {})})
         allocation[cls] += pos.weight
         fees += pos.weight * FEES.get(str(row.get("instrument_type", "")), 0.0)
 
@@ -849,7 +905,28 @@ def to_portfolio(p: Portfolio, verdict: Optional[JudgeVerdict], market: Market, 
         "warnings": warnings,
         "agentNotes": agent_notes,
         "factors": factor_view(p),
+        "backtest": backtest(market.returns, {pos.symbol: pos.weight for pos in p.positions}, market.risk_free_rate),
+        "riskContribution": risk_by_class(market, p, classes, allocation),
     }
+
+
+def risk_by_class(market: Market, p: Portfolio, classes: dict[str, str], allocation: dict[str, float]) -> Optional[list]:
+    """Part du risque (variance) qui vient de chaque classe: contributions d'Euler sommées par classe. None si la
+    covariance n'est pas calculable (historique commun insuffisant)."""
+    symbols = [pos.symbol for pos in p.positions if pos.symbol in market.assets.index and pos.weight > 0]
+    if not symbols:
+        return None
+    try:
+        _, cov = market.moments(symbols)
+    except ValueError:
+        return None
+    w = np.array([next(pos.weight for pos in p.positions if pos.symbol == s) for s in symbols], dtype=float)
+    share = risk_contribution(np.asarray(cov, dtype=float), w / w.sum())
+    by_class: dict[str, float] = {}
+    for s, r in zip(symbols, share):
+        by_class[classes[s]] = by_class.get(classes[s], 0.0) + float(r)
+    return [{"assetClass": c, "weight": round(allocation[c], 4), "risk": round(by_class.get(c, 0.0), 4)}
+            for c in CLASSES if allocation[c] > 0.0005]
 
 
 def factor_view(p: Portfolio) -> dict:
