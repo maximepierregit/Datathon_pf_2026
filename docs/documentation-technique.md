@@ -309,6 +309,9 @@ Chaque service a son script AWS CLI idempotent : relancé, il crée ce qui manqu
 | 5 | `deploy/deploy-proxy.sh` | Lambda `monport-proxy`, Function URL, CORS, concurrence |
 | 6 | `deploy/deploy-cloudfront.sh` | bucket du front, WAF, OAC, distribution ; `FRONT_ONLY=1` republie seulement le build |
 | — | `deploy/teardown.sh` | supprime toutes les ressources après confirmation |
+| repli | `deploy/provision.sh` | crée ou réutilise l'EC2 `bas-de-laine-front`, sa clé SSH et son security group |
+| repli | `deploy/deploy.sh` | build du front et publication sur l'EC2 (nginx) ; `USE_EC2_BACKEND=1` envoie `/api/` vers l'ancien backend |
+| repli | `deploy/deploy-backend.sh` | ancien backend sur l'EC2 (service systemd `monport-backend.service`) |
 
 **Vérifications.**
 - Tests unitaires sans Bedrock (`backend/tests/`) : contraintes, optimiseur, données, outils, Gateway simulée, guardrail, mémoire. Tests du proxy (`deploy/proxy/index.test.mjs`).

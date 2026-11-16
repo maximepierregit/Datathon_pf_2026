@@ -16,8 +16,9 @@ uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .
 
 # Dataset réel depuis S3 (pas dans le repo):
 export MONPORT_UNIVERSE_PARQUET_URI=s3://monport-datasets-381491955506/universe/universe.parquet
-# ou synthétique, sans AWS:
-.venv/bin/python scripts/make_sample_dataset.py
+# ou reconstruit en local, sans S3 (depuis la racine du dépôt, écrit backend/data/universe.parquet):
+#   pip install -r data-prep/requirements.txt && python data-prep/build_universe.py
+# (le jeu synthétique de scripts/make_sample_dataset.py ne se charge plus tel quel, voir Données)
 
 # Parcours MonPort complet en local (appelle Bedrock, 2 à 4 min)
 .venv/bin/python scripts/run_local.py
@@ -46,7 +47,7 @@ Tests pytest (`tests/`, sans Bedrock): config, contraintes, données, optimiseur
 ## Architecture
 
 ```
-main.py                     Point d'entrée AgentCore (@app.entrypoint): monport_check, monport, monport_chat
+main.py                     Point d'entrée AgentCore (@app.entrypoint): monport_check, monport, monport_chat, monport_rebuild
 mcp_server/main.py          Serveur MCP des outils (runtime monport_tools, derrière AgentCore Gateway)
 src/invest_agents/
   workflow/flow.py          Les 3 parcours; ensure_pipeline() complète ce que Pépite n'a pas fait
@@ -54,7 +55,7 @@ src/invest_agents/
   workflow/workers.py       Gestionnaires, agents Risque, juge final, ask_agent()
   workflow/session.py       État d'une conversation (en mémoire du processus, restauré depuis AgentCore Memory)
   agents/base.py            AgentHandle: Agent Strands réutilisable, sortie structurée, statuts start/done/error
-  agents/portfolio_manager.py Sélection des titres via outils; l'optimiseur calcule les poids
+  agents/portfolio_manager.py Gestionnaire: explique le portefeuille calculé par le code (make_explain_tools), sans choisir titres ni poids
   monport.py                Profil de risque, profils de contraintes, mélanges 80/20, traduction des événements
   tool_core.py              Outils métier sans état (univers, filtre, optimiseur, vérificateur, macro), en JSON
   gateway.py                gateway.run(): Gateway MCP signée SigV4 si TOOLS_BACKEND=gateway, sinon local; repli local
@@ -69,8 +70,8 @@ src/invest_agents/
 
 ## Règles de conception (invariants)
 
-1. **Les agents proposent, le code garantit.** Poids, métriques et conformité viennent de `optimizer.optimize`, `Market.portfolio_metrics` et `constraints.evaluate`. Ne jamais faire produire un chiffre par un modèle. `PMNarrative`, `JudgeOpinion` et `RiskReport` ne contiennent que du texte et des scores qualitatifs.
-2. **Une contrainte dure de l'utilisateur est intouchable par un agent.** Les outils PM reçoivent les contraintes par closure (`PMState`); le modèle ne peut que choisir des symboles. L'optimiseur revérifie son propre résultat avec `evaluate()` et retourne `infeasible` en cas d'écart. Seul le code peut assouplir une contrainte dure : `allocator.optimize_with_relaxation` la change en préférence quand le problème est impossible, l'écrit dans `Portfolio.relaunch_reason` et `Portfolio.relaxed`, et le client en est averti.
+1. **Les agents proposent, le code garantit.** Poids, métriques et conformité viennent de `optimizer.optimize`, `Market.portfolio_metrics` et `constraints.evaluate`. Ne jamais faire produire un chiffre par un modèle. `PMNarrative` et `RiskReport` ne contiennent que du texte et des scores qualitatifs.
+2. **Une contrainte dure de l'utilisateur est intouchable par un agent.** Le gestionnaire ne fait que lire le portefeuille calculé (`make_explain_tools`, état `PMState` fermé par closure); aucun outil ne lui permet de changer les contraintes. L'optimiseur revérifie son propre résultat avec `evaluate()` et retourne `infeasible` en cas d'écart. Seul le code peut assouplir une contrainte dure : `allocator.optimize_with_relaxation` la change en préférence quand le problème est impossible, l'écrit dans `Portfolio.relaunch_reason` et `Portfolio.relaxed`, et le client en est averti.
 3. **`JudgeVerdict.compliant` est calculé par le code**, jamais par le modèle, sur les limites d'origine (avant assouplissement). Le juge fournit seulement `fit_score`, `comment` et `suggested_fixes`. Profil cohérent : le code retire `penalty` (`config.JUDGE_RELAUNCH_PENALTY`, 3 points) à une variante relancée, et `pick_winner` départage sur `ranked_score`.
 4. **Tout passe par le catalogue.** Une contrainte extraite est validée par `validate_constraint()` contre les valeurs réelles du dataset (`Market.allowed_values()`). Une cible inconnue devient une question de clarification, avec suggestions difflib.
 5. **L'état d'une conversation vit dans la microVM AgentCore** (`workflow/session.py`), routée par `runtimeSessionId`. Il est enregistré dans AgentCore Memory après chaque étape et restauré si la microVM change. Si tout est perdu, `monport` repart du questionnaire et de la vérification que le frontend renvoie.
@@ -126,7 +127,7 @@ Changer le format d'un événement casse le frontend: mettre à jour le README e
 ## Données
 
 - `MONPORT_UNIVERSE_PARQUET_URI`: défaut le chemin de `config.DEFAULT_PARQUET_PATH`; accepte `s3://bucket/key` (lu en mémoire via boto3, sans cache disque). Dataset réel (801 actifs chargés, jours ouvrables depuis 2021): `s3://monport-datasets-381491955506/universe/universe.parquet`, produit et publié par `../data-prep/build_universe.py --upload s3://monport-datasets-381491955506 [--upload-only]`.
-- Format long issu de `create_opt_inputs` (`../Universe_Cleaned.ipynb`). Obligatoires: `date`, `symbol`, `total_return_cad`. Optionnelles: `name`, `sector`, `industry`, `country`, `currency`, `asset_class`, `instrument_type`, `market`, `is_included_universe`.
+- Format long produit par `../data-prep/build_universe.py` (version script de `create_opt_inputs` du notebook d'origine `Universe_Cleaned.ipynb`, absent du dépôt). Obligatoires: `date`, `symbol`, `total_return_cad`. Optionnelles: `name`, `sector`, `industry`, `country`, `currency`, `asset_class`, `instrument_type`, `market`, `is_included_universe`.
 - Actifs avec moins de 120 observations écartés. Secteur, pays et classe manquants deviennent `Non classé`.
 - `get_market()` est en cache (`lru_cache`); appelé via `asyncio.to_thread` dans `workflow/flow.py`.
 - Le dataset réel (S3, 1,2 M lignes) est lu par `_read_dataset`: seulement les colonnes utiles, métadonnées texte en catégories. Pic mémoire ~440 Mo au lieu de ~850 Mo avec `pd.read_parquet`, utile sur l'EC2 (t3.small, 2 Go). Le jeu synthétique (`make_sample_dataset.py`, symboles `SYN*`, `SETF*`, `SCRY*`) reste pour le développement sans AWS; ses chiffres n'ont aucune valeur réelle. Il ne se charge plus tel quel (colonne `close_price_cad` absente, classes d'actifs d'avant `data.py`, pas de références CAPM comme SPY). Pour tester sur données réelles sans S3: `../data-prep/build_universe.py` écrit `data/universe.parquet`.

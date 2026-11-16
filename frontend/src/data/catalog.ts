@@ -33,15 +33,6 @@ export const CLASS_COLORS: Record<AssetClass, string> = {
   liquidites: '#D2D2D2',
 }
 
-export const CLASS_EXPLAINERS: Record<AssetClass, string> = {
-  actions: 'De petits morceaux de milliers d’entreprises. Ils font grandir ton argent avec le temps.',
-  obligations: 'Des prêts à des gouvernements et à des entreprises. Plus stables, ils versent des intérêts.',
-  immobilier: 'Des sociétés qui possèdent des immeubles. Elles versent souvent des revenus réguliers.',
-  or: 'Une valeur refuge qui ne suit pas toujours les marchés.',
-  crypto: 'Très volatil : ça peut beaucoup monter… ou beaucoup baisser.',
-  liquidites: 'À l’abri et disponible en tout temps. Ton coussin pour les passages difficiles.',
-}
-
 /** Classes proposées au client : jamais les liquidités ; hors FNB, il ne reste que les actions et la crypto. */
 export function shownClasses(vehicles: Vehicles): AssetClass[] {
   return vehicles === 'titres' ? ['actions', 'crypto'] : ['actions', 'obligations', 'immobilier', 'or', 'crypto']
@@ -296,5 +287,3 @@ export const REBALANCE_LABELS: Record<ContributionFrequency, string> = {
   annuelle: 'Chaque année',
   aucune: 'Jamais (acheter et conserver)',
 }
-/** Versements par année, pour la projection. */
-export const PERIODS_PER_YEAR: Record<ContributionFrequency, number> = { 'deux-semaines': 26, mensuelle: 12, annuelle: 1, aucune: 12 }

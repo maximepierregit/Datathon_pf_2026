@@ -62,7 +62,6 @@ UNKNOWN_EXPOSURE_POLICIES = frozenset({"strict", "flag"})
 # Réponses du questionnaire : Exclure (0 % exactement), Neutre (aucune contrainte), pourcentage exact.
 # Forme interne d'une préférence : {"mode": "exclude" | "neutral" | "exact", "weight": None | fraction}.
 PREFERENCE_MODES = frozenset({"exclude", "neutral", "exact"})
-PREFERENCE_LEVELS = PREFERENCE_MODES  # ancien nom, conservé pour les imports
 PREFERENCE_DIMENSIONS = frozenset({
     "asset_class", "instrument_type", "region", "country",
     "sector", "industry", "theme", "symbol",

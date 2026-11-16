@@ -1,5 +1,3 @@
-import { Link, type LinkProps } from 'react-router-dom'
-
 type Variant = 'primary' | 'secondary' | 'tertiary' | 'ghost'
 
 const base =
@@ -16,10 +14,6 @@ export function Button({ variant = 'primary', className = '', ...rest }: React.C
   return <button type="button" className={`${base} ${variants[variant]} ${className}`} {...rest} />
 }
 
-export function ButtonLink({ variant = 'primary', className = '', ...rest }: LinkProps & { variant?: Variant }) {
-  return <Link className={`${base} ${variants[variant]} ${className}`} {...rest} />
-}
-
 /** Signature BNC : petit séparateur rouge sous les titres. */
 export function Separator() {
   return <span className="my-[15px] block h-[2px] w-[30px] bg-red" aria-hidden />
@@ -27,10 +21,6 @@ export function Separator() {
 
 export function Card({ className = '', ...rest }: React.HTMLAttributes<HTMLDivElement>) {
   return <div className={`rounded-[var(--radius-card)] border border-line-soft bg-white p-6 ${className}`} {...rest} />
-}
-
-export function Eyebrow({ children }: { children: React.ReactNode }) {
-  return <span className="text-sm font-semibold tracking-[0.3px] text-red">{children}</span>
 }
 
 export function Arrow({ back = false }: { back?: boolean }) {

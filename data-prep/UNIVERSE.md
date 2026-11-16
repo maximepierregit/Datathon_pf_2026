@@ -32,7 +32,7 @@ already part of their returns.
 | Instruments | 804: 721 stocks, 81 ETFs, 2 cryptocurrencies |
 | Dates | 1,527 weekdays, 2021-01-01 → 2026-11-09 |
 | Return | Daily **total return in CAD** (dividends reinvested, FX-converted) |
-| Built by | `datathon-pf-2026/data-prep/build_universe.py` (script version of the original `Universe_Cleaned.ipynb`) |
+| Built by | `datathon-pf-2026/data-prep/build_universe.py` (script version of the original `Universe_Cleaned.ipynb`, which is not in this repository) |
 
 ---
 
@@ -172,7 +172,7 @@ yfinance FX (USDCAD=X, EURCAD=X) ───────────────�
 data-prep/themes.csv (curated theme tags) ─────────────────────────────────┘
 ```
 
-The methodology is the one in `Universe_Cleaned.ipynb`. Running the notebook's `append_exchange_rates` and
+The methodology is the one in the original `Universe_Cleaned.ipynb` (not in this repository). Running the notebook's `append_exchange_rates` and
 `calculate_returns` functions unchanged on the same prices reproduces every row exactly (zero difference). The
 adjustments listed in 5.4 are the only additions.
 
@@ -422,26 +422,25 @@ Details to handle in the backtest:
 
 ## 7. Reference: how the existing backend consumes the file
 
-`build_market` in `datathon-pf-2026/backend/src/invest_agents/data.py`:
+Loading happens in `datathon-pf-2026/backend/src/invest_agents/` (`data.py`, then `market.py`):
 
-1. Keeps rows with `is_included_universe = True`.
-2. Pivots `total_return_cad` and drops symbols with fewer than 120 observations, which leaves 801 assets.
-3. Adds `CASH-CAD`.
-4. Maps `asset_class` to the frontend classes (`classify.py`):
-   - `actions`, `obligations`, `immobilier`, `or` (gold and commodities), `crypto`, `liquidites`.
-   - Stocks with `sector = Real Estate` become `immobilier`. All other stocks become `actions`.
-5. Derives `region` (canada, usa, europe, asie, emergents, or monde for global ETFs). Stocks get it from
-   `country`.
-6. Builds the theme set:
-   - The file's `theme` column decides `tech, ia, robotique, energie-propre, esg, armement, vice`.
-   - Keyword rules add `sante, finance, fossiles, consommation, industrie, immobilier`.
-7. Computes the moments:
-   - `mu = 0.5 × historical mean + 0.5 × class prior`.
-   - `cov = pairwise (min_periods = 60) × 252`, then projected to PSD.
-8. Exposes the dimensions through `Market.members()`, `Market.groups()` and `Market.allowed_values()`.
-   - Constraint types are `exclude_*`, `min_*_weight` and `max_*_weight` for sector, country, asset_class,
-     region, theme, factor and instrument_type, plus per-line caps.
-   - `optimizer.py` turns them into linear constraints for SciPy.
+1. `data.prepare_optimizer_data` keeps rows with `is_included_universe = True` and drops symbols with fewer than
+   120 observations (`config.DATA["min_observations"]`), which leaves 801 assets.
+2. `market.build_market` builds the `Market` (catalog of assets, statistics). There is no synthetic cash line:
+   `CASH-CAD` is disabled (`catalog.py`), and money-market ETFs play that role.
+3. `asset_class` maps to the frontend classes through `CLASS_TARGETS` in `monport.py`: `actions`, `obligations`,
+   `immobilier`, `or` (gold and commodities), `crypto`, `liquidites`.
+4. Regions come from `country` (`REGION_COUNTRIES` in `monport.py`). ETFs have no country: their region is in
+   `ETF_REGION` (absent = global).
+5. Themes:
+   - Sector themes (`THEME_SECTORS` in `monport.py`): `tech, sante, fossiles, finance, immobilier, consommation,
+     industrie`.
+   - Tag themes from the file's `theme` column (`THEME_TAGS` in `monport.py`): `ia, energie-propre, armement`, and
+     `alcool-tabac` (tag `vice`).
+6. Moments: expected returns use the method set in `config.py`; Σ is one Ledoit-Wolf estimate on the synchronized
+   returns of the whole universe (`Market.universe_covariance`).
+7. `constraints.py` and `allocator.py` turn the constraints (`exclude_*`, `exact_*_weight`, `min_*_weight`,
+   `max_*_weight`, per-line caps, factor exposures) into linear constraints for the optimizer.
 
 ---
 
@@ -491,7 +490,7 @@ The build prints a report: instrument counts, theme counts, the shortest histori
 | Add or remove an ETF | `ETF_TICKERS` in `build_universe.py` **and** a row in `data-prep/themes.csv` |
 | Add or remove a stock | the row in `data-prep/themes.csv` (it must also be in one of the three indices) |
 | Change a theme tag | `data-prep/themes.csv` (labels: Tech, AI, Robotics, Clean Energy, ESG, War, Vice) |
-| New theme | `THEME_IDS` in `build_universe.py`, plus `classify.THEMES`, `contract.THEME_LABELS` and `frontend/src/data/catalog.ts` |
+| New theme | `THEME_IDS` in `build_universe.py`, plus `THEME_TAGS` (or `THEME_SECTORS`) in `backend/src/invest_agents/monport.py` and `frontend/src/data/catalog.ts` |
 | Ticker rename / bad early history | `SYMBOL_RENAMES` / `HISTORY_START` in `build_universe.py` |
 
 After rebuilding, `backend/data/universe.parquet` (read by the backend) is the fresh copy. `data-prep/data/universe.parquet` is a convenience copy and is not updated automatically.
